@@ -18,17 +18,19 @@ import { SkeletonState } from '@/components/ui/States';
  * - 单股集中度 + HHI 指数
  * - 板块分散度
  * - 风险评分(0~100,中/低/高)+ 警告
+ *
+ * 字段命名 camelCase:axios 响应拦截器自动把 snake_case → camelCase
  */
 interface RiskReport {
-  total_positions: number;
-  total_market_value: number;
-  single_stock_concentration: Record<string, number>;
-  top_holding_ratio: number;
-  hhi_index: number;
-  sector_breakdown: Record<string, number>;
-  sector_count: number;
-  risk_score: number;
-  risk_level: '低' | '中' | '高';
+  totalPositions: number;
+  totalMarketValue: number;
+  singleStockConcentration: Record<string, number>;
+  topHoldingRatio: number;
+  hhiIndex: number;
+  sectorBreakdown: Record<string, number>;
+  sectorCount: number;
+  riskScore: number;
+  riskLevel: '低' | '中' | '高';
   warnings: string[];
 }
 
@@ -83,29 +85,29 @@ export default function RiskReportPage() {
             <Card padding="md">
               <div className="text-text-sec text-sm mb-1">总持仓数</div>
               <div className="text-2xl font-mono font-semibold">
-                {data.total_positions}
+                {data.totalPositions}
               </div>
             </Card>
             <Card padding="md">
               <div className="text-text-sec text-sm mb-1">总市值</div>
               <div className="text-2xl font-mono font-semibold">
-                ¥{decimalFormat(data.total_market_value.toFixed(2))}
+                ¥{decimalFormat(data.totalMarketValue)}
               </div>
             </Card>
             <Card padding="md">
               <div className="text-text-sec text-sm mb-1">HHI 指数</div>
               <div className="text-2xl font-mono font-semibold">
-                {data.hhi_index}
+                {data.hhiIndex.toFixed(0)}
               </div>
               <div className="text-xs text-text-ter mt-1">&lt;2500 健康</div>
             </Card>
-            <Card padding="md" className={RISK_BG[data.risk_level]}>
+            <Card padding="md" className={RISK_BG[data.riskLevel]}>
               <div className="text-text-sec text-sm mb-1">风险评分</div>
-              <div className={`text-2xl font-mono font-semibold ${RISK_COLOR[data.risk_level]}`}>
-                {data.risk_score} / 100
+              <div className={`text-2xl font-mono font-semibold ${RISK_COLOR[data.riskLevel]}`}>
+                {data.riskScore} / 100
               </div>
-              <div className={`text-xs mt-1 font-semibold ${RISK_COLOR[data.risk_level]}`}>
-                风险等级:{data.risk_level}
+              <div className={`text-xs mt-1 font-semibold ${RISK_COLOR[data.riskLevel]}`}>
+                风险等级:{data.riskLevel}
               </div>
             </Card>
           </div>
@@ -130,7 +132,7 @@ export default function RiskReportPage() {
             <Card padding="md">
               <h3 className="font-semibold mb-3">单股集中度</h3>
               <div className="space-y-2">
-                {Object.entries(data.single_stock_concentration)
+                {Object.entries(data.singleStockConcentration)
                   .sort(([, a], [, b]) => b - a)
                   .map(([code, pct]) => (
                     <div key={code}>
@@ -158,11 +160,11 @@ export default function RiskReportPage() {
             </Card>
             <Card padding="md">
               <h3 className="font-semibold mb-3">板块分布</h3>
-              {data.sector_count === 0 ? (
+              {data.sectorCount === 0 ? (
                 <p className="text-text-ter text-sm">无数据</p>
               ) : (
                 <div className="space-y-2">
-                  {Object.entries(data.sector_breakdown)
+                  {Object.entries(data.sectorBreakdown)
                     .sort(([, a], [, b]) => b - a)
                     .map(([sec, pct]) => (
                       <div key={sec}>
