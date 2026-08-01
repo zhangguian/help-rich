@@ -48,6 +48,7 @@
 | 16:00~16:15 | P4.3 EventBus + SSE | 1h / 0.5h | 全局单例 event_bus + 30s 心跳(60s 无响应清理);**大坑:starlette TestClient / httpx ASGITransport 会完整消费无限 SSE 流 → 流式测试永远挂起**;SSE 集成测试只能用真实服务 curl 验证(`-N --max-time 35` 等首个 ping),单测只测 EventBus 逻辑 + 路由注册;实测 31s 收到 `data: {"event":"ping"}` |
 | 16:15~16:50 | P4.4 诊断编排服务 | 3h / 0.7h | score_and_notify:评分→safe_write→SSE scored→LLM→comment;降级链:无 Key→`no_key`+trade.failed,LLM 异常→`failed`+trade.failed;录入交易自动异步触发;**老 bug 炸出:TradeScore.trade_id 非主键(自增 id),repo 全用 `session.get(TradeScore, trade_id)` 按 id 查 → 评分永远查不到**(P2.1 遗留,本轮改 select where trade_id);SSE 端到端实测:trade.scored(55分) → trade.failed(DeepSeek 401 key 无效,真实降级)全通;11 用例,全套 131 绿 |
 | 16:50~17:00 | 留痕 + git push | — / 0.2h | api-changelog v0.1.3(diagnose 端点 + trade_scores 修复);ADR 无新增(降级设计沿用 §11.3.5 既有规格) |
+| 17:00~17:15 | P4.2b/c/d 多 Provider 落地 | 2.5h / 0.3h | 三家 API 全是 OpenAI 兼容格式 → 抽 `OpenAICompatClient` 共享实现(DeepSeek 顺手瘦身,原来那份重试代码删掉);MiniMax `abab6.5s-chat` / 豆包 `doubao-pro-32k` 各一行子类 + 单测;**坑:BACKOFF_BASE 从 deepseek.py 移走后 3 条旧测试 monkeypatch 路径挂** → 统一改 patch `app.llm.base.BACKOFF_BASE`;**P4.2d 补漏:score_and_notify 的 upsert 原来硬编码 ai_provider="deepseek",切换 provider 后标签错** → 提前取 active 传入;138 tests 全绿 |
 
 ## 关键经验(全项目复盘用)
 

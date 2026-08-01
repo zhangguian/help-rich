@@ -137,14 +137,53 @@ class TestScoreAndNotify:
         assert score.ai_status == "success"
         assert score.ai_provider == "deepseek"
         assert "不构成投资建议" in (score.ai_comment or "")
-
-        # 2. SSE 事件顺序:scored → commented
         evt_names = [e["event"] for e in events]
         assert evt_names[0] == "trade.scored"
         assert evt_names[1] == "trade.commented"
         assert events[0]["trade_id"] == t2.id
         assert events[0]["score"] == score.score
         assert events[1]["comment"] == score.ai_comment
+
+    def test_provider_label_from_active(self, client, monkeypatch):
+        """P4.2d:激活 provider 非 deepseek 时,provider 标签随之写入"""
+        t1, t2 = asyncio.run(_seed_trades())
+
+        async def fake_publish(event):
+            pass
+
+        monkeypatch.setattr(
+            "app.services.diagnose_service.event_bus.publish", fake_publish
+        )
+
+        from app.llm.minimax import MiniMaxClient
+
+        async def fake_get(name):
+            assert name == "minimax"
+            return MiniMaxClient("sk-test")
+
+        monkeypatch.setattr(
+            "app.services.diagnose_service.provider_factory.get", fake_get
+        )
+
+        async def fake_chat(system, user, temperature=0.3, max_retries=3):
+            return "OK。以上不构成投资建议。"
+
+        monkeypatch.setattr(MiniMaxClient, "chat", fake_chat)
+
+        async def fake_active():
+            return "minimax"
+
+        monkeypatch.setattr(
+            "app.services.diagnose_service.llm_settings_repo.get_active", fake_active
+        )
+
+        asyncio.run(diagnose_service.score_and_notify(t2.id))
+
+        from app.repositories.trade_score_repo import trade_score_repo
+
+        score = asyncio.run(trade_score_repo.get_by_trade_id(t2.id))
+        assert score.ai_provider == "minimax"
+        assert score.ai_model == "abab6.5s-chat"
 
     def test_no_key_degrades(self, client, monkeypatch):
         """缺 Key:评分仍出,ai_status=no_key,推 trade.failed"""

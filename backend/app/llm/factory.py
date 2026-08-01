@@ -5,6 +5,8 @@ v2.1:Key 从 llm_api_keys 表(加密)取,缺 Key 返回 None(不抛错)。
 """
 from app.llm.base import BaseLLM
 from app.llm.deepseek import DeepSeekClient
+from app.llm.doubao import DoubaoClient
+from app.llm.minimax import MiniMaxClient
 from app.repositories.llm_keys_repo import llm_keys_repo
 
 
@@ -13,7 +15,8 @@ class ProviderFactory:
 
     _BUILDERS = {
         "deepseek": DeepSeekClient,
-        # P4.2b / P4.2c:minimax / doubao 客户端
+        "minimax": MiniMaxClient,
+        "doubao": DoubaoClient,
     }
 
     @classmethod

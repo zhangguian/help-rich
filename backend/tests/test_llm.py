@@ -154,7 +154,7 @@ class TestDeepSeekClient:
 
         monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
         # 缩短退避等待
-        monkeypatch.setattr("app.llm.deepseek.BACKOFF_BASE", 0.001)
+        monkeypatch.setattr("app.llm.base.BACKOFF_BASE", 0.001)
         client = DeepSeekClient("sk-test")
         out = await client.chat("system", "user", max_retries=3)
         assert out == "ok"
@@ -172,7 +172,7 @@ class TestDeepSeekClient:
             return FakeResp()
 
         monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
-        monkeypatch.setattr("app.llm.deepseek.BACKOFF_BASE", 0.001)
+        monkeypatch.setattr("app.llm.base.BACKOFF_BASE", 0.001)
         client = DeepSeekClient("sk-test")
         with pytest.raises(LLMError):
             await client.chat("system", "user", max_retries=3)
@@ -192,7 +192,7 @@ class TestDeepSeekClient:
             })()
 
         monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
-        monkeypatch.setattr("app.llm.deepseek.BACKOFF_BASE", 0.001)
+        monkeypatch.setattr("app.llm.base.BACKOFF_BASE", 0.001)
         client = DeepSeekClient("sk-test")
         out = await client.chat("system", "user", max_retries=3)
         assert out == "ok"
@@ -234,6 +234,66 @@ class TestDeepSeekClient:
             await client.chat("system", "user")
 
 
+class TestMiniMaxClient:
+    def test_meta(self):
+        from app.llm.minimax import MiniMaxClient
+
+        c = MiniMaxClient("sk-test")
+        assert c.name == "minimax"
+        assert c.model_name == "abab6.5s-chat"
+        assert c.BASE_URL == "https://api.minimax.chat/v1/text/chatcompletion_v2"
+
+    @pytest.mark.asyncio
+    async def test_chat_success(self, monkeypatch):
+        from app.llm.minimax import MiniMaxClient
+
+        class FakeResp:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {"choices": [{"message": {"content": " MiniMax 评语 "}}]}
+
+        async def fake_post(self, url, headers=None, json=None):
+            assert url.endswith("chatcompletion_v2")
+            assert json["model"] == "abab6.5s-chat"
+            return FakeResp()
+
+        monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
+        out = await MiniMaxClient("sk-test").chat("system", "user")
+        assert out == "MiniMax 评语"
+
+
+class TestDoubaoClient:
+    def test_meta(self):
+        from app.llm.doubao import DoubaoClient
+
+        c = DoubaoClient("sk-test")
+        assert c.name == "doubao"
+        assert c.model_name == "doubao-pro-32k"
+        assert c.BASE_URL == "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+
+    @pytest.mark.asyncio
+    async def test_chat_success(self, monkeypatch):
+        from app.llm.doubao import DoubaoClient
+
+        class FakeResp:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {"choices": [{"message": {"content": "豆包评语"}}]}
+
+        async def fake_post(self, url, headers=None, json=None):
+            assert url.endswith("chat/completions")
+            assert json["model"] == "doubao-pro-32k"
+            return FakeResp()
+
+        monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
+        out = await DoubaoClient("sk-test").chat("system", "user")
+        assert out == "豆包评语"
+
+
 class TestProviderFactory:
     def setup_method(self):
         ProviderFactory.clear_cache()
@@ -267,3 +327,25 @@ class TestProviderFactory:
         items = await ProviderFactory.available()
         assert items[0]["name"] == "deepseek"
         assert items[0]["configured"] is True
+
+    @pytest.mark.asyncio
+    async def test_three_providers_registered(self, monkeypatch):
+        """P4.2b/c 验收:minimax / doubao 注册进 factory"""
+        async def fake_get_decrypted(provider):
+            return "sk-test"
+        monkeypatch.setattr(llm_keys_repo, "get_decrypted", fake_get_decrypted)
+
+        ds = await ProviderFactory.get("deepseek")
+        mm = await ProviderFactory.get("minimax")
+        db = await ProviderFactory.get("doubao")
+        assert ds.name == "deepseek"
+        assert mm.name == "minimax"
+        assert db.name == "doubao"
+
+    @pytest.mark.asyncio
+    async def test_available_lists_all(self, monkeypatch):
+        async def fake_list_status():
+            return {"deepseek": True, "minimax": False, "doubao": False}
+        monkeypatch.setattr(llm_keys_repo, "list_status", fake_list_status)
+        names = [i["name"] for i in await ProviderFactory.available()]
+        assert names == ["deepseek", "minimax", "doubao"]

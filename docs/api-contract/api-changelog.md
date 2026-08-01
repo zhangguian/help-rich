@@ -28,6 +28,15 @@
 
 ## 历史记录
 
+### 2026-08-01 | v0.1.4 | 多 Provider 落地(P4.2b/c/d)
+
+#### Added
+- MiniMax(abab6.5s-chat)与豆包(doubao-pro-32k)接入 ProviderFactory;`GET /api/llm/keys` 状态列表现返回 3 个 provider(deepseek / minimax / doubao);设置任意 provider 的 Key 并切换激活后,诊断评语由对应模型生成
+- `trade_scores.ai_provider / ai_model` 现在写入**实际激活**的 provider(此前硬编码 deepseek)
+
+#### Changed
+- DeepSeek / MiniMax / 豆包统一继承 `OpenAICompatClient` 共享实现(消息体与响应解析完全 OpenAI 兼容,仅 URL/模型名/错误前缀不同)
+
 ### 2026-08-01 | v0.1.3 | 诊断服务上线(P4.4)
 
 #### Added

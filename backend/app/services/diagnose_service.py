@@ -92,6 +92,9 @@ class DiagnoseService:
 
         is_in_watchlist = await watchlist_repo.contains(trade.stock_code)
 
+        # 激活 provider(P4.2d:写 provider 标签用,缺 Key 时降级)
+        active = await llm_settings_repo.get_active()
+
         trade_dict = {
             "stock_code": trade.stock_code,
             "stock_name": trade.stock_name or "",
@@ -136,6 +139,7 @@ class DiagnoseService:
                 trade_id=trade_id,
                 score=score_result["score"],
                 score_breakdown=breakdown_json,
+                ai_provider=active,
             )
 
         await safe_write(_do_upsert)
@@ -149,7 +153,6 @@ class DiagnoseService:
         })
 
         # 7. AI 评语(可失败降级)
-        active = await llm_settings_repo.get_active()
         llm = await provider_factory.get(active)
 
         if llm is None:
