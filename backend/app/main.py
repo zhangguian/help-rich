@@ -2,6 +2,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.admin import router as admin_router
 from app.api.annual_report import router as annual_report_router
@@ -46,6 +47,16 @@ app = FastAPI(
     version="0.1.0",
     description="个人股票 AI 诊断 Agent — 本地 Web 工具(MVP)",
     lifespan=lifespan,
+)
+
+# CORS(MVP 单机自用,允许前端 dev server 任意源)
+# 生产部署时改为前端域名白名单
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 开发期允许所有 origin
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # 注册路由
