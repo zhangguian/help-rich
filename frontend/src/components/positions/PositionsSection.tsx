@@ -157,7 +157,7 @@ export function PositionsSection() {
           </div>
         </Card>
       ) : (
-        <PositionsList positions={positions} onDelete={onDelete} />
+        <PositionsList positions={positions} onDelete={onDelete} onCleared={fetchPositions} />
       )}
     </>
   );

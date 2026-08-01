@@ -89,6 +89,16 @@ class PositionCreate(BaseModel):
         return normalized
 
 
+class ClearPositionRequest(BaseModel):
+    """POST /api/positions/{code}/clear body(v0.4.1 一键清仓 / P-stop-loss-v2)
+
+    price: 清仓卖出价(默认前端调时取实时行情,传 0/不传则视为用当前行情)
+    note: 备注(默认"一键清仓")
+    """
+    price: Decimal = Field(gt=0, max_digits=10, decimal_places=3)
+    note: Optional[str] = None
+
+
 class TransactionCreate(BaseModel):
     """POST /api/transactions body
 

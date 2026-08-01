@@ -59,10 +59,20 @@ class DeltaBaseline:
 # 纯函数:流水聚合(v0.4.0 后仅用于交易前状态判定 / 迁移 backfill)
 # ============================================================
 
-def aggregate_positions(transactions: list[Transaction]) -> list[Position]:
+def aggregate_positions(
+    transactions: list[Transaction],
+    strict: bool = True,
+    keep_zero: bool = True,
+) -> list[Position]:
     """纯函数:从流水列表聚合持仓
 
     按交易日期顺序处理(同一天内按 id 顺序,确保可复现)。
+
+    strict: 默认 True 校验 sell <= 当前持仓(纯流水场景保护);
+      False 跳过校验(用于 recalc_position 的 delta+flow 模式:row 内的
+      导入基准可能允许 sell 超过纯流水聚合)。
+    keep_zero: 默认 True 过滤掉 shares <= 0 的股票(纯流水场景只关心仍有持仓);
+      False 不过滤(用于 recalc_position:flow 可能为负,需要返回供 delta+flow 计算)。
     """
     # 按 stock_code 分组
     by_code: dict[str, Position] = {}
@@ -85,7 +95,7 @@ def aggregate_positions(transactions: list[Transaction]) -> list[Position]:
             pos.shares += tx.shares
             pos.total_cost += price * tx.shares
         elif tx.action == "sell":
-            if tx.shares > pos.shares:
+            if strict and tx.shares > pos.shares:
                 # 卖出超过持仓(理论上 Pydantic 已校验,但双保险)
                 raise ValueError(
                     f"卖出 {tx.shares} 股超过持仓 {pos.shares} 股 "
@@ -96,8 +106,10 @@ def aggregate_positions(transactions: list[Transaction]) -> list[Position]:
             pos.total_cost -= pos.avg_cost * tx.shares
             pos.shares -= tx.shares
 
-    # 只返回仍有持仓的股票(shares > 0)
-    return [p for p in by_code.values() if p.shares > 0]
+    if keep_zero:
+        # 只返回仍有持仓的股票(shares > 0)
+        return [p for p in by_code.values() if p.shares > 0]
+    return list(by_code.values())
 
 
 # ============================================================
@@ -170,8 +182,10 @@ async def recalc_position(stock_code: str, delta: Optional["DeltaBaseline"] = No
         ).scalar_one_or_none()
 
         flow_tx = await _load_flow(session, stock_code)
+        # strict=False / keep_zero=False:delta+flow 模式下 row 内的导入基准可能
+        # 允许 sell > flow 聚合,且 flow 本身可能为负(清仓后),需要返回所有股票
         flow = next(
-            (p for p in aggregate_positions(flow_tx) if p.stock_code == stock_code),
+            (p for p in aggregate_positions(flow_tx, strict=False, keep_zero=False) if p.stock_code == stock_code),
             None,
         )
 
@@ -179,15 +193,16 @@ async def recalc_position(stock_code: str, delta: Optional["DeltaBaseline"] = No
         new_cost = delta.cost + (flow.total_cost if flow else Decimal("0"))
         new_pnl = delta.pnl + (flow.realized_pnl if flow else Decimal("0"))
 
-        if new_shares <= 0 and new_cost <= 0:
-            # 持仓清零(无导入基准)→ 删除行
+        if new_shares <= 0:
+            # 持仓被卖光 → 删除持仓行(成本归零)
             if row is not None:
                 await session.delete(row)
             await session.commit()
             return
 
-        # 防御:股数 <= 0 但还有成本 → 视为 0 股(不应出现)
-        new_shares = max(0, new_shares)
+        # 防御:股数 > 0 但 cost/pnl 不一致 → 量化处理
+        new_cost = max(Decimal("0"), new_cost)
+        new_pnl = max(Decimal("0"), new_pnl)
 
         if row is None:
             row = PositionRow(

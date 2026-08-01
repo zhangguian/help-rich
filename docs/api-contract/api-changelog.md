@@ -28,7 +28,23 @@
 
 ## 历史记录
 
-### 2026-08-02 | v0.4.1 | 板块资金异动检测 + SSE 推送(A2 资金流订阅)
+### 2026-08-02 | v0.4.1 | 一键清仓 API(P-stop-loss-v2)+ 板块资金异动 SSE
+
+#### Added(新增)
+- `POST /api/positions/{code}/clear` body `{price, note?}`:一键清仓(201,返回 `stock_code/shares/price/realized_pnl/trade_id/trade_date`)。自动创建一笔 sell 流水覆盖全部股数,触发 `recalc_position` 删除持仓行。`price <= 0` → 422;无持仓 → 404 `POSITION_NOT_FOUND`
+- `GET /api/sector-fund-flow/events?fenlei=N`(可选):SSE 订阅板块资金异动(后台调度器每 60s 拉一次 fenlei=0 排行,异动 publish `sector_fund_flow_alert`)
+
+#### Changed(修改)
+- `aggregate_positions(transactions, strict=True, keep_zero=True)`:新增双开关
+  - `strict=False`:跳过 sell > 持仓校验(用于 recalc 的 delta+flow 模式,允许 row 导入基准抵消纯流水 sell)
+  - `keep_zero=False`:不过滤 shares <= 0(返回负股数让 recalc 算出 new_shares=0 走清零分支)
+- `recalc_position` 调用 `aggregate_positions(strict=False, keep_zero=False)`;清仓判断由 `new_shares <= 0 and new_cost <= 0` 改为 `new_shares <= 0` 一律删行
+- `sector_fund_flow_service`:新增异动检测纯函数 `_detect_alerts`(净额绝对变化 ≥ 1 亿 / 领涨股切换 / 新进榜)+ `start_sector_scheduler` 后台 60s 拉取 + publish
+- `main.py` lifespan 启动 2 个调度器(单只 + 板块)
+
+#### Test
+- 新增 `tests/test_clear_position.py` 6 条:清仓生成 sell 流水 / 亏损清仓 / 默认 note / 无持仓 404 / 纯 6 位规范化 / price 校验
+- 新增 `tests/test_sina_data.py::TestSectorFundFlowAlerts` 7 条
 
 #### Added(新增)
 - `GET /api/sector-fund-flow/events?fenlei=N`(可选):SSE 订阅板块资金异动。后台调度器每 60s 拉一次 fenlei=0 排行,异动(净额绝对变化 ≥ 1 亿 / 领涨股切换 / 新进榜)publish `sector_fund_flow_alert`,客户端按 fenlei 过滤(不传 = 全部)

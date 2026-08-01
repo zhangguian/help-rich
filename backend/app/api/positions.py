@@ -13,7 +13,9 @@ from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException
 
-from app.models.schemas import PositionCreate
+from app.core.db_lock import safe_write
+from app.models.schemas import ClearPositionRequest, PositionCreate
+from app.repositories.transaction_repo import transaction_repo
 from app.services.position_service import (
     delete_position,
     get_all_positions,
@@ -118,3 +120,62 @@ async def remove_position(code: str) -> None:
             detail={"code": "POSITION_NOT_FOUND", "message": f"持仓 {normalized} 不存在"},
         )
     await transaction_repo.delete_by_stock(normalized)
+
+
+@router.post("/positions/{code}/clear", status_code=201)
+async def clear_position(code: str, payload: ClearPositionRequest) -> dict:
+    """一键清仓(v0.4.1 / P-stop-loss-v2)
+
+    以指定价格(默认当前行情价)卖出当前持仓的全部股数。
+    业务逻辑:
+    1. 取当前持仓(不存在 → 404)
+    2. 创建 sell 流水(覆盖全部 shares + payload.price)
+    3. recalc_position 触发 → 持仓归零 → 删除持仓行
+    4. 返回生成的 sell 流水记录 + 预估已实现盈亏
+    """
+    from datetime import date as date_cls
+    from decimal import Decimal
+
+    from app.core.stock_code import normalize_code
+    from app.services.position_service import capture_delta, recalc_position
+
+    normalized = normalize_code(code) or code
+    pos = await get_position(normalized)
+    if pos is None or pos.shares <= 0:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "POSITION_NOT_FOUND",
+                "message": f"持仓 {normalized} 不存在或已清仓",
+            },
+        )
+
+    shares = pos.shares
+    price = payload.price
+    realized = (price - pos.avg_cost) * shares  # 预估已实现盈亏
+
+    # 变更前捕获导入基准(否则 recalc 会失准)
+    delta = await capture_delta(normalized)
+
+    async def _do_create():
+        return await transaction_repo.create(
+            stock_code=normalized,
+            stock_name=pos.stock_name,
+            action="sell",
+            shares=shares,
+            price=f"{price:.3f}",
+            trade_date=date_cls.today(),
+            note=payload.note or "一键清仓",
+        )
+
+    tx = await safe_write(_do_create)
+    await recalc_position(normalized, delta)
+
+    return {
+        "stock_code": normalized,
+        "shares": shares,
+        "price": f"{price:.3f}",
+        "realized_pnl": str(realized.quantize(Decimal("0.01"))),
+        "trade_id": tx.id,
+        "trade_date": tx.trade_date.isoformat(),
+    }
