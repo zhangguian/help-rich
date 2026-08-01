@@ -78,7 +78,10 @@ async def list_pending() -> dict:
 
 @router.post("/{record_id}/confirm")
 async def confirm_screenshot(record_id: int, payload: ScreenshotConfirmRequest) -> dict:
-    """用户确认(可编辑)后入库 transactions / watchlist"""
+    """用户确认(可编辑)后入库 transactions / watchlist
+
+    holdings/position 类型:持仓是视图,confirm 会抛 HOLDINGS_NOT_PERSISTED(422)
+    """
     record = await screenshot_repo.get_by_id(record_id)
     if record is None:
         raise HTTPException(status_code=404, detail={"code": "RECORD_NOT_FOUND", "message": "记录不存在"})
@@ -86,7 +89,11 @@ async def confirm_screenshot(record_id: int, payload: ScreenshotConfirmRequest) 
         raise HTTPException(status_code=409, detail={"code": "ALREADY_CONFIRMED", "message": "该记录已确认"})
     if not payload.items:
         raise HTTPException(status_code=422, detail={"code": "EMPTY_ITEMS", "message": "没有可入库的数据"})
-    await screenshot_service.confirm(record_id, payload.items, payload.screenshot_type)
+    try:
+        await screenshot_service.confirm(record_id, payload.items, payload.screenshot_type)
+    except ScreenshotError as e:
+        # holdings/position 拒绝入库 → 422 友好提示
+        raise HTTPException(status_code=422, detail={"code": e.code, "message": str(e)}) from e
     return {"ok": True, "record_id": record_id}
 
 

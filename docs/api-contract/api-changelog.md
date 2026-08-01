@@ -28,6 +28,16 @@
 
 ## 历史记录
 
+### 2026-08-01 | v0.2.0 | 截图字段语义统一(holdings 处理)
+
+#### Fixed
+- **`POST /api/screenshot/{id}/confirm`**:`holdings` / `position` 类型不再静默忽略(原 bug),改为显式拒绝 + `422 HOLDINGS_NOT_PERSISTED`(持仓是视图,不入库;请通过 `/api/transactions` 录入每笔流水)。前端 ScreenshotPreview 收到此 code → toast 警告 + 按钮置灰"持仓不入库"
+- **`POST /api/screenshot/{id}/confirm`** 端点新增 `ScreenshotError` catch,改回 `422` 友好提示(此前会冒到 500)
+
+#### Changed
+- **前端 `ScreenshotPastePanel`**:示例改三选一(流水 / 持仓 / 自选股),覆盖截图识别主要场景
+- **前端 `ScreenshotPreview`**:通用化列渲染,遍历 `items[0]` 的 keys 自动生成表头 + 中文标签映射;整数/金额/百分比各自格式化(`shares` 右对齐 + `font-mono`,`price` 加 `¥`,`profit_ratio` 显示正负号)
+
 ### 2026-08-01 | v0.1.9 | 数据备份 / 状态三件套 / 反思卡(P7.3/P7.5/P7.9)
 
 #### Added

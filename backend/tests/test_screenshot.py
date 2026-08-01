@@ -156,15 +156,90 @@ class TestScreenshotService:
         assert out["screenshot_type"] == "transactions"
 
     def test_parse_from_image_ocr_failure_falls_back(self, monkeypatch):
+        """OCR 失败:vision LLM(MiniMax)接管"""
         async def fake_extract(path):
             raise RuntimeError("paddle not available")
+
+        class FakeVisionLLM:
+            name = "minimax"
+            supports_vision = True
+
+            async def chat_with_image(self, system, user, image, **kw):
+                assert image.startswith("data:image/png;base64,")
+                return json.dumps({
+                    "screenshot_type": "transactions",
+                    "items": [{
+                        "stock_code": "600519.SH",
+                        "stock_name": "贵州茅台",
+                        "action": "buy",
+                        "shares": 100,
+                        "price": "1450.000",
+                        "trade_date": "2026-07-20",
+                    }],
+                    "confidence": 0.85,
+                    "notes": "vision model 识别",
+                })
+
+        async def fake_get(name):
+            assert name == "minimax"
+            return FakeVisionLLM()
 
         monkeypatch.setattr(
             "app.services.screenshot_service.paddle_client.extract_text", fake_extract
         )
+        monkeypatch.setattr(
+            "app.services.screenshot_service.provider_factory.get", fake_get
+        )
+        monkeypatch.setattr(
+            "app.services.screenshot_service.llm_settings_repo.get_active",
+            lambda: asyncio.Future() or "minimax",
+        )
+
+        async def fake_active():
+            return "minimax"
+
+        monkeypatch.setattr(
+            "app.services.screenshot_service.llm_settings_repo.get_active", fake_active
+        )
+
+        out = asyncio.run(screenshot_service.parse_from_image(
+            b"\x89PNG-rgb-image-bytes",
+            "x.png",
+        ))
+        assert out["items"][0]["stock_code"] == "600519.SH"
+        # source 标记为 vision_llm
+        record = asyncio.run(screenshot_repo.get_by_id(out["record_id"]))
+        assert record.source == "vision_llm"
+
+    def test_ocr_failure_no_vision_llm(self, client, monkeypatch):
+        """OCR 失败 + 当前 LLM 不支持视觉 → 422 OCR_FAILED(用户需切到 paste)"""
+        async def fake_extract(path):
+            raise RuntimeError("paddle not available")
+
+        class FakeTextLLM:
+            name = "deepseek"
+            supports_vision = False
+
+        async def fake_get(name):
+            return FakeTextLLM()
+
+        async def fake_active():
+            return "deepseek"
+
+        monkeypatch.setattr(
+            "app.services.screenshot_service.paddle_client.extract_text", fake_extract
+        )
+        monkeypatch.setattr(
+            "app.services.screenshot_service.provider_factory.get", fake_get
+        )
+        monkeypatch.setattr(
+            "app.services.screenshot_service.llm_settings_repo.get_active", fake_active
+        )
+
         with pytest.raises(ScreenshotError) as exc:
-            asyncio.run(screenshot_service.parse_from_image(b"fake-img", "x.png"))
+            asyncio.run(screenshot_service.parse_from_image(b"fake", "x.jpg"))
         assert exc.value.code == "OCR_FAILED"
+        assert "deepseek 不支持视觉识别" in str(exc.value)
 
     def test_parse_from_image_local_rules(self, monkeypatch):
         """本地规则直接命中:不调 LLM,不写 raw_response"""
@@ -250,6 +325,48 @@ class TestScreenshotService:
         asyncio.run(screenshot_service.confirm(record.id, items, "watchlist"))
 
         assert asyncio.run(watchlist_repo.contains("300750.SZ"))
+
+    def test_confirm_holdings_rejected(self):
+        """holdings 类型:持仓是视图,不入库,抛 HOLDINGS_NOT_PERSISTED"""
+        record = asyncio.run(screenshot_repo.create(
+            parsed_items=[{"stock_code": "001896.SZ"}], screenshot_type="holdings",
+        ))
+        items = [
+            {"stock_code": "001896.SZ", "stock_name": "豫能控股", "shares": 300,
+             "price": "18.500", "current_price": "12.020",
+             "profit": -1944.06, "profit_ratio": -35.027},
+        ]
+        with pytest.raises(ScreenshotError) as exc:
+            asyncio.run(screenshot_service.confirm(record.id, items, "holdings"))
+        assert exc.value.code == "HOLDINGS_NOT_PERSISTED"
+        # 记录标记为 rejected
+        got = asyncio.run(screenshot_repo.get_by_id(record.id))
+        assert got.status == "rejected"
+
+    def test_confirm_position_rejected(self):
+        """position 类型:同 holdings,拒绝入库"""
+        record = asyncio.run(screenshot_repo.create(
+            parsed_items=[], screenshot_type="position",
+        ))
+        with pytest.raises(ScreenshotError) as exc:
+            asyncio.run(screenshot_service.confirm(
+                record.id, [{"stock_code": "600519.SH"}], "position"
+            ))
+        assert exc.value.code == "HOLDINGS_NOT_PERSISTED"
+
+    def test_parse_paste_holdings_keeps_type(self):
+        """parse_paste:holdings 类型原样存储(不做归一化)"""
+        from app.repositories.screenshot_repo import screenshot_repo as _repo
+
+        raw = json.dumps({
+            "screenshot_type": "holdings",
+            "items": [{"stock_code": "001896.SZ", "stock_name": "豫能控股",
+                       "shares": 300, "price": "18.500"}],
+        })
+        out = asyncio.run(screenshot_service.parse_from_paste(raw))
+        assert out["screenshot_type"] == "holdings"
+        record = asyncio.run(_repo.get_by_id(out["record_id"]))
+        assert record.screenshot_type == "holdings"
 
     def test_reject_deletes_record(self):
         record = asyncio.run(screenshot_repo.create(
