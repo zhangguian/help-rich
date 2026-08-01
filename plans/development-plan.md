@@ -879,9 +879,9 @@ MVP 完成当天(Day 8 Phase 7.10),**立即**启动 `stock_project-master` 二�
 
 | # | Phase | 估时 | 实际 | 状态 | 开始 | 完成 | 备注 |
 |---|---|---|---|---|---|---|---|
-| P2.4 | 前端流水 UI | 2h | — | ☐ | | | |
-| P2.5 | 首页雏形 | 1.5h | — | ☐ | | | |
-| P2.6 | 单测补强 | 0.5h | — | ☐ | | | |
+| P2.4 | 前端流水 UI(TransactionForm + TransactionTable + /transactions 页面) | 2h | 1.0h | ✅ | 13:50 | 14:50 | typecheck 0 errors;/transactions 200 + skeleton loading |
+| P2.5 | 首页雏形(/ 总览 + 持仓卡 + 空状态 + 快捷入口) | 1.5h | 0.5h | ✅ | 14:50 | 15:20 | SSR 拉到后端 positions;无持仓空状态 + 快捷按钮 |
+| P2.6 | 单测补强 | 0.5h | — | ☐ | | | P3.1 cost_engine 已 100% 覆盖;P2 单测延后 |
 | **P3.1** | **cost_engine 纯函数 + 单测** | **3h** | **0.3h** | **✅** | **13:15** | **13:30** | **25 测试全过 + coverage 100% + pytest 0.14s** |
 | P3.2 | calculator API(POST /api/calculator) | 1h | 0.3h | ✅ | 13:30 | 13:45 | 21 档网格 + 422 overflow 校验 |
 
@@ -974,7 +974,7 @@ MVP 完成当天(Day 8 Phase 7.10),**立即**启动 `stock_project-master` 二�
 
 ```
 Day 1 总进度:7 / 7 Phase(2.0h / 8h = 25%)
-Day 2 总进度:0 / 5 Phase(0h / 8h = 0%)
+Day 2 总进度:4 / 5 Phase(2.1h / 8h = 26%)
 Day 3 总进度:0 / 8 Phase(0h / 8h = 0%)
 Day 4 总进度:0 / 4 Phase(0h / 8h = 0%)
 Day 5 总进度:0 / 11 Phase(0h / 8h = 0%)

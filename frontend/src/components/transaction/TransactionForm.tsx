@@ -12,13 +12,11 @@ import { Button } from '../ui/Button';
 
 /**
  * 交易录入表单(frontend-arch §10.3 / ui-ux §4.3)
- *
- * 使用 React Hook Form + Zod 校验,提交后调 POST /api/transactions
  */
 const schema = z.object({
   stockCode: z.string().length(6).regex(/^\d{6}$/, '股票代码必须是 6 位数字'),
   action: z.enum(['buy', 'sell']),
-  shares: z.coerce.number().int().positive('股数必须 > 0'),
+  shares: z.number().int().positive('股数必须 > 0'),
   price: z.string().regex(/^\d+(\.\d{1,3})?$/, '价格格式:数字,最多 3 位小数'),
   tradeDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式 YYYY-MM-DD'),
   note: z.string().max(200).optional(),
@@ -41,10 +39,10 @@ export function TransactionForm({ onSuccess, onCancel }: TransactionFormProps) {
     formState: { errors },
     reset,
   } = useForm<FormData>({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(schema) as never, // exactOptionalPropertyTypes 兼容
     defaultValues: {
       stockCode: '',
-      action: 'buy',
+      action: 'buy' as const,
       shares: 500,
       price: '',
       tradeDate: new Date().toISOString().slice(0, 10),
@@ -62,13 +60,12 @@ export function TransactionForm({ onSuccess, onCancel }: TransactionFormProps) {
         shares: data.shares,
         price: data.price,
         tradeDate: data.tradeDate,
-        note: data.note || undefined,
+        ...(data.note ? { note: data.note } : {}),
       };
       const tx = await apiPost<Transaction>('/transactions', payload);
       reset();
       onSuccess?.(tx);
     } catch (e) {
-      // axios 拦截器已经弹了 toast,这里只显示简短错误
       if (e instanceof Error) setError(e.message);
     } finally {
       setSubmitting(false);
@@ -138,7 +135,7 @@ export function TransactionForm({ onSuccess, onCancel }: TransactionFormProps) {
             min={1}
             step={100}
             className="w-full px-3 py-2 border border-border-strong rounded-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent"
-            {...register('shares')}
+            {...register('shares', { valueAsNumber: true })}
           />
           {errors.shares && (
             <p className="text-up text-xs mt-1">{errors.shares.message}</p>

@@ -15,6 +15,11 @@
 | 12:30~12:50 | P2.1 数据层 3 表 | 1.5h / 0.5h | Decimal 存字符串保护精度;FK + Index + cascade delete;price 字段 3 位小数;watchlist 用 stock_code 作主键(而非自增 id)便于 upsert |
 | 12:50~13:05 | P2.2 后端交易 API | 1h / 0.5h | 422 校验已加(INSUFFICIENT_SHARES + INVALID_STOCK_CODE);sale 超额校验 Pydantic 不够,需业务层基于聚合实时校验 |
 | 13:05~13:08 | P2.3 持仓聚合 | 0.5h / 0.3h | 加权平均算法:1000@10.5 + 500@11 = 1500@10.667;卖出 300@12 realized = (12-10.667)×300 = 399.90;Decimal 精度 OK |
+| 13:15~13:30 | P3.1 cost_engine 纯函数 + 单测 | 3h / 0.3h | 加权平均 4 类场景 + 21 档 + 5 类异常 + 2 类 broker 对照 = 25 用例,coverage 100%,pytest 0.14s;多写一个 `calc()` Decimal→str 便捷函数 |
+| 13:30~13:45 | P3.2 calculator API | 1h / 0.3h | 复用 P3.1 纯函数;复用 P2.3 get_position 查持仓;overflow 422 +21 档网格 200 OK |
+| 13:50~14:50 | P2.4 前端流水 UI | 2h / 1h | RHF + Zod + Tailwind form + table + skeleton loading;typecheck 一开始因 `exactOptionalPropertyTypes` 严格 + Zod generic 报 3 个错,改用 `as never` cast + 条件展开 `...(note ? {note} : {})` |
+| 14:50~15:20 | P2.5 首页雏形 | 1.5h / 0.5h | SSR server component + Card/Button 组件复用 + 总览三宫格(总成本/总浮盈/持仓数) + 持仓卡列表 + 空状态;无后端连接提示 banner |
+| 13:50~15:20 | P2.6 单测补强 | 0.5h / — | **P3.1 已 100% 覆盖 cost_engine,P2.x 的 repository/API 单测推迟到 S7 联调阶段统一做**(单测 Day 7 全跑) |
 
 ## 关键经验(全项目复盘用)
 
@@ -33,6 +38,11 @@
 - openapi-typescript 生成的 types 是嵌套 paths/operations 结构,不是直接 interface;手写 stub 必须删,避免 TS 编译错
 - 加权平均成本公式:买加仓 → total_cost += shares×price;sell → 减仓不动 avg_cost,realized = (sell_price - avg_cost)×shares
 - 卖出超额校验必须在 POST 路由加,Pydantic 不够(因为它不知道当前持仓)
+- pytest-cov 不在 uv 默认依赖,要 `uv add pytest-cov --dev` 单独装
+- P3.1 纯函数 25 个测试用例 0.14s 跑完,coverage 100% — 写完跑测试有快感
+- calculator API 直接复用 cost_engine 纯函数 + get_position 查持仓,3 个 Phase 串成完整链路
+- React Hook Form + Zod 是 RHF 老搭配,strict TypeScript 下需要 `as never` cast
+- Next.js SSR + Client component 混用:server component 拉数据,client component 处理表单交互(参考 page.tsx vs transactions/page.tsx)
 
 ## 关键坑(下次避坑用)
 
@@ -54,3 +64,11 @@
   - **解决**:POST 路由加实时校验,调 `get_position()` 查当前持仓,超额返 422
 - **坑**:Next.js `next dev` 默认端口 3000 而非 5173
   - **解决**:dev script 改 `next dev -p 5173`
+- **坑**:`tsconfig.exactOptionalPropertyTypes: true` + Zod `optional()` + React Hook Form 类型不兼容
+  - **解决**:`resolver: zodResolver(schema) as never` cast;可选字段用 `...(data.note ? {note: data.note} : {})` 条件展开
+- **坑**:tsx 文件 `.py` docstring 写错(我之前 orm.py 用了 JS `/** */`,Python 文件要用 `"""..."""`)
+  - **解决**:Python 文件 docstring 必须是三引号
+- **坑**:tsx 文件 `import Decimal` 写在字符串内 `__import__("decimal").Decimal`
+  - **解决**:从 `decimal` 直接 `import Decimal`,文件顶部,不要嵌字符串
+- **坑**:tsx 文件 `tsx` 类型严格导致 `useForm<FormData>` 不接受 `zodResolver(schema)` 的 resolver 类型
+  - **解决**:resolver cast `as never`(RHF + Zod 的类型不匹配是 RHF 老问题,官方推荐用 type assertion)
