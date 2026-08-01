@@ -74,5 +74,14 @@ class TradeScoreRepository:
                 row.ai_status = status
                 await session.commit()
 
+    async def update_feedback(self, trade_id: int, feedback: str | None) -> None:
+        """P4.9 评语价值反馈(useful / useless / null)"""
+        async with async_session() as session:
+            stmt = select(TradeScore).where(TradeScore.trade_id == trade_id)
+            row = (await session.execute(stmt)).scalar_one_or_none()
+            if row:
+                row.feedback = feedback
+                await session.commit()
+
 
 trade_score_repo = TradeScoreRepository()
