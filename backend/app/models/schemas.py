@@ -191,6 +191,27 @@ class DiagnoseOut(BaseModel):
     ai_status: Optional[str] = None
 
 
+class FeedbackUpdate(BaseModel):
+    """PUT /api/diagnose/{trade_id}/feedback body(P4.9)"""
+    feedback: Optional[Literal["useful", "useless"]] = None
+
+
+# ============================================================
+# === 年度账单(P6.1 / v0.2 预留) ===
+# ============================================================
+
+class AnnualReportOut(BaseModel):
+    """GET /api/annual-report/{year} 响应"""
+    year: int
+    realized_profit: str
+    realized_loss: str
+    net_pnl: str
+    closed_count: int
+    win_rate: float
+    top5_profit: list[dict]
+    top5_loss: list[dict]
+
+
 # ============================================================
 # === 截图识别(P8 / api-contract §1.6) ===
 # ============================================================

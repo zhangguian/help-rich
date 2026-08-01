@@ -2,12 +2,14 @@
 
 - POST /api/diagnose/{trade_id} → 立即返回,异步评分 + 评语(SSE 推送)
 - GET  /api/diagnose/{trade_id} → 查询当前评分状态(降级轮询用)
+- PUT  /api/diagnose/{trade_id}/feedback → 评语价值反馈(P4.9:useful/useless/null)
 """
 import json
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
-from app.models.schemas import DiagnoseOut
+from app.core.db_lock import safe_write
+from app.models.schemas import DiagnoseOut, FeedbackUpdate
 from app.repositories.trade_score_repo import trade_score_repo
 from app.repositories.transaction_repo import transaction_repo
 from app.services.diagnose_service import diagnose_service
@@ -50,3 +52,16 @@ async def get_diagnose(trade_id: int) -> DiagnoseOut:
         breakdown=json.loads(score.score_breakdown),
         ai_comment=score.ai_comment,
     )
+
+
+@router.put("/{trade_id}/feedback")
+async def update_feedback(trade_id: int, payload: FeedbackUpdate) -> dict:
+    """P4.9 评语价值反馈(useful / useless / null=撤销)"""
+    if await transaction_repo.get_by_id(trade_id) is None:
+        raise HTTPException(status_code=404, detail={"code": "TX_NOT_FOUND", "message": "交易不存在"})
+
+    async def _do():
+        await trade_score_repo.update_feedback(trade_id, payload.feedback)
+
+    await safe_write(_do)
+    return {"trade_id": trade_id, "feedback": payload.feedback}

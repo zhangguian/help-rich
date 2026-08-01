@@ -28,6 +28,21 @@
 
 ## 历史记录
 
+### 2026-08-01 | v0.1.7 | 止损 + 评语反馈 + 年账单(P4.9/P5.1/P5.2/P6.1)
+
+#### Added
+- 新增止损 4 端点:
+  - `POST /api/stop-losses`(body `{stock_code, stop_loss_price, enabled, notify_*}`):设置/更新(stock_code 规范化,同 code 覆盖);价格 ≤ 0 → 422
+  - `GET /api/stop-losses`:止损列表
+  - `DELETE /api/stop-losses/{code}`:删除;未设置 → 404
+  - `POST /api/stop-losses/{code}/triggered`:标记今日触发,**幂等**(同日重复返回 200 + `duplicate=true`);未设置 → 404
+- 新增 `PUT /api/diagnose/{trade_id}/feedback`(body `{feedback: "useful" | "useless" | null}`):评语价值反馈;非法值 → 422,交易不存在 → 404
+- 新增 `GET /api/annual-report/{year}`:年账单聚合(realized_profit / realized_loss / net_pnl / closed_count / win_rate / top5_profit / top5_loss);年份越界 → 400;**v0.2 接口预留,前端砍**
+- 新增 `trade_scores.feedback` / `stop_losses` 表
+
+#### Changed
+- 所有止损写路径用 `safe_write` 包(backend-arch §4.6.1 写锁表第 4 行修复)
+
 ### 2026-08-01 | v0.1.6 | 截图识别后端(P8.1~P8.5)
 
 #### Added

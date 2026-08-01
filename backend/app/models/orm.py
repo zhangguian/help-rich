@@ -5,6 +5,7 @@
 from datetime import date, datetime
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -176,3 +177,32 @@ class ScreenshotRecord(Base):
 
     def __repr__(self) -> str:
         return f"<ScreenshotRecord {self.id} status={self.status}>"
+
+
+# ============================================================
+# === v1.5:止损表(P5.1 实施) ===
+# ============================================================
+
+class StopLoss(Base):
+    """止损设置表(backend-arch §6.1 v1.5)
+
+    stock_code 唯一(每只股票仅 1 个止损设置)
+    价格字符串(精度保护,与 Transaction.price 一致)
+    """
+    __tablename__ = "stop_losses"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_code: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    stop_loss_price: Mapped[str] = mapped_column(String, nullable=False)  # 3 位小数
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_sound: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_desktop: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify_vibrate: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_triggered_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    def __repr__(self) -> str:
+        return f"<StopLoss {self.stock_code} {self.stop_loss_price}>"
