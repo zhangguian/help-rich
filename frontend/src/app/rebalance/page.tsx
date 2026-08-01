@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 
 import { apiGet } from '@/lib/api';
+import { decimalFormat } from '@/lib/decimalFormat';
 
 import { Card } from '@/components/ui/Card';
 import { SkeletonState } from '@/components/ui/States';
@@ -12,15 +13,15 @@ import { SkeletonState } from '@/components/ui/States';
 interface RebalanceAction {
   type: 'reduce' | 'add' | 'diversify' | 'alert';
   priority: 'high' | 'medium' | 'low';
-  stock_code: string | null;
-  stock_name: string | null;
+  stockCode: string | null;
+  stockName: string | null;
   title: string;
   reason: string;
-  suggested_pct: number;
+  suggestedPct: number;
 }
 
 interface RebalanceSuggestion {
-  total_market_value: number;
+  totalMarketValue: number;
   actions: RebalanceAction[];
   summary: string;
 }
@@ -77,7 +78,7 @@ export default function RebalancePage() {
               <div>
                 <div className="text-sm text-text-sec">总市值</div>
                 <div className="text-2xl font-mono font-semibold mt-1">
-                  ¥{data.total_market_value.toFixed(2)}
+                  ¥{decimalFormat(data.totalMarketValue)}
                 </div>
               </div>
               <div className="text-right">
@@ -113,9 +114,9 @@ export default function RebalancePage() {
                           <span className={`text-xs px-2 py-0.5 rounded-sm ${pm.bg}`}>
                             {pm.label}优先级
                           </span>
-                          {a.suggested_pct > 0 && (
+                          {a.suggestedPct > 0 && (
                             <span className="text-xs text-text-sec">
-                              建议: {a.suggested_pct.toFixed(0)}%
+                              建议: {a.suggestedPct.toFixed(0)}%
                             </span>
                           )}
                         </div>
