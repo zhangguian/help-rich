@@ -18,6 +18,7 @@ from app.api.kline import router as kline_router
 from app.api.llm_keys import router as llm_keys_router
 from app.api.market import router as market_router
 from app.api.positions import router as positions_router
+from app.api.provider_stats import router as provider_stats_router
 from app.api.quotes import router as quotes_router
 from app.api.rebalance import router as rebalance_router
 from app.api.risk_report import router as risk_report_router
@@ -114,6 +115,7 @@ app.include_router(market_router, prefix="/api")
 app.include_router(stop_losses_router, prefix="/api")
 app.include_router(transactions_router, prefix="/api")
 app.include_router(positions_router, prefix="/api")
+app.include_router(provider_stats_router, prefix="/api")
 app.include_router(quotes_router, prefix="/api")
 app.include_router(rebalance_router, prefix="/api")
 app.include_router(risk_report_router, prefix="/api")

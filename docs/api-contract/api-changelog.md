@@ -28,6 +28,15 @@
 
 ## 历史记录
 
+### 2026-08-02 | v0.3.0 | Day 8 A3 多 Provider 占比月度统计
+
+#### Added(新增)
+- `GET /api/provider-stats/monthly?year=2026`:12 个月 Provider / status 分布(空月补全)。每条 `{month, total, providers, statuses}`
+- `GET /api/provider-stats/summary?year=2026`:年度汇总(柱状图友好)`{year, total, providers: [{provider, count, pct}]}`(按 count 降序)
+
+#### Test
+- 新增 `tests/test_provider_stats.py` 8 条:空年 / 单月单 provider / 多 provider / 多月+多 status / 跨年排除 / 默认年份 / 空汇总 / 占比正确
+
 ### 2026-08-02 | v0.4.1 | 一键清仓 API(P-stop-loss-v2)+ 板块资金异动 SSE
 
 #### Added(新增)

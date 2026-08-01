@@ -68,6 +68,9 @@ export default async function Home() {
           <Link href="/sector-fund-flow">
             <Button variant="secondary">💰 板块资金</Button>
           </Link>
+          <Link href="/provider-stats">
+            <Button variant="ghost">📊 Provider 占比</Button>
+          </Link>
           <Link href="/settings">
             <Button variant="ghost">⚙ 设置</Button>
           </Link>

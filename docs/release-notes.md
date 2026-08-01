@@ -1,63 +1,135 @@
-# Release Notes v0.2.0(2026-08-01)
+# Release Notes v0.3.0(2026-08-02)
 
-> 买股工具室 MVP 发布版 — **Day 1~8 全部 phase 完成**
+> 买股工具室 v0.2 二期完成版 — **v0.2-roadmap 排班 8 个 Day 全部完成**
 
 ## 🎯 概览
 
-`development-plan.md §17.3` 排班 **35+ phase 100% 完成**:
-- 后端 32 个 API 端点(32 ~ 33 区间)
-- 前端 4 个页面 + 32 个 .tsx 组件
-- 后端 208 tests 全绿
-- tsc + next build 全部通过
+相对 v0.2.0 的累计变更(MVP → v0.3.0):
+- 后端 32 → **46 个 API 端点**
+- 前端 4 → **10 个页面 + 持仓管理 client 化 + 一键清仓 Modal + SSE 订阅 toast**
+- 测试 208 → **294 tests 全绿**(+86)
+- 持仓架构从"流水聚合视图" → **持仓主数据表**(关键设计哲学翻转)
+- 产品名:盘后诊股室 → **买股工具室**
+- 新增 2 个真实数据源(新浪 K 线 / 新浪板块资金排行 + 7×24 快讯)
+- 0 mock 残留(测试基础设施 mock ≠ 生产 mock)
 
-## 🏁 MVP 完成度
+## 🆕 v0.3.0 主要功能(按 roadmap Day 排序)
 
-| 模块 | 完成度 |
-|---|---|
-| S1 后端骨架 (P1.x) | ✅ 100% |
-| S2 数据层 (P2.x) | ✅ 100% |
-| S3 计算器 (P3.x) | ✅ 100% |
-| S4 诊断 (P4.x) | ✅ 100%(后端 + 前端) |
-| S5 止损 (P5.x) | ✅ 100%(后端 + 前端) |
-| S6 年账单 (P6.x) | ✅ 后端 100% / 前端推迟到 v0.2 |
-| S7 联调 + 发布 (P7.x) | ✅ 100% |
-| S8 截图识别 (P8.x) | ✅ 100%(后端 + 前端) |
+### Day 1 — P9 vision LLM 接入(2h)
+- **MiniMax `abab-v-chat` 多模态**:OCR 失败时 fallback 到视觉识别(base64 data URL → JSON 输出)
+- `BaseLLM.chat_with_image()` / `supports_vision` 抽象;非视觉 Provider 抛 NotImplementedError
+- `screenshot_service` 自动选择:OCR → vision → paste-JSON 三级降级
 
-## 🎯 主要功能
+### Day 2 — P6.2~6.4 年账单前端(4h)
+- `/annual-report/[year]` 页:4 宫格(已实现盈亏 / 盈利 / 亏损 / 胜率)+ Top5 最赚 + Top5 最亏
+- 首页 / 反思卡 / 计算器 / 风险报告 多处入口
+- `no_transactions` 提示(v0.4.0):无流水时引导"导入持仓或录入流水"
 
-### 后端(32 个 API 端点)
+### Day 3 — A1 持仓 K 线图(4h)
+- `lightweight-charts@4`(~200KB)替代自研 SVG
+- `PositionDetailModal` 集成:K 线 + 资金流 SSE
+- 持仓详情弹窗内可看日 K / 实时资金流推送
 
-- **交易管理**:录入 / 列表 / 更新 / 删除 流水;卖出超额 422 校验
-- **持仓聚合**:加权平均成本 + 已实现盈亏 + 今日盈亏 + 浮动盈亏(新浪/腾讯行情主备)
-- **计算器**:加仓/减仓/做T/清仓 4 类场景,21 档盈亏热力图
-- **诊断评分**:5 维度(集中度/价格/间隔/市场/板块)各 20 分,纯函数 + 10 组手算 fixture 100% 覆盖
-- **AI 评语**:DeepSeek / MiniMax / 豆包 3 Provider 切换 + 真实 API 调用 + 脱敏(只传 6 项字段,无价格/金额)
-- **SSE 实时推送**:trade.scored / trade.commented / trade.failed 事件流(30s 心跳 + 失败降级 5s 轮询)
-- **止损**:同 code 唯一设置 + 4 端点 + 触发 API 同日幂等
-- **截图识别**:PaddleOCR 懒加载 + 本地规则优先 + LLM 兜底 + JSON 粘贴降级
-- **年账单后端**:cost_engine 聚合年内 realized_pnl / 胜率 / Top5
-- **数据管理**:导出 / 导入 / 备份 3 端点(admin)
+### Day 4 — P-stop-loss-v2 一键清仓 API(2h) — 新增 Day 7
+- `POST /api/positions/{code}/clear` body `{price, note?}`:自动 sell 流水覆盖全部股数 → recalc_position 联动删除持仓行
+- 前端 [🛑 一键清仓] 按钮 + 确认 Modal(实时盈亏预估)
+- **修复 recalc bug**:`aggregate_positions` 严格校验+过滤导致 sell 后负股数失算;加双开关 `(strict, keep_zero)`
 
-### 前端(4 个页面)
+### Day 5 — A2 资金流订阅(3h) — 半成补完
+- 单只资金流被公司网络 blocked(东财 RST / 网易 502 / 腾讯 param error / 同花顺限流),所有免费源不可用
+- **板块异动订阅补完**:`sector_fund_flow_service._detect_alerts` 纯函数(净额绝对变化 ≥ 1 亿 / 领涨股切换 / 新进榜 三规则)
+- `start_sector_scheduler` 后台 60s 拉 fenlei=0 → publish `sector_fund_flow_alert`
+- `GET /api/sector-fund-flow/events?fenlei=` SSE 端点(按 fenlei 过滤)
+- 前端 `/sector-fund-flow` 页加 [🔔 订阅异动] 开关 + 异动列表 + toast
 
-- **首页** `/`:4 宫格总览 + 持仓卡(今日盈亏/浮动盈亏 + 止损按钮 + 实时价格告警)+ 截图入口 + Onboarding + 22:00 反思卡
-- **流水** `/transactions`:录入表单 + 评分徽章(5 档色 + 滚动数字动效)+ SSE 实时订阅 + 详情弹窗(评语反馈 / 脱敏 tooltip / A/B 重生成)
-- **计算器** `/calculator`:实时计算 + 21 档盈亏热力图
-- **设置** `/settings`:LLM Provider 切换 / API Key / 截图识别 / 数据备份还原
+### Day 6 — C1 风险敞口(3h)
+- `risk_service.calc_risk()`:单股集中度 + HHI 指数 + 板块分散 + 风险评分 0~100
+- `GET /api/risk-report` 端点 + `/risk-report` 页:4 宫格 + 警告区 + 单股集中度条形图 + 板块分布
+- v0.4.0 后端到端验证:3 只持仓(茅台 100@1500 + 平安 1000@12 + 宁德 200@200) → total=3, market=20.2 万, top=74.26%, HHI=5942, level=高, 2 条警告
+
+### Day 7 — P-privacy Alembic + A4 调仓(已完成)
+
+**P-privacy Alembic 切换**:
+- `uv add alembic==1.13.3` + `migrations/` 初始化 + `env.py` 读 DATABASE_URL env var
+- 4 个迁移:initial + fund_flow + kline + positions
+- `lifespan` 改 `subprocess.run -m alembic upgrade head`(同步,绕开 Windows asyncio 子进程限制)
+- 测试环境自动建表
+- v0.4.0 修复 kline head multiple heads 问题
+
+**A4 智能调仓建议**:
+- 4 规则启发式:`reduce`(单股 >30% 占 15%) / `add`(持仓 <3 只) / `diversify`(同板块 ≥3) / `alert`(top1 >50%)
+- `GET /api/rebalance-suggestion` + `/rebalance` 页
+
+### Day 8 — A3 多 Provider 占比月度(1h)
+- `GET /api/provider-stats/monthly?year=2026`:12 个月 Provider / status 分布
+- `GET /api/provider-stats/summary?year=2026`:年度汇总(柱状图友好)
+- `/provider-stats` 页:年度柱状图 + 月度明细表格 + Provider 颜色映射
+
+### 持仓主数据化(横跨 v0.4.0) — 核心重构
+
+**问题**:软件初衷是"管理和复盘持仓",但持仓只是流水聚合视图,截图导入持仓被拒 → 真实持仓无法进入系统。
+
+**设计哲学翻转**(v0.4.0):
+- `positions` 表 = **主数据**(手动录入 / 截图导入 / 流水同步)
+- `transactions` 流水 = **事件记录**(复盘用)
+- 持仓 = **导入基准(delta) + 全部流水聚合**
+- delta 运行时推导,**不落库**(capture_delta 变更前 → 变更流水 → recalc_position 变更后传 delta)
+
+**关键修正**:`recalc_position` 原实现有数学死结(delta + flow 恒等式 + 流水入库后不可推导),**两段式 capture_delta + recalc_position** 是正确解。
+
+**新增/变更端点**:
+- `POST /api/positions` 手动录入/覆盖单只持仓(每股成本价口径)
+- `DELETE /api/positions/{code}` 删除持仓(**联动删除该股全部流水**,防 recalc 复活)
+- `GET /api/holdings-health` 持仓体检(真实持仓 + 实时行情 + calc_risk)
+- `POST /api/screenshot/{id}/confirm`(holdings/position 类型)→ 改为导入持仓主数据(原 422 `HOLDINGS_NOT_PERSISTED` 删除)
+
+**前端**:
+- 首页持仓区 client 化 `PositionsSection`(添加 / 删除 / CustomEvent `positions-updated` 自动刷新)
+- `ScreenshotPreview` 持仓可编辑核心字段(shares/price/cost_price)+ 确认导入
+- `/holdings-health` 页
+
+### 产品改名(横跨 v0.4.0)
+- **盘后诊股室 → 买股工具室**(副标题 → 个人股票投资辅助工具)
+- 18 个文件 + 34 处替换
+- PowerShell 写入默认带 BOM,已用 `UTF8Encoding($false)` 修复
+
+### 真实数据源接入(v0.3.2 起)
+- **0 mock 残留**(`grep -r "mock" backend/app` 仅 mock 注释)
+- 新浪 `quotes.sina.cn` K 线(`CN_MarketDataService.getKLineData`)
+- 新浪 `MoneyFlow.ssl_bkzj_bk` 板块资金排行
+- 新浪 `MoneyFlow.ssl_bkzj_ssggzj` 单只资金流排行(用于手动触发)
+- 新浪 `zhibo.sina.com.cn/api/zhibo/feed` 7×24 快讯(JSONP + 纯 JSON 双格式兼容)
+- 数据源不可用 502 `DATA_SOURCE_UNAVAILABLE`(友好提示,无 fallback)
+
+## 🐛 修复的关键 Bug
+
+| # | Bug | 修复 |
+|---|---|---|
+| 1 | screenshot confirm 静默忽略 holdings/position 类型 | 改为导入持仓主数据(v0.4.0) |
+| 2 | 持仓是流水聚合视图,真实持仓无法导入 | 持仓主数据化(v0.4.0 核心重构) |
+| 3 | `recalc_position` 恒等式(delta + flow 永不变化) | 两段式 capture_delta + recalc(v0.4.0) |
+| 4 | 卖出超额请求无业务校验 | 读持仓表实时校验(v0.4.0) |
+| 5 | `_detect_alerts` 测试阈值方向错 | 修测试断言(v0.4.1) |
+| 6 | `border-bd-subtle` 错误类名(板块资金页) | 改 `border-border-def`(v0.4.1) |
+| 7 | `text-up` 错误用做错误提示色 | 改 `text-down`(v0.4.1) |
+| 8 | /risk-report /rebalance 字段名 snake_case 不匹配 camelCase 拦截器 | 改 camelCase + 用 `decimalFormat` 处理数字(v0.4.1) |
+| 9 | v0.4.0 commit 漏 add 一批改动文件 | 后续 commit 一次性补全 + 注释说明(v0.4.1) |
+| 10 | 风险敞口页面运行时报错 `data.total_market_value.toFixed` undefined | 接口统一 camelCase(v0.4.1) |
 
 ## 📊 测试覆盖
 
-- **后端 208 tests 全绿**:
-  - scorer 37 + diagnose 12 + LLM 27 + EventBus 9 + llm_api 7 + prompt 4
-  - screenshot 30(增 vision + holdings)
-  - stop_loss+feedback 14
-  - annual 8
-  - admin/export round-trip 7
-  - 其他 53
-- **P4.8 端到端验收**:10 笔交易全部评分落库(100% ≥ 95% 目标)
-- **TypeScript 严格**:`tsc --noEmit` ✅
-- **Next.js 构建**:4 页 + 动态路由 ✅
-- **后端测试覆盖率**:`scorer.py` 100%,其他核心模块 80%+
+**后端 294 tests 全绿**(从 v0.2.0 的 208 增加 86 条):
+- v0.3.2 真实数据源 23 条(K 线 + 资金流 + 板块)
+- v0.3.3 调仓建议 9 条
+- v0.3.4 板块资金 + 快讯 9 条
+- v0.4.0 持仓主数据化 17 条(test_positions_v040)
+- v0.4.1 板块异动 + 一键清仓 13 条
+- 其他 bug 修复 15 条
+
+**端到端验收**:
+- 持仓粘贴 JSON → 一键导入 → 3 只入库 → 体检 → 删除联动 全通
+- 一键清仓 600519 100@1450 → 清仓 @1500 → realized=5000.00
+- 风险报告 3 只 → top=74.26%, HHI=5942, level=高
 
 ## 🔒 隐私
 
@@ -65,31 +137,6 @@
 - 评语仅传 6 项脱敏字段(代码/方向/股数分桶/日期/占比/名称),无价格无金额
 - 截图原图只存本地 `uploads/`,LLM 只接收 OCR 文本(不传图片)
 - 用户可粘贴外网 vision 模型 JSON(豆包/GPT-4V),数据不上传第三方
-
-## 🐛 修复的 Bug(20 commits)
-
-| # | Bug | 修复 |
-|---|---|---|
-| 1 | `trade_scores` 仓储按主键 `id` 查 `stock_code`(P2.1 遗留) | 改 `select where trade_id` |
-| 2 | `watchlist` 仓储同上 → 自选股判定从未生效 | 改 `select where` |
-| 3 | 前端 axios baseURL 缺 `/api` 前缀(Day 2 起从未真正连后端) | 改 `.env.local` |
-| 4 | `scorer._interval_score` 期望 dict 但传 ORM 对象 → 评分静默失败 | 双轨 recent(ORM 给 recent_summary + dict 给 score_trade) |
-| 5 | PaddleOCR 3.x 用 2.x 参数(`use_angle_cls` + `show_log`) | 改 `use_textline_orientation` |
-| 6 | `ProviderFactory.model_name` 类层面访问得 property 对象(500) | `_BUILDERS` 存 `(Class, model_str)` 元组 |
-| 7 | POST `/llm/settings` 等 422(camelCase body 没转 snake) | axios 请求拦截器 camel→snake |
-| 8 | ScreenshotWizard `/api/*` 相对 URL → Next dev 404 | `apiBaseUrl()` / `sseUrl()` 绝对 URL |
-| 9 | 浏览器 CORS 拦截(localhost → 127.0.0.1) | 后端 `CORSMiddleware(allow_origins=["*"])` |
-| 10 | holdings/position 截图 confirm 静默忽略 | 抛 `HOLDINGS_NOT_PERSISTED` 422 |
-| 11 | dev.ps1 health check 路径错 | 改 `/api/admin/health` |
-| 12 | Toaster 未挂载(toast 调用不显示) | layout 加 `<Toaster />` + axios 拦截器增强 |
-
-## 📋 已知限制(MVP)
-
-- 单机使用,无鉴权(单机自用)
-- Alembic 迁移未启用(`create_all` + `run_migrations`,正式版切 Alembic 见 §6.4)
-- 止损离场按钮暂仅关闭弹窗(v0.2 接入一键清仓 API)
-- PaddleOCR 3.x 在某些图片上 onednn 内部错误 → 自动降级到 vision LLM / JSON 粘贴
-- DeepSeek 开发库 key 过期(401),LLM 调用降级到 `failed` 状态(用户应切到有效 provider)
 
 ## 🚀 启动脚本
 
@@ -103,28 +150,14 @@ powershell -File scripts/dev.ps1 -Action restart
 powershell -File scripts/dev.ps1 -Action status
 ```
 
-自动:
-- 杀掉 8000 / 5173 端口残留进程
-- 后端:`uvicorn app.main:app --host 0.0.0.0 --port 8000`
-- 前端:`npx next dev -p 5173`
-- 等待两个服务就绪(健康检查超时 60s)
-- 输出日志位置 + 停止 / 重启 / 状态命令
+## 📋 已知限制
 
-日志写入 `logs/backend.{out,err}.log` 与 `logs/frontend.out.log`。
-
-## 📅 v0.2 二期规划
-
-详见 [`docs/v0.2-roadmap.md`](v0.2-roadmap.md)。
-
-主要方向(按项目书第十二章):
-- **A1 持仓成本联动 K 线图版 + 后视镜**
-- **A2 同花顺 / 东财资金流订阅**
-- **A3 多 Provider 占比统计**
-- **A4 智能调仓建议**
-- **C1 风险敞口报告**
-- **P9 vision LLM 接入**(基于用户真实 MiniMax-M3 / Anthropic 协议)
-- **P6.2~6.4 年账单前端**
+- 单机使用,无鉴权(单机自用)
+- 止损离场真实化(已通过一键清仓 API 落地,但 StopLossAlert 仍仅提示,未自动触发清仓)
+- 单只资金流推送 blocked(公司网络限流;板块异动推送已补)
+- 引导视频 / 截图示例 / 多语言(i18n) 推迟到 v0.4+ 锦上添花期
+- DeepSeek 等 LLM Key 过期会导致 failed 降级(用户应切到有效 provider)
 
 ## 🔗 API 文档
 
-详见 `docs/api-contract/api-changelog.md`(v0.1.0 ~ v0.2.0 共 9 个版本)
+详见 `docs/api-contract/api-changelog.md`(v0.1.0 ~ v0.4.1 共 14 个版本)
