@@ -131,7 +131,14 @@ fatal: unable to access '...': schannel: failed to receive handshake, SSL/TLS co
 **解决**:改用 OpenSSL 作为 git 的 TLS 后端:
 ```powershell
 git config --global http.sslBackend openssl
-git config --global http.sslCAInfo "C:\Program Files\Git\mingw64\ssl\certs\ca-bundle.crt"
+# 注意:CA bundle 路径必须匹配实际 git 安装位置
+git config --global http.sslCAInfo "D:\git\Git\mingw64\ssl\certs\ca-bundle.crt"
 ```
 
 第二次 push 应立即成功。
+
+**路径验证**(用 `cmd /c "where git"` 找到实际 git.exe 位置):
+- `D:\git\Git\` 安装 → `D:\git\Git\mingw64\ssl\certs\ca-bundle.crt`
+- `C:\Program Files\Git\` 安装 → `C:\Program Files\Git\mingw64\ssl\certs\ca-bundle.crt`
+
+路径错误时 push 仍会报 schannel 错(迷惑性)。

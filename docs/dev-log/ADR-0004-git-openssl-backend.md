@@ -22,8 +22,13 @@ schannel: failed to receive handshake, SSL/TLS connection failed
 
 ```bash
 git config --global http.sslBackend openssl
-git config --global http.sslCAInfo "C:\Program Files\Git\mingw64\ssl\certs\ca-bundle.crt"
+git config --global http.sslCAInfo "D:\git\Git\mingw64\ssl\certs\ca-bundle.crt"
 ```
+
+> ⚠️ **重要**:CA bundle 路径**必须匹配实际 git 安装位置**。
+> 如果用 `D:\git\Git` 安装的 git,路径是 `D:\git\Git\mingw64\ssl\certs\ca-bundle.crt`
+> 如果用 `C:\Program Files\Git` 安装的,路径是 `C:\Program Files\Git\mingw64\ssl\certs\ca-bundle.crt`
+> 用 `cmd /c "where git"` + `ls` 验证。
 
 第二次 `git push` 立即成功(`f0438c7..a6a365e main -> main`)。
 
@@ -33,6 +38,7 @@ git config --global http.sslCAInfo "C:\Program Files\Git\mingw64\ssl\certs\ca-bu
 - ✅ `git fetch / pull` 也走 OpenSSL,行为一致
 - ⚠️ 全局配置,影响所有 git 仓库
 - ⚠️ 团队成员各自配置(`--global` 是个人配置)
+- ⚠️ 路径错误会导致 push 失败且报 schannel 错(迷惑性)
 
 ## 替代方案(被否决)
 

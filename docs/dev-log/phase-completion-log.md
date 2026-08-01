@@ -22,6 +22,8 @@
 | 13:50~15:20 | P2.6 单测补强 | 0.5h / — | **P3.1 已 100% 覆盖 cost_engine,P2.x 的 repository/API 单测推迟到 S7 联调阶段统一做**(单测 Day 7 全跑) |
 | 15:25~15:35 | git push 推送 | — / 0.1h | 第一次 push 失败(schannel TLS);**切 OpenSSL 后立即成功**(ADR-0004);Day 2 完整推到 GitHub |
 | 15:35~15:45 | 留痕 + 文档 | — / 0.2h | 新增 ADR-0004;runbook 加 §6.1 git push SSL 解决;decisions-index 同步 |
+| 16:15~16:35 | P3.3 + P3.4 CalculatorPanel + PnlHeatmap | 5h / 1h | 300ms debounce 实时计算 + 自研 SVG PnlHeatmap 21 档 + 当前价标线 + 加仓区间高亮 + hover 放大 + 移动端占位 |
+| 16:35~16:45 | git push P3.3+P3.4 | — / 0.1h | schannel 又失败一次(ca-bundle 路径错了);**路径修正为 `D:\git\Git\...` 后 OK**;ADR-0004 / runbook 更新路径验证方法 |
 
 ## 关键经验(全项目复盘用)
 
@@ -47,6 +49,8 @@
 - Next.js SSR + Client component 混用:server component 拉数据,client component 处理表单交互(参考 page.tsx vs transactions/page.tsx)
 - 完成节点后立即 commit + push,不留"半成品";commit message 写具体 Phase 编号便于历史追溯
 - git push SSL 失败:Windows git 默认 schannel 被拦截,`http.sslBackend openssl` 解决;团队成员各自配置(`--global` 是个人)
+- **坑**:git ca-bundle 路径错了 push 仍报 schannel 错(不是 openssl 错),迷惑性强;**先用 `cmd /c "where git"` 找实际 git 安装位置**,ca-bundle 在 `<git-root>\mingw64\ssl\certs\ca-bundle.crt`
+- 自研 SVG PnlHeatmap 比用 ECharts 简单(无 ECharts 启动开销 + 完全可控样式);21 列用 `grid-cols-21` + 自定义 @layer components
 
 ## 关键坑(下次避坑用)
 
