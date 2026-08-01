@@ -32,17 +32,40 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
-    if (error.response?.data?.code) {
-      const apiError = error.response.data as ApiError;
-      // 用 zustand store 弹 toast(避免循环依赖,延迟调用)
-      try {
-        useUIStore.getState().showToast({
-          type: 'error',
-          message: apiError.message || '服务异常,请重试',
-        });
-      } catch {
-        // 忽略 store 不可用(SSR / 测试场景)
+    let message = '请求失败';
+    let type: 'error' | 'warning' = 'error';
+
+    // 1. ApiError 格式 `{code, message}`(后端业务错误)
+    if (error.response?.data?.code && error.response.data.message) {
+      message = error.response.data.message;
+    }
+    // 2. FastAPI 422 校验错误:`[{"loc":["body","field"], "msg":"..."}]`
+    else if (error.response?.status === 422 && Array.isArray(error.response.data?.detail)) {
+      const issues = error.response.data.detail as Array<{ loc?: (string | number)[]; msg?: string }>;
+      const first = issues[0];
+      if (first?.msg) {
+        const field = Array.isArray(first.loc) ? first.loc.filter((x) => x !== 'body').join('.') : '';
+        message = field ? `${field}: ${first.msg}` : first.msg;
+      } else {
+        message = '参数校验失败';
       }
+    }
+    // 3. 网络错误(CORS / 服务未起 / 超时)
+    else if (error.code === 'ERR_NETWORK' || error.message?.includes('Network Error')) {
+      message = '网络错误:后端可能未启动或 CORS 被拦截';
+    } else if (error.code === 'ECONNABORTED') {
+      message = '请求超时,请重试';
+    }
+    // 4. 其他 HTTP 错误
+    else if (error.response?.status) {
+      message = `请求失败 (HTTP ${error.response.status})`;
+    }
+
+    // 触发 toast(忽略 store 不可用,如 SSR / 测试)
+    try {
+      useUIStore.getState().showToast({ type, message });
+    } catch {
+      /* ignore */
     }
     return Promise.reject(error);
   },
