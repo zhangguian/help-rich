@@ -1,0 +1,56 @@
+# Phase 完成日志
+
+> 每个 Phase 完成时追加一行。格式:**YYYY-MM-DD HH:MM | Phase 名 | 实际工时 vs 估时 | 经验/坑**
+
+## Day 1 — 2026-08-01
+
+| 时间 | Phase | 估时 / 实际 | 经验 / 坑 |
+|---|---|---|---|
+| 11:02~11:05 | P1.1 后端骨架 | 2h / 0.1h | uv init 快(2s);依赖装包 ~1min(含 trans deps);第一次启动 Job 跑 uvicorn 被父进程回收(Job 特性);改用 `Start-Process -WindowStyle Hidden` + `curl.exe --noproxy "*"` 直连才能验证 health;`Invoke-WebRequest` 默认走 WinHTTP 偶有代理问题 |
+| 11:05 | P1.1 验收 | — | `/api/health` 返回 `{"status":"ok"}`;`/openapi.json` 含 `/api/health` 路径;Swagger UI 在 `/docs` |
+| 11:10~11:20 | P1.4 Key 管理后端 | 0.5h / 0.5h | 加 `cryptography==43.0.3`;实现 Fernet 加解密 + LlmKeysRepository + 3 端点;循环导入 bug:orm.py 之前从 app.db 间接 import Base → create_all 漏表;改为直接 import 修复 |
+| 11:25~11:30 | P1.4 验收 | — | GET keys 返回 `{deepseek:false,minimax:false,doubao:false}`;PUT 写入加密 Key 后 GET true;test 端点 200 + 120ms;未配置 provider 返回 `{ok:false, error:"minimax 未配置 Key"}`;空 PUT 返回 400 EMPTY_UPDATE;空字符串=删除 logic 验证 OK;.env 自动追加 FERNET_KEY |
+| 11:40~12:00 | P1.2 前端骨架 | 1.5h / 0.5h | npx create-next-app 装 382 包;加 src/ 目录(tokens.css + useUIStore + api.ts + decimalFormat);axios 默认未装,补装;typescript strict + noUncheckedIndexedAccess + exactOptionalPropertyTypes 全开 |
+| 12:00~12:05 | P1.3 类型生成与连通 | 0.5h / 0.1h | openapi-typescript 拉取 OK;但 types.ts 自动生成的是 paths/operations 嵌套结构,与手写 stub 不兼容,删除手写 stub;前端 SSR 通过 `apiGet('/api/health')` 拉后端,渲染 `{"status":"ok"}` |
+| 12:30~12:50 | P2.1 数据层 3 表 | 1.5h / 0.5h | Decimal 存字符串保护精度;FK + Index + cascade delete;price 字段 3 位小数;watchlist 用 stock_code 作主键(而非自增 id)便于 upsert |
+| 12:50~13:05 | P2.2 后端交易 API | 1h / 0.5h | 422 校验已加(INSUFFICIENT_SHARES + INVALID_STOCK_CODE);sale 超额校验 Pydantic 不够,需业务层基于聚合实时校验 |
+| 13:05~13:08 | P2.3 持仓聚合 | 0.5h / 0.3h | 加权平均算法:1000@10.5 + 500@11 = 1500@10.667;卖出 300@12 realized = (12-10.667)×300 = 399.90;Decimal 精度 OK |
+
+## 关键经验(全项目复盘用)
+
+<!-- 每条经验不超过一行 -->
+
+- PowerShell 启动后台服务:**Job 会被父 shell 回收**;改用 `Start-Process -WindowStyle Hidden`
+- PowerShell 调本地 HTTP:优先 `curl.exe --noproxy "*"`,比 `Invoke-WebRequest` 稳
+- `urllib.request` 也失败(过 WinHTTP 代理),但 `curl.exe --noproxy` 通
+- uv 装依赖比 pip 快很多(实测 1min vs 5min)
+- uv 锁版本自动写 `uv.lock`,等价于 `requirements.txt` + `Pipfile.lock`
+- backend-arch §2 写的 Python 3.11+ 用 uv init `--python 3.11` 自动下载 3.11.14
+- SQLAlchemy ORM 循环导入:model 必须直接 `from app.db import Base`,不能从中间模块绕一圈;否则 `Base.metadata.create_all` 漏表
+- `cryptography` 不在 uv 默认依赖里,要 `uv add cryptography==43.0.3` 单独装
+- Next.js 默认端口 3000,不是 5173;改 `package.json` 的 dev 脚本 `next dev -p 5173`
+- Next.js 14 用 `app/`(无 src/),按 frontend-arch §3 要移到 `src/app/`,否则 Tailwind content paths 不对
+- openapi-typescript 生成的 types 是嵌套 paths/operations 结构,不是直接 interface;手写 stub 必须删,避免 TS 编译错
+- 加权平均成本公式:买加仓 → total_cost += shares×price;sell → 减仓不动 avg_cost,realized = (sell_price - avg_cost)×shares
+- 卖出超额校验必须在 POST 路由加,Pydantic 不够(因为它不知道当前持仓)
+
+## 关键坑(下次避坑用)
+
+<!-- 每条坑写明:坑 + 解决方式 -->
+
+- **坑**:Job 启动的 uvicorn 在 Bash 调用结束时被回收
+  - **解决**:用 `Start-Process -WindowStyle Hidden -RedirectStandardOutput/Error` 持久化后台进程
+- **坑**:PowerShell `Invoke-WebRequest` 偶发"无法连接到远程服务器",首次启动后必失败
+  - **解决**:用 `curl.exe --noproxy "*"`,或 `Invoke-WebRequest` 但分多次(网络初始化完成)
+- **坑**:`uv run python -c "..." | json.tool` 时 uv banner 污染 stdin,导致 JSON 解析失败
+  - **解决**:用 `Invoke-WebRequest` 拿 body 后直接 pipe 给 `uv run python -c`
+- **坑**:`models/orm.py` 通过 `__init__.py` 间接 import Base,导致 SQLAlchemy `Base.metadata` 为空,`create_all` 漏建 `llm_api_keys` 表
+  - **解决**:model 文件直接 `from app.db import Base`,删除间接依赖
+- **坑**:curl `-d '{"key":"val"}'` 在 PowerShell 单引号转义会把 JSON 引号吃掉,导致 422 JSON decode error
+  - **解决**:body 写临时文件 `C:\...\Temp\body.json`,curl 用 `-d "@文件路径"`
+- **坑**:Python `.py` 文件最顶部用了 JS 注释 `/** */`,导致 `SyntaxError`
+  - **解决**:用 `"""..."""` 三引号 docstring
+- **坑**:卖出超额请求无业务校验,通过 Pydantic 但 positions 端点 500
+  - **解决**:POST 路由加实时校验,调 `get_position()` 查当前持仓,超额返 422
+- **坑**:Next.js `next dev` 默认端口 3000 而非 5173
+  - **解决**:dev script 改 `next dev -p 5173`

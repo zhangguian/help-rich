@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: var(--font-geist-sans), system-ui, sans-serif;
+  }
+  body {
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    min-height: 100vh;
+  }
+  /* 等宽数字 */
+  .font-mono {
+    font-family: var(--font-geist-mono), 'JetBrains Mono', 'SF Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* 减少动效(可访问性,ui-ux §10.3) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

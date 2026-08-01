@@ -1,0 +1,144 @@
+"""Pydantic schemas(API 契约,v2.1)
+
+详细端点说明见 `docs/api-contract/api-contract.md`
+"""
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field, field_validator
+
+
+# ============================================================
+# === 健康检查 ===
+# ============================================================
+
+class HealthResponse(BaseModel):
+    status: str
+
+
+# ============================================================
+# === LLM Key 管理(v2.1) ===
+# ============================================================
+
+class LlmKeysStatus(BaseModel):
+    """GET /api/llm/keys 返回"""
+    deepseek: bool = False
+    minimax: bool = False
+    doubao: bool = False
+
+
+class LlmKeysUpdate(BaseModel):
+    """PUT /api/llm/keys body"""
+    deepseek: str = ""
+    minimax: str = ""
+    doubao: str = ""
+
+
+class LlmTestRequest(BaseModel):
+    """POST /api/llm/test body"""
+    provider: Literal["deepseek", "minimax", "doubao"]
+
+
+class LlmTestResponse(BaseModel):
+    """POST /api/llm/test 响应"""
+    ok: bool
+    latency_ms: Optional[int] = None
+    error: Optional[str] = None
+
+
+# ============================================================
+# === 交易流水(P2.1 实施) ===
+# ============================================================
+
+class TransactionCreate(BaseModel):
+    """POST /api/transactions body"""
+    stock_code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    action: Literal["buy", "sell"]
+    shares: int = Field(gt=0)
+    price: Decimal = Field(gt=0, max_digits=10, decimal_places=3)
+    trade_date: date
+    stock_name: Optional[str] = None
+    note: Optional[str] = Field(default=None, max_length=200)
+
+
+class TransactionUpdate(BaseModel):
+    """PATCH /api/transactions/{id} body(只能改 note / shares / price)"""
+    shares: Optional[int] = Field(default=None, gt=0)
+    price: Optional[Decimal] = Field(default=None, gt=0, max_digits=10, decimal_places=3)
+    note: Optional[str] = Field(default=None, max_length=200)
+
+
+class TransactionOut(BaseModel):
+    """GET /api/transactions 返回 + POST 响应"""
+    id: int
+    stock_code: str
+    stock_name: Optional[str] = None
+    action: Literal["buy", "sell"]
+    shares: int
+    price: str  # 字符串保精度
+    trade_date: date
+    note: Optional[str] = None
+    score: Optional[int] = None  # 由 score_repo 关联填充
+    created_at: datetime
+
+    @classmethod
+    def from_orm_with_score(cls, tx, score: Optional[int] = None) -> "TransactionOut":
+        """从 ORM 对象构造 + 关联 score"""
+        return cls(
+            id=tx.id,
+            stock_code=tx.stock_code,
+            stock_name=tx.stock_name,
+            action=tx.action,
+            shares=tx.shares,
+            price=tx.price,
+            trade_date=tx.trade_date,
+            note=tx.note,
+            score=score,
+            created_at=tx.created_at,
+        )
+
+    class Config:
+        from_attributes = True
+
+
+class TransactionListOut(BaseModel):
+    items: list[TransactionOut]
+    total: int
+
+
+# ============================================================
+# === 自选股(P2.1) ===
+# ============================================================
+
+class WatchlistAdd(BaseModel):
+    """POST /api/watchlist body"""
+    stock_code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    stock_name: Optional[str] = None
+    note: Optional[str] = Field(default=None, max_length=200)
+
+
+class WatchlistOut(BaseModel):
+    """GET /api/watchlist 返回"""
+    stock_code: str
+    stock_name: Optional[str] = None
+    source: str
+    note: Optional[str] = None
+    added_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class WatchlistListOut(BaseModel):
+    items: list[WatchlistOut]
+
+
+# ============================================================
+# === 错误响应统一格式 ===
+# ============================================================
+
+class ApiError(BaseModel):
+    code: str
+    message: str
+    detail: Optional[dict] = None

@@ -1,0 +1,75 @@
+/**
+ * 设计 tokens(CSS 变量) — frontend-arch §9.2 + ui-ux §2
+ *
+ * 双主题:light(明色)/ dark(暗色)
+ * 涨跌色:status-up=红(中国红涨)/ status-down=绿(中国绿跌)
+ */
+:root {
+  /* 主色调:中性灰 */
+  --bg-base: #fafafa;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-subtle: #f5f5f5;
+  --border-default: #e5e5e5;
+  --border-strong: #d4d4d4;
+
+  /* 文字 */
+  --text-primary: #171717;
+  --text-secondary: #525252;
+  --text-tertiary: #a3a3a3;
+  --text-disabled: #d4d4d4;
+
+  /* 强调色 */
+  --accent-primary: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-subtle: #eff6ff;
+
+  /* 涨跌色(中国惯例:红涨绿跌) */
+  --status-up: #dc2626;
+  --status-up-bg: #fef2f2;
+  --status-down: #16a34a;
+  --status-down-bg: #f0fdf4;
+  --status-warn: #d97706;
+  --status-warn-bg: #fffbeb;
+  --status-neutral: #737373;
+
+  /* 圆角 */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
+  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.10);
+}
+
+[data-theme='dark'] {
+  --bg-base: #0a0a0a;
+  --bg-surface: #141414;
+  --bg-elevated: #1a1a1a;
+  --bg-subtle: #0f0f0f;
+  --border-default: #262626;
+  --border-strong: #404040;
+
+  --text-primary: #fafafa;
+  --text-secondary: #a3a3a3;
+  --text-tertiary: #525252;
+  --text-disabled: #404040;
+
+  --accent-primary: #3b82f6;
+  --accent-hover: #60a5fa;
+  --accent-subtle: #1e3a8a;
+
+  --status-up: #f87171;
+  --status-up-bg: #1f0a0a;
+  --status-down: #4ade80;
+  --status-down-bg: #0a1f0f;
+  --status-warn: #fbbf24;
+  --status-warn-bg: #1f1505;
+  --status-neutral: #a3a3a3;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.6);
+}
