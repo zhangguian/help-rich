@@ -56,6 +56,7 @@
 | 19:30~19:50 | P7.7~P7.10 收尾 + 文档 + 推送 | 4h / 0.3h | api-changelog v0.1.7(设置页/止损/截图前端)+ release-notes.md v0.1.0;`git push` 一波 |
 | 19:50~20:10 | P7.3/P7.5/P7.9 收尾补充 | — / 0.3h | **admin 3 端点**:GET /export(7 表 JSON,Key 加密字段排除,截图大字段瘦身) + POST /import(replace 清空+还原,ISO 日期字符串转回 date/datetime) + POST /backup(写 backups/pre-{ts}.json);**Round-trip 测试 PASS**:导出 → 删库 → 导入 → 完全一致;**前端**:ExportImportCard(导出下载+导入二次确认)+ ReflectionCard(22:00 触发+当日交易+localStorage dismiss)+ SkeletonState/ErrorState/StaleState 三件套;设置页挂 ExportImportCard(置顶);首页挂 ReflectionCard;**tsc ✅ next build ✅**;204 tests 全绿;api-changelog v0.1.9 |
 | 20:15~20:30 | 截图字段语义统一(holdings 处理) | — / 0.3h | **bug**:`confirm()` 对 holdings/position 类型**静默忽略**(原应抛错),导致用户确认后无任何动作但前端 toast 显示"已确认 N 条入库";**修**:holdings/position → 抛 `ScreenshotError("HOLDINGS_NOT_PERSISTED")`(422);`/api/screenshot/{id}/confirm` 端点补 catch,改 422 友好提示;**前端**:fillExample 三选一(transactions/holdings/watchlist,示例字段对齐代码);ScreenshotPreview 通用化(遍历 keys 自动生成列 + 中文字段映射 + 数字格式化 + 持仓类型按钮置灰);端到端实测 holdings → 422 HOLDINGS_NOT_PERSISTED;**3 条新测试** PASS;208 tests 全绿;api-changelog v0.2.0 |
+| 20:30~20:50 | 一键启动脚本 | — / 0.3h | `scripts/dev.ps1` PowerShell 脚本:start/stop/restart/status 四动作;杀掉 8000/5173 端口残留;后端 uvicorn 启动(分 out/err 日志);前端用 `cmd /c` 包裹 `npx next dev`(合并 stdout+stderr,绕开 Start-Process 不允许同文件被两流重定向);健康检查 60s 超时(PaddleOCR lazy init 慢);**坑**:PowerShell 5.1 不支持 `&&` 改 `;`;中文符号在 PS5.1 解析错,改 ASCII 标签(`=== START ===` / `- backend` 等);release-notes.md 加启动脚本章节 |
 
 ## 关键经验(全项目复盘用)
 

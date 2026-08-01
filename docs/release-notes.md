@@ -52,4 +52,25 @@
 
 ## 🔗 API 文档
 
-详见 `docs/api-contract/api-changelog.md`(v0.1.0 ~ v0.1.8 共 8 个版本)
+详见 `docs/api-contract/api-changelog.md`(v0.1.0 ~ v0.2.0 共 9 个版本)
+
+## 🚀 启动脚本
+
+`scripts/dev.ps1` 一键启动 / 停止开发服务(PowerShell 5.1+ 兼容):
+
+```powershell
+powershell -File scripts/dev.ps1                # 默认 start
+powershell -File scripts/dev.ps1 -Action start
+powershell -File scripts/dev.ps1 -Action stop
+powershell -File scripts/dev.ps1 -Action restart
+powershell -File scripts/dev.ps1 -Action status
+```
+
+自动:
+- 杀掉 8000 / 5173 端口残留进程
+- 后端:`uvicorn app.main:app --host 0.0.0.0 --port 8000`
+- 前端:`npx next dev -p 5173`
+- 等待两个服务就绪(健康检查超时 60s)
+- 输出日志位置 + 停止 / 重启 / 状态命令
+
+日志写入 `logs/backend.{out,err}.log` 与 `logs/frontend.out.log`。
