@@ -99,5 +99,12 @@ export const apiPut = <T>(url: string, body?: unknown) =>
   api.put<T>(url, body).then((r) => r.data);
 export const apiDelete = <T>(url: string) => api.delete<T>(url).then((r) => r.data);
 
-/** SSE 端点(原生 fetch,不走 axios)*/
-export const SSE_URL = '/events/sse';
+/** SSE 端点(原地址,EventSource 不支持自定义 header,需直接传 base) */
+export const sseUrl = (): string => {
+  const base = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+  return `${base}/api/events/sse`;
+};
+
+/** 获取 baseURL(用于 fetch 直接调用,如 multipart/form-data) */
+export const apiBaseUrl = (): string =>
+  process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api';

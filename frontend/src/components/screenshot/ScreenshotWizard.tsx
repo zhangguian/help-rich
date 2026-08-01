@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-import { apiGet, apiPost, SSE_URL } from '@/lib/api';
+import { apiBaseUrl, apiGet, apiPost } from '@/lib/api';
 import type { DiagnoseOut } from '@/lib/types';
 import { useUIStore } from '@/stores/useUIStore';
 
@@ -53,7 +53,7 @@ export function ScreenshotWizard({ onClose }: { onClose: () => void }) {
     try {
       const form = new FormData();
       form.append('file', file);
-      const r = await fetch('/api/screenshot/upload', {
+      const r = await fetch(`${apiBaseUrl()}/screenshot/upload`, {
         method: 'POST',
         body: form,
       });

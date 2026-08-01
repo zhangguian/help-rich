@@ -10,7 +10,7 @@
  */
 import { useEffect, useRef } from 'react';
 
-import { apiGet, SSE_URL } from '@/lib/api';
+import { apiGet, sseUrl } from '@/lib/api';
 import type { DiagnoseOut } from '@/lib/types';
 import { useDiagnoseStore } from '@/stores/useDiagnoseStore';
 
@@ -107,7 +107,7 @@ if (d.status !== 'pending') {
       return;
     }
     try {
-      es = new EventSource(SSE_URL);
+      es = new EventSource(sseUrl());
     } catch {
       failCount += 1;
       if (failCount >= FAIL_THRESHOLD) startPolling();
