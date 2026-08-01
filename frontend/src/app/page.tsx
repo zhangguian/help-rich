@@ -68,6 +68,9 @@ export default async function Home() {
           <Link href="/risk-report">
             <Button variant="secondary">🛡 风险报告</Button>
           </Link>
+          <Link href="/rebalance">
+            <Button variant="secondary">🎯 调仓建议</Button>
+          </Link>
           <Link href="/settings">
             <Button variant="ghost">⚙ 设置</Button>
           </Link>

@@ -56,6 +56,26 @@
 - **A2 资金流真实数据源**:东财 `push2.eastmoney.com` 在公司网络被防火墙 RST(直接 + akshare 包装 + qgqpBId cookie 都无法连通,curl 000),网易 `money.163.com` 502,新浪/腾讯无资金流分类字段。**所有免费数据源 blocked by 公司网络**;真实接入需付费 API(雪球 Pro / 同花顺 iFinD / Wind)或公司网络放行东财 IP 段。当前继续用 v0.2.1 mock 流式推送
 - **K 线接真实数据源**:同上(底层走东财 blocked)。当前用 mock 随机游走(虽然新浪 money.finance.sina.com.cn K 线 API 通,可作为低成本替换)
 
+### 2026-08-01 | v0.3.3 | 智能调仓建议(A4)
+
+#### Added
+- **调仓建议 API**(A4):`rebalance_service.calculate_rebalance()` + 1 端点:
+  - `GET /api/rebalance-suggestion` 返回:总市值 + 建议列表 + 整体 summary
+  - 4 种建议类型:`reduce`(单股 > 30%) / `add`(持仓 < 3) / `diversify`(同板块 ≥ 3) / `alert`(top1 > 50%)
+  - 优先级 high/medium/low;建议减仓比例 suggested_pct
+- **调仓建议页面** `/rebalance`:4 宫格(总市值/建议数)+ 整体 summary + 建议列表(类型/优先级/标题/原因/建议%);首页 [🎯 调仓建议] 入口
+
+#### 设计说明
+- **MVP 纯结构判断**:不依赖实时价(Position 模型没 current_price 字段),用持仓总成本作市值估算
+- v0.3 接入实时价后扩展"浮盈"判断
+- 真实交易 API(止损/加仓执行)按规划 v0.3+ 接入
+
+#### Test
+- 9 条新测试覆盖:空持仓 / 减仓 / 整仓偏重 / 持仓过少 / 板块集中 / 健康状态 / summary 计数
+
+#### 端到端实测
+- 4 只股票(600519.SH 茅台 700 股 + 3 只 100/200 股)→ total 1087400,茅台单股 96.6% → 1 reduce(high)+ 1 alert(medium),summary "共 2 条建议(1 高)(1 中)"
+
 ### 2026-08-01 | v0.2.0 | 截图字段语义统一(holdings 处理)
 
 #### Fixed
