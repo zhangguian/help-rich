@@ -28,6 +28,22 @@
 
 ## 历史记录
 
+### 2026-08-01 | v0.1.9 | 数据备份 / 状态三件套 / 反思卡(P7.3/P7.5/P7.9)
+
+#### Added
+- 新增 3 个管理端点(backend):
+  - `GET /api/admin/export`:导出 7 表 JSON(LLM Key 加密字段自动排除;截图大字段 ocr_text/raw_response 节省体积);带 `Content-Disposition: attachment` 头触发下载
+  - `POST /api/admin/import`(body `{payload, mode: "replace"}`):清空 7 表后全量还原;ISO 日期字符串自动转 date/datetime;缺失 fields 自动过滤
+  - `POST /api/admin/backup`:写一次 JSON 到 `backups/pre-{ts}.json`(文件备份归档)
+- 新增前端组件:
+  - `ExportImportCard`(P7.3):导出下载 + 导入二次确认弹窗(防止误清库)
+  - `ReflectionCard`(P7.5):22:00 后 + 当日有交易时显示"今日反思"卡(笔数/已实现盈亏/提示语);localStorage 持久化 dismiss
+  - `SkeletonState / ErrorState / StaleState`(P7.2):统一三件套(骨架屏/错误重试/15min 数据陈旧提示)
+- 设置页加 ExportImportCard;首页挂 ReflectionCard
+
+#### Test
+- 7 条 admin 端点测试 + round-trip(导出 → 删库 → 导入 → 一致性)PASS
+
 ### 2026-08-01 | v0.1.8 | 前端 MVP 收尾(Day 5/6/7 前端)
 
 #### Added

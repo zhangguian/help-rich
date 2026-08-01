@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { PositionsList } from '@/components/positions/PositionsList';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
+import { ReflectionCard } from '@/components/reflection/ReflectionCard';
 import { ScreenshotPanel } from '@/components/screenshot/ScreenshotPanel';
 import { decimalFormat } from '@/lib/decimalFormat';
 import type { Position, PositionListResponse } from '@/lib/types';
@@ -98,6 +99,8 @@ export default async function Home() {
           <div className="text-2xl font-mono font-semibold">{positions.length}</div>
         </Card>
       </div>
+
+      <ReflectionCard />
 
       {/* 持仓列表 */}
       <h2 className="text-lg font-semibold mb-3">我的持仓</h2>
