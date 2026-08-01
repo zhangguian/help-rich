@@ -1,9 +1,9 @@
 import type { Config } from 'tailwindcss';
 
 /**
- * Tailwind 配置(frontend-arch §16.2)
+ * Tailwind 配置(frontend-arch §16.2 + v0.4 Liquid Glass)
  *
- * 颜色全部映射到 CSS 变量(支持双主题切换,无需重启)
+ * 颜色全部映射到 CSS 变量(单主题纯黑 void,见 styles/tokens.css)
  */
 const config: Config = {
   content: [
@@ -15,6 +15,11 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        // Liquid Glass(v0.4-roadmap §3)
+        'void': 'var(--void)',
+        'glow-emerald': 'var(--glow-emerald)',
+        'glow-cyan': 'var(--glow-cyan)',
+        'glass-fill': 'var(--glass-fill)',
         // 主色调
         'bg-base': 'var(--bg-base)',
         'bg-surface': 'var(--bg-surface)',
@@ -41,13 +46,20 @@ const config: Config = {
         'neutral': 'var(--status-neutral)',
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'SF Mono', 'Consolas', 'monospace'],
+        sans: ['var(--font-jakarta-sans)', 'PingFang SC', 'Microsoft YaHei', 'system-ui', 'sans-serif'],
+        mono: ['var(--font-jetbrains-mono)', 'SF Mono', 'Consolas', 'monospace'],
       },
       borderRadius: {
         sm: '6px',
         md: '8px',
         lg: '12px',
+        glass: 'var(--glass-radius)',
+      },
+      boxShadow: {
+        glass: 'var(--glass-shadow)',
+      },
+      backdropBlur: {
+        liquid: 'var(--blur-liquid)',
       },
     },
   },

@@ -1,75 +1,55 @@
 /**
- * 设计 tokens(CSS 变量) — frontend-arch §9.2 + ui-ux §2
+ * 设计 tokens(CSS 变量)— v0.4 Liquid Glass
  *
- * 双主题:light(明色)/ dark(暗色)
- * 涨跌色:status-up=红(中国红涨)/ status-down=绿(中国绿跌)
+ * 单主题:纯黑 void 画布 + 液态玻璃面板(v0.4-roadmap §3)
+ * 文字层级:白字透明度 0.92(标题)/0.68(正文)/0.45(标签)/0.32(元信息)
+ * 强调色:emerald 霓虹(唯一强强调);红涨绿跌为行情语义色,与强调色分离
  */
 :root {
-  /* 主色调:中性灰 */
-  --bg-base: #fafafa;
-  --bg-surface: #ffffff;
-  --bg-elevated: #ffffff;
-  --bg-subtle: #f5f5f5;
-  --border-default: #e5e5e5;
-  --border-strong: #d4d4d4;
+  /* Canvas:纯黑 void */
+  --void: #000000;
+  --bg-base: var(--void);
+  --glow-emerald: rgba(16, 185, 129, 0.12);
+  --glow-cyan: rgba(56, 189, 248, 0.08);
 
-  /* 文字 */
-  --text-primary: #171717;
-  --text-secondary: #525252;
-  --text-tertiary: #a3a3a3;
-  --text-disabled: #d4d4d4;
+  /* Glass 面板(半透明 + blur + 顶缘高光) */
+  --bg-surface: rgba(255, 255, 255, 0.05);
+  --bg-elevated: rgba(255, 255, 255, 0.08);
+  --bg-subtle: rgba(255, 255, 255, 0.03);
+  --border-default: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --blur-liquid: 40px;
+  --glass-fill: linear-gradient(165deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.03) 35%, rgba(255, 255, 255, 0.04)), rgba(12, 16, 28, 0.28);
+  --glass-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 18px 50px -12px rgba(0, 0, 0, 0.65);
+  --glass-radius: 22px;
 
-  /* 强调色 */
-  --accent-primary: #2563eb;
-  --accent-hover: #1d4ed8;
-  --accent-subtle: #eff6ff;
+  /* 文字层级(白字透明度) */
+  --text-primary: rgba(255, 255, 255, 0.92);
+  --text-secondary: rgba(255, 255, 255, 0.68);
+  --text-tertiary: rgba(255, 255, 255, 0.45);
+  --text-disabled: rgba(255, 255, 255, 0.32);
 
-  /* 涨跌色(中国惯例:红涨绿跌) */
-  --status-up: #dc2626;
-  --status-up-bg: #fef2f2;
-  --status-down: #16a34a;
-  --status-down-bg: #f0fdf4;
-  --status-warn: #d97706;
-  --status-warn-bg: #fffbeb;
-  --status-neutral: #737373;
+  /* 强调色:emerald(唯一强强调) */
+  --accent-primary: #34d399;
+  --accent-hover: #10b981;
+  --accent-subtle: rgba(16, 185, 129, 0.14);
+
+  /* 涨跌色(中国惯例:红涨绿跌;与 emerald 强调色分离) */
+  --status-up: #f43f5e;
+  --status-up-bg: rgba(244, 63, 94, 0.12);
+  --status-down: #4ade80;
+  --status-down-bg: rgba(74, 222, 128, 0.12);
+  --status-warn: #fbbf24;
+  --status-warn-bg: rgba(251, 191, 36, 0.12);
+  --status-neutral: rgba(255, 255, 255, 0.45);
 
   /* 圆角 */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
 
   /* 阴影 */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
-  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.10);
-}
-
-[data-theme='dark'] {
-  --bg-base: #0a0a0a;
-  --bg-surface: #141414;
-  --bg-elevated: #1a1a1a;
-  --bg-subtle: #0f0f0f;
-  --border-default: #262626;
-  --border-strong: #404040;
-
-  --text-primary: #fafafa;
-  --text-secondary: #a3a3a3;
-  --text-tertiary: #525252;
-  --text-disabled: #404040;
-
-  --accent-primary: #3b82f6;
-  --accent-hover: #60a5fa;
-  --accent-subtle: #1e3a8a;
-
-  --status-up: #f87171;
-  --status-up-bg: #1f0a0a;
-  --status-down: #4ade80;
-  --status-down-bg: #0a1f0f;
-  --status-warn: #fbbf24;
-  --status-warn-bg: #1f1505;
-  --status-neutral: #a3a3a3;
-
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.6);
+  --shadow-sm: 0 4px 16px -6px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 10px 28px -10px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 18px 50px -12px rgba(0, 0, 0, 0.7);
 }

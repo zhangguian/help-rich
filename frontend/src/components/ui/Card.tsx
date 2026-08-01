@@ -17,11 +17,7 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(
     return (
       <div
         ref={ref}
-        className={clsx(
-          'rounded-md border border-border-def bg-bg-surface shadow-sm',
-          paddingClasses[padding],
-          className,
-        )}
+        className={clsx('liquid-glass', paddingClasses[padding], className)}
         {...rest}
       >
         {children}

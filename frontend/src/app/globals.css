@@ -12,12 +12,39 @@
     min-height: 100vh;
   }
   .font-mono {
-    font-family: var(--font-geist-mono), 'JetBrains Mono', 'SF Mono', monospace;
+    font-family: var(--font-jetbrains-mono), 'SF Mono', monospace;
     font-variant-numeric: tabular-nums;
   }
 }
 
 @layer components {
+  /* Liquid Glass 材质(v0.4-roadmap §3.2) */
+  .liquid-glass {
+    background: var(--glass-fill);
+    backdrop-filter: blur(var(--blur-liquid)) saturate(160%);
+    -webkit-backdrop-filter: blur(var(--blur-liquid)) saturate(160%);
+    border-radius: var(--glass-radius);
+    box-shadow: var(--glass-shadow);
+  }
+  .liquid-glass-hover {
+    background: var(--glass-fill);
+    backdrop-filter: blur(var(--blur-liquid)) saturate(160%);
+    -webkit-backdrop-filter: blur(var(--blur-liquid)) saturate(160%);
+    border-radius: var(--glass-radius);
+    box-shadow: var(--glass-shadow);
+    transition: transform 0.18s ease, background 0.18s ease;
+  }
+  .liquid-glass-hover:hover {
+    background: linear-gradient(165deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.05) 35%, rgba(255, 255, 255, 0.06)), rgba(12, 16, 28, 0.32);
+  }
+  .liquid-glass-active {
+    background: linear-gradient(165deg, rgba(52, 211, 153, 0.14), rgba(255, 255, 255, 0.05) 45%, rgba(255, 255, 255, 0.06)), rgba(12, 16, 28, 0.34);
+    backdrop-filter: blur(var(--blur-liquid)) saturate(160%);
+    -webkit-backdrop-filter: blur(var(--blur-liquid)) saturate(160%);
+    border-radius: var(--glass-radius);
+    box-shadow: var(--glass-shadow), inset 0 0 0 1px rgba(52, 211, 153, 0.35);
+  }
+
   /* 21 档盈亏热力图:21 等分 */
   .grid-cols-21 {
     grid-template-columns: repeat(21, minmax(0, 1fr));

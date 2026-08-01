@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { apiGet } from '@/lib/api';
 
 import { Card } from '@/components/ui/Card';
+import { LiquidSelect } from '@/components/ui/LiquidSelect';
 import { SkeletonState } from '@/components/ui/States';
 
 interface MonthlyItem {
@@ -86,17 +87,13 @@ export default function ProviderStatsPage() {
 
       <div className="flex items-center gap-3">
         <label className="text-sm text-text-sec">年份</label>
-        <select
-          value={year}
-          onChange={(e) => setYear(Number(e.target.value))}
-          className="px-3 py-1.5 text-sm border border-border-def rounded-sm bg-bg-surface focus:border-accent"
-        >
-          {[year + 1, year, year - 1].filter((y) => y >= 2020).map((y) => (
-            <option key={y} value={y}>
-              {y}
-            </option>
-          ))}
-        </select>
+        <LiquidSelect
+          value={String(year)}
+          options={[year + 1, year, year - 1]
+            .filter((y) => y >= 2020)
+            .map((y) => ({ value: String(y), label: String(y) }))}
+          onChange={(v) => setYear(Number(v))}
+        />
       </div>
 
       {loading && <SkeletonState rows={3} height="h-16" />}

@@ -5,6 +5,7 @@ import { useEffect, useRef } from 'react';
 import {
   createChart,
   type CandlestickData,
+  type HistogramData,
   type IChartApi,
   type ISeriesApi,
 } from 'lightweight-charts';
@@ -20,17 +21,31 @@ interface KlineItem {
   volume: number;
 }
 
+export type KlinePeriod = 'daily' | 'weekly' | 'monthly' | '60min';
+
 /**
- * 日 K 线图(D,frontend-arch §11.5)
+ * K 线图(v0.4 增强版,roadmap 功能6)
  *
- * - TradingView Lightweight Charts(~200KB)
- * - 绿色涨 / 红色跌(中国惯例)
- * - 自动适配容器尺寸
+ * - 主图 K 线(红涨绿跌,中国惯例)
+ * - 成交量副图(与 K 线同色,可开关)
+ * - 周期切换:日/周/月/60分(period 变化自动重拉)
+ * - 向后兼容:默认 daily + 无量副图(旧引用不破坏)
  */
-export function KLineChart({ stockCode, height = 320 }: { stockCode: string; height?: number }) {
+export function KLineChart({
+  stockCode,
+  period = 'daily',
+  showVolume = true,
+  height = 420,
+}: {
+  stockCode: string;
+  period?: KlinePeriod;
+  showVolume?: boolean;
+  height?: number;
+}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const volumeRef = useRef<ISeriesApi<'Histogram'> | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -39,35 +54,47 @@ export function KLineChart({ stockCode, height = 320 }: { stockCode: string; hei
       height,
       layout: {
         background: { color: 'transparent' },
-        textColor: '#525252',
+        textColor: 'rgba(255, 255, 255, 0.68)',
       },
       grid: {
-        vertLines: { color: '#e5e5e5' },
-        horzLines: { color: '#e5e5e5' },
+        vertLines: { color: 'rgba(255, 255, 255, 0.06)' },
+        horzLines: { color: 'rgba(255, 255, 255, 0.06)' },
       },
       timeScale: {
-        borderColor: '#d4d4d4',
+        borderColor: 'rgba(255, 255, 255, 0.12)',
         timeVisible: false,
       },
       rightPriceScale: {
-        borderColor: '#d4d4d4',
+        borderColor: 'rgba(255, 255, 255, 0.12)',
+        scaleMargins: { top: 0.08, bottom: showVolume ? 0.28 : 0.08 },
       },
       crosshair: {
         mode: 0, // Magnet
       },
     });
     const series = chart.addCandlestickSeries({
-      upColor: '#dc2626', // 中国红涨
-      downColor: '#16a34a', // 中国绿跌
-      borderUpColor: '#dc2626',
-      borderDownColor: '#16a34a',
-      wickUpColor: '#dc2626',
-      wickDownColor: '#16a34a',
+      upColor: '#f43f5e', // 中国红涨
+      downColor: '#4ade80', // 中国绿跌
+      borderUpColor: '#f43f5e',
+      borderDownColor: '#4ade80',
+      wickUpColor: '#f43f5e',
+      wickDownColor: '#4ade80',
     });
     chartRef.current = chart;
     seriesRef.current = series;
 
-    // 自适应宽度
+    let volumeSeries: ISeriesApi<'Histogram'> | null = null;
+    if (showVolume) {
+      volumeSeries = chart.addHistogramSeries({
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'volume',
+      });
+      chart.priceScale('volume').applyOptions({
+        scaleMargins: { top: 0.78, bottom: 0 },
+      });
+      volumeRef.current = volumeSeries;
+    }
+
     const onResize = () => {
       if (containerRef.current && chartRef.current) {
         chartRef.current.applyOptions({
@@ -77,8 +104,9 @@ export function KLineChart({ stockCode, height = 320 }: { stockCode: string; hei
     };
     window.addEventListener('resize', onResize);
 
-    // 拉数据
-    apiGet<{ items: KlineItem[] }>(`/kline/${encodeURIComponent(stockCode)}?limit=60`)
+    apiGet<{ items: KlineItem[] }>(
+      `/kline/${encodeURIComponent(stockCode)}?period=${period}&limit=120`,
+    )
       .then((d) => {
         const data: CandlestickData[] = d.items.map((it) => ({
           time: it.date,
@@ -87,8 +115,19 @@ export function KLineChart({ stockCode, height = 320 }: { stockCode: string; hei
           low: Number(it.low),
           close: Number(it.close),
         }));
-        seriesRef.current?.setData(data);
-        chartRef.current?.timeScale().fitContent();
+        series.setData(data);
+        if (volumeSeries && showVolume) {
+          const vol: HistogramData[] = d.items.map((it) => ({
+            time: it.date,
+            value: it.volume,
+            color:
+              Number(it.close) >= Number(it.open)
+                ? 'rgba(244, 63, 94, 0.55)'
+                : 'rgba(74, 222, 128, 0.55)',
+          }));
+          volumeSeries.setData(vol);
+        }
+        chart.timeScale().fitContent();
       })
       .catch(() => {
         // 失败静默(MVP),真实环境可加 toast
@@ -99,8 +138,9 @@ export function KLineChart({ stockCode, height = 320 }: { stockCode: string; hei
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      volumeRef.current = null;
     };
-  }, [stockCode, height]);
+  }, [stockCode, period, showVolume, height]);
 
   return (
     <div

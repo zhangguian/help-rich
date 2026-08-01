@@ -1,20 +1,29 @@
 import type { Metadata } from 'next';
 import localFont from 'next/font/local';
-import { ThemeProvider } from 'next-themes';
 
 import './globals.css';
 import '@/styles/tokens.css';
 import { Toaster } from '@/components/ui/Toaster';
 
-const geistSans = localFont({
-  src: './fonts/GeistVF.woff',
-  variable: '--font-geist-sans',
-  weight: '100 900',
+const jakartaSans = localFont({
+  src: [
+    { path: './fonts/PlusJakartaSans-400.woff2', weight: '400' },
+    { path: './fonts/PlusJakartaSans-500.woff2', weight: '500' },
+    { path: './fonts/PlusJakartaSans-600.woff2', weight: '600' },
+    { path: './fonts/PlusJakartaSans-700.woff2', weight: '700' },
+  ],
+  variable: '--font-jakarta-sans',
+  display: 'swap',
 });
-const geistMono = localFont({
-  src: './fonts/GeistMonoVF.woff',
-  variable: '--font-geist-mono',
-  weight: '100 900',
+const jetBrainsMono = localFont({
+  src: [
+    { path: './fonts/JetBrainsMono-400.woff2', weight: '400' },
+    { path: './fonts/JetBrainsMono-500.woff2', weight: '500' },
+    { path: './fonts/JetBrainsMono-600.woff2', weight: '600' },
+    { path: './fonts/JetBrainsMono-700.woff2', weight: '700' },
+  ],
+  variable: '--font-jetbrains-mono',
+  display: 'swap',
 });
 
 export const metadata: Metadata = {
@@ -29,11 +38,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-bg-base text-text-pri`}>
-        <ThemeProvider attribute="data-theme" defaultTheme="system" enableSystem>
-          {children}
-          <Toaster />
-        </ThemeProvider>
+      <body className={`${jakartaSans.variable} ${jetBrainsMono.variable} antialiased bg-bg-base text-text-pri`}>
+        {children}
+        <Toaster />
       </body>
     </html>
   );
