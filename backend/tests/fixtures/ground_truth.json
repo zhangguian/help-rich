@@ -1,0 +1,203 @@
+{
+  "_comment": "ground truth 10 样本(P4.1 验收:与人工打分差 <= 10 分)。分数为人工逐步手算结果。",
+  "samples": [
+    {
+      "name": "S1 集中度中档+追涨+顺势+板块热",
+      "trade": {"stock_code": "600519.SH", "stock_name": "贵州茅台", "action": "buy", "shares": 100, "price": "1500.000", "trade_date": "2026-07-20"},
+      "position_before": {"shares": 100, "avg_cost": "1400.000", "total_cost": "140000.00"},
+      "recent_trades": [
+        {"action": "buy", "trade_date": "2026-07-10"},
+        {"action": "buy", "trade_date": "2026-06-30"},
+        {"action": "sell", "trade_date": "2026-06-20"},
+        {"action": "buy", "trade_date": "2026-06-01"},
+        {"action": "buy", "trade_date": "2026-05-10"}
+      ],
+      "market_ctx": {"index_change_pct": 0.8, "sector_rank": 3},
+      "is_in_watchlist": true,
+      "all_positions": [
+        {"stock_code": "600519.SH", "shares": 100, "avg_cost": "1400.000"},
+        {"stock_code": "000001.SZ", "shares": 1000, "avg_cost": "10.500"},
+        {"stock_code": "300750.SZ", "shares": 200, "avg_cost": "180.000"},
+        {"stock_code": "002594.SZ", "shares": 300, "avg_cost": "120.000"}
+      ],
+      "expected": {"score": 85, "breakdown": {"集中度": 15, "价格合理性": 10, "操作间隔": 20, "市场环境": 20, "板块热度": 20}}
+    },
+    {
+      "name": "S2 集中度超标+追涨+频繁",
+      "trade": {"stock_code": "000001.SZ", "stock_name": "平安银行", "action": "buy", "shares": 20000, "price": "12.000", "trade_date": "2026-07-21"},
+      "position_before": {"shares": 1000, "avg_cost": "10.500", "total_cost": "10500.00"},
+      "recent_trades": [
+        {"action": "buy", "trade_date": "2026-07-20"},
+        {"action": "sell", "trade_date": "2026-07-05"},
+        {"action": "buy", "trade_date": "2026-06-25"},
+        {"action": "buy", "trade_date": "2026-06-15"},
+        {"action": "buy", "trade_date": "2026-06-01"}
+      ],
+      "market_ctx": {"index_change_pct": -0.5, "sector_rank": 12},
+      "is_in_watchlist": false,
+      "all_positions": [
+        {"stock_code": "600519.SH", "shares": 100, "avg_cost": "1400.000"},
+        {"stock_code": "000001.SZ", "shares": 1000, "avg_cost": "10.500"},
+        {"stock_code": "300750.SZ", "shares": 200, "avg_cost": "180.000"}
+      ],
+      "expected": {"score": 15, "breakdown": {"集中度": 0, "价格合理性": 5, "操作间隔": 10, "市场环境": 0, "板块热度": 0}}
+    },
+    {
+      "name": "S3 卖出顺势+板块中等",
+      "trade": {"stock_code": "300750.SZ", "stock_name": "宁德时代", "action": "sell", "shares": 100, "price": "190.000", "trade_date": "2026-07-22"},
+      "position_before": {"shares": 200, "avg_cost": "180.000", "total_cost": "36000.00"},
+      "recent_trades": [
+        {"action": "buy", "trade_date": "2026-07-15"},
+        {"action": "sell", "trade_date": "2026-07-02"},
+        {"action": "buy", "trade_date": "2026-06-20"},
+        {"action": "buy", "trade_date": "2026-06-10"},
+        {"action": "sell", "trade_date": "2026-05-30"}
+      ],
+      "market_ctx": {"index_change_pct": -1.2, "sector_rank": 8},
+      "is_in_watchlist": true,
+      "all_positions": [
+        {"stock_code": "600519.SH", "shares": 100, "avg_cost": "1400.000"},
+        {"stock_code": "000001.SZ", "shares": 1000, "avg_cost": "10.500"},
+        {"stock_code": "300750.SZ", "shares": 200, "avg_cost": "180.000"},
+        {"stock_code": "002594.SZ", "shares": 300, "avg_cost": "120.000"}
+      ],
+      "expected": {"score": 85, "breakdown": {"集中度": 20, "价格合理性": 15, "操作间隔": 20, "市场环境": 20, "板块热度": 10}}
+    },
+    {
+      "name": "S4 频繁交易+中性环境",
+      "trade": {"stock_code": "002594.SZ", "stock_name": "比亚迪", "action": "buy", "shares": 500, "price": "130.000", "trade_date": "2026-07-23"},
+      "position_before": {"shares": 300, "avg_cost": "120.000", "total_cost": "36000.00"},
+      "recent_trades": [
+        {"action": "buy", "trade_date": "2026-07-22"},
+        {"action": "sell", "trade_date": "2026-07-21"},
+        {"action": "buy", "trade_date": "2026-07-15"},
+        {"action": "sell", "trade_date": "2026-07-10"},
+        {"action": "buy", "trade_date": "2026-07-01"}
+      ],
+      "market_ctx": {"index_change_pct": 0.1, "sector_rank": 4},
+      "is_in_watchlist": false,
+      "all_positions": [
+        {"stock_code": "600519.SH", "shares": 100, "avg_cost": "1400.000"},
+        {"stock_code": "000001.SZ", "shares": 1000, "avg_cost": "10.500"},
+        {"stock_code": "300750.SZ", "shares": 200, "avg_cost": "180.000"},
+        {"stock_code": "002594.SZ", "shares": 300, "avg_cost": "120.000"}
+      ],
+      "expected": {"score": 70, "breakdown": {"集中度": 20, "价格合理性": 10, "操作间隔": 10, "市场环境": 10, "板块热度": 20}}
+    },
+    {
+      "name": "S5 新建仓(无持仓)中性",
+      "trade": {"stock_code": "601318.SH", "stock_name": "中国平安", "action": "buy", "shares": 100, "price": "50.000", "trade_date": "2026-07-24"},
+      "position_before": null,
+      "recent_trades": [
+        {"action": "buy", "trade_date": "2026-07-10"},
+        {"action": "sell", "trade_date": "2026-07-05"},
+        {"action": "buy", "trade_date": "2026-06-20"},
+        {"action": "buy", "trade_date": "2026-06-01"},
+        {"action": "sell", "trade_date": "2026-05-20"}
+      ],
+      "market_ctx": {"index_change_pct": 0.0, "sector_rank": 6},
+      "is_in_watchlist": false,
+      "all_positions": [
+        {"stock_code": "600519.SH", "shares": 100, "avg_cost": "1400.000"},
+        {"stock_code": "000001.SZ", "shares": 1000, "avg_cost": "10.500"},
+        {"stock_code": "300750.SZ", "shares": 200, "avg_cost": "180.000"}
+      ],
+      "expected": {"score": 75, "breakdown": {"集中度": 20, "价格合理性": 15, "操作间隔": 20, "市场环境": 10, "板块热度": 10}}
+    },
+    {
+      "name": "S6 持仓少于3只降级+历史1笔降级",
+      "trade": {"stock_code": "600519.SH", "stock_name": "贵州茅台", "action": "buy", "shares": 10, "price": "1520.000", "trade_date": "2026-07-25"},
+      "position_before": {"shares": 100, "avg_cost": "1400.000", "total_cost": "140000.00"},
+      "recent_trades": [
+        {"action": "buy", "trade_date": "2026-07-10"}
+      ],
+      "market_ctx": {"index_change_pct": 0.5, "sector_rank": 2},
+      "is_in_watchlist": true,
+      "all_positions": [
+        {"stock_code": "600519.SH", "shares": 100, "avg_cost": "1400.000"},
+        {"stock_code": "000001.SZ", "shares": 1000, "avg_cost": "10.500"}
+      ],
+      "expected": {"score": 80, "breakdown": {"集中度": 15, "价格合理性": 10, "操作间隔": 15, "市场环境": 20, "板块热度": 20}}
+    },
+    {
+      "name": "S7 逆势抄底+低吸",
+      "trade": {"stock_code": "300750.SZ", "stock_name": "宁德时代", "action": "buy", "shares": 100, "price": "160.000", "trade_date": "2026-07-26"},
+      "position_before": {"shares": 200, "avg_cost": "180.000", "total_cost": "36000.00"},
+      "recent_trades": [
+        {"action": "buy", "trade_date": "2026-07-18"},
+        {"action": "sell", "trade_date": "2026-07-12"},
+        {"action": "buy", "trade_date": "2026-07-01"},
+        {"action": "buy", "trade_date": "2026-06-20"},
+        {"action": "buy", "trade_date": "2026-06-05"}
+      ],
+      "market_ctx": {"index_change_pct": -1.5, "sector_rank": 1},
+      "is_in_watchlist": false,
+      "all_positions": [
+        {"stock_code": "600519.SH", "shares": 100, "avg_cost": "1400.000"},
+        {"stock_code": "000001.SZ", "shares": 1000, "avg_cost": "10.500"},
+        {"stock_code": "300750.SZ", "shares": 200, "avg_cost": "180.000"},
+        {"stock_code": "002594.SZ", "shares": 300, "avg_cost": "120.000"}
+      ],
+      "expected": {"score": 65, "breakdown": {"集中度": 20, "价格合理性": 5, "操作间隔": 20, "市场环境": 0, "板块热度": 20}}
+    },
+    {
+      "name": "S8 历史不足2笔降级+卖出顺势",
+      "trade": {"stock_code": "000001.SZ", "stock_name": "平安银行", "action": "sell", "shares": 100, "price": "12.000", "trade_date": "2026-07-27"},
+      "position_before": {"shares": 1000, "avg_cost": "10.500", "total_cost": "10500.00"},
+      "recent_trades": [
+        {"action": "buy", "trade_date": "2026-07-20"}
+      ],
+      "market_ctx": {"index_change_pct": -0.4, "sector_rank": 9},
+      "is_in_watchlist": true,
+      "all_positions": [
+        {"stock_code": "600519.SH", "shares": 100, "avg_cost": "1400.000"},
+        {"stock_code": "000001.SZ", "shares": 1000, "avg_cost": "10.500"},
+        {"stock_code": "300750.SZ", "shares": 200, "avg_cost": "180.000"},
+        {"stock_code": "002594.SZ", "shares": 300, "avg_cost": "120.000"}
+      ],
+      "expected": {"score": 80, "breakdown": {"集中度": 20, "价格合理性": 15, "操作间隔": 15, "市场环境": 20, "板块热度": 10}}
+    },
+    {
+      "name": "S9 加仓价格合理+高分",
+      "trade": {"stock_code": "600519.SH", "stock_name": "贵州茅台", "action": "buy", "shares": 50, "price": "1410.000", "trade_date": "2026-07-28"},
+      "position_before": {"shares": 100, "avg_cost": "1400.000", "total_cost": "140000.00"},
+      "recent_trades": [
+        {"action": "buy", "trade_date": "2026-07-20"},
+        {"action": "sell", "trade_date": "2026-07-15"},
+        {"action": "buy", "trade_date": "2026-07-01"},
+        {"action": "buy", "trade_date": "2026-06-20"},
+        {"action": "buy", "trade_date": "2026-06-10"}
+      ],
+      "market_ctx": {"index_change_pct": 0.2, "sector_rank": 2},
+      "is_in_watchlist": true,
+      "all_positions": [
+        {"stock_code": "600519.SH", "shares": 100, "avg_cost": "1400.000"},
+        {"stock_code": "000001.SZ", "shares": 1000, "avg_cost": "10.500"},
+        {"stock_code": "300750.SZ", "shares": 200, "avg_cost": "180.000"},
+        {"stock_code": "002594.SZ", "shares": 300, "avg_cost": "120.000"}
+      ],
+      "expected": {"score": 90, "breakdown": {"集中度": 20, "价格合理性": 20, "操作间隔": 20, "市场环境": 10, "板块热度": 20}}
+    },
+    {
+      "name": "S10 板块排名15+卖出逆势+频繁",
+      "trade": {"stock_code": "002594.SZ", "stock_name": "比亚迪", "action": "sell", "shares": 100, "price": "130.000", "trade_date": "2026-07-29"},
+      "position_before": {"shares": 300, "avg_cost": "120.000", "total_cost": "36000.00"},
+      "recent_trades": [
+        {"action": "buy", "trade_date": "2026-07-22"},
+        {"action": "sell", "trade_date": "2026-07-27"},
+        {"action": "buy", "trade_date": "2026-07-15"},
+        {"action": "sell", "trade_date": "2026-07-10"},
+        {"action": "buy", "trade_date": "2026-07-01"}
+      ],
+      "market_ctx": {"index_change_pct": 0.6, "sector_rank": 15},
+      "is_in_watchlist": false,
+      "all_positions": [
+        {"stock_code": "600519.SH", "shares": 100, "avg_cost": "1400.000"},
+        {"stock_code": "000001.SZ", "shares": 1000, "avg_cost": "10.500"},
+        {"stock_code": "300750.SZ", "shares": 200, "avg_cost": "180.000"},
+        {"stock_code": "002594.SZ", "shares": 300, "avg_cost": "120.000"}
+      ],
+      "expected": {"score": 45, "breakdown": {"集中度": 20, "价格合理性": 15, "操作间隔": 10, "市场环境": 0, "板块热度": 0}}
+    }
+  ]
+}

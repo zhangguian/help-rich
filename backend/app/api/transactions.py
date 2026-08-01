@@ -2,7 +2,7 @@
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 
 from app.core.db_lock import safe_write
 from app.models.schemas import (
@@ -61,10 +61,14 @@ async def list_transactions(
     response_model=TransactionOut,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_transaction(payload: TransactionCreate) -> TransactionOut:
+async def create_transaction(
+    payload: TransactionCreate,
+    background_tasks: BackgroundTasks,
+) -> TransactionOut:
     """录入一笔交易(P2.2)
 
     v2.1 §3.2
+    P4.4:录入后异步触发诊断(评分 + AI 评语,SSE 推送)
     """
     # 校验:卖出不能超过持仓(P2.3 加的实时校验)
     if payload.action == "sell":
@@ -97,7 +101,10 @@ async def create_transaction(payload: TransactionCreate) -> TransactionOut:
 
     tx = await safe_write(_do_create)
 
-    # P4.4 阶段:这里加 BackgroundTasks.add_task(diagnose_service.score_and_notify, tx.id)
+    # P4.4:异步触发诊断(评分 + AI 评语,SSE 推送,不阻塞录入响应)
+    from app.services.diagnose_service import diagnose_service
+
+    background_tasks.add_task(diagnose_service.score_and_notify, tx.id)
 
     return TransactionOut.from_orm_with_score(tx, score=None)
 

@@ -39,6 +39,16 @@
 | 16:10~16:20 | P3.5.4 验收 + 留痕 | 1h / 0.2h | 45 tests 全绿(覆盖率 66%);首页 SSR 渲染出 今日盈亏 -1,116.00 / 24.00 / 浮动 1,155.60;ADR-0005 + decisions-index + phase-log 更新 |
 | 16:20~17:00 | P3.6 计算器联调 | 2h / 0.7h | **两处代码格式 bug**:(1) calculator API `stock_code` 仍是纯 6 位强约束,`get_position('000001')` 查不到 DB 里的 `000001.SZ` → before.shares 恒 0;(2) 前端 CalculatorPanel `positions.find(p => p.stockCode === '000001')` 永远匹配不上。修复:API 侧 schema validator 复用 normalize_code;前端新增 `lib/stockCode.ts`(与后端同规则)+ find 时归一化;新增 3 条 calculator 测试(48 全绿);**顺手修 tsconfig `isolatedModules`+`verbatimModuleSyntax` 冲突(initial commit 遗留,dev 不暴露,build 才炸)**;`next build` 4 页面全过;curl 实测卖买/超额 422 全对 |
 
+## Day 4 — 2026-08-01(晚上段)
+
+| 时间 | Phase | 估时 / 实际 | 经验 / 坑 |
+|---|---|---|---|
+| 15:20~15:40 | P4.1 评分器纯函数 | 2h / 0.4h | 5 维度(集中度/价格/间隔/市场/板块)各 20 分;ground_truth 10 组手算样本,期望值到 **逐维度 breakdown 粒度**(非总分,能抓"总分对但维度错");坑:手写 JSON 里 `None` → 必须 `null`;BOM 头会挂 json.load(用 WriteAllBytes 重写);`_interval_score` 按**同向** action 过滤(卖出不干扰买入间隔);37 用例 100% 覆盖 |
+| 15:40~16:00 | P4.2a LLM 层 | 2h / 0.4h | BaseLLM 抽象 + DeepSeekClient + sanitizer + factory;v2.1 设计:Key 从 llm_api_keys 表解(非 .env),factory `get()` 缺 Key 返回 None(不抛错,上层优雅降级);退避 `2.0*2**attempt`;401 不重试(Key 无效重试无意义);monkeypatch 单例方法要 patch **对象**而非模块字符串(`llm_keys_repo.get_decrypted`);27 用例 |
+| 16:00~16:15 | P4.3 EventBus + SSE | 1h / 0.5h | 全局单例 event_bus + 30s 心跳(60s 无响应清理);**大坑:starlette TestClient / httpx ASGITransport 会完整消费无限 SSE 流 → 流式测试永远挂起**;SSE 集成测试只能用真实服务 curl 验证(`-N --max-time 35` 等首个 ping),单测只测 EventBus 逻辑 + 路由注册;实测 31s 收到 `data: {"event":"ping"}` |
+| 16:15~16:50 | P4.4 诊断编排服务 | 3h / 0.7h | score_and_notify:评分→safe_write→SSE scored→LLM→comment;降级链:无 Key→`no_key`+trade.failed,LLM 异常→`failed`+trade.failed;录入交易自动异步触发;**老 bug 炸出:TradeScore.trade_id 非主键(自增 id),repo 全用 `session.get(TradeScore, trade_id)` 按 id 查 → 评分永远查不到**(P2.1 遗留,本轮改 select where trade_id);SSE 端到端实测:trade.scored(55分) → trade.failed(DeepSeek 401 key 无效,真实降级)全通;11 用例,全套 131 绿 |
+| 16:50~17:00 | 留痕 + git push | — / 0.2h | api-changelog v0.1.3(diagnose 端点 + trade_scores 修复);ADR 无新增(降级设计沿用 §11.3.5 既有规格) |
+
 ## 关键经验(全项目复盘用)
 
 <!-- 每条经验不超过一行 -->

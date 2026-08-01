@@ -1,6 +1,8 @@
 """评分仓储(P2.1 实施)"""
 from typing import Optional
 
+from sqlalchemy import select
+
 from app.db import async_session
 from app.models.orm import TradeScore
 
@@ -16,7 +18,8 @@ class TradeScoreRepository:
     ) -> TradeScore:
         """写入或更新评分(ai_comment / ai_status / ai_model / latency 后补)"""
         async with async_session() as session:
-            existing = await session.get(TradeScore, trade_id)
+            stmt = select(TradeScore).where(TradeScore.trade_id == trade_id)
+            existing = (await session.execute(stmt)).scalar_one_or_none()
             if existing:
                 existing.score = score
                 existing.score_breakdown = score_breakdown
@@ -43,7 +46,8 @@ class TradeScoreRepository:
         ai_latency_ms: int | None = None,
     ) -> Optional[TradeScore]:
         async with async_session() as session:
-            row = await session.get(TradeScore, trade_id)
+            stmt = select(TradeScore).where(TradeScore.trade_id == trade_id)
+            row = (await session.execute(stmt)).scalar_one_or_none()
             if row is None:
                 return None
             row.ai_comment = ai_comment
@@ -58,12 +62,14 @@ class TradeScoreRepository:
 
     async def get_by_trade_id(self, trade_id: int) -> Optional[TradeScore]:
         async with async_session() as session:
-            return await session.get(TradeScore, trade_id)
+            stmt = select(TradeScore).where(TradeScore.trade_id == trade_id)
+            return (await session.execute(stmt)).scalar_one_or_none()
 
     async def update_ai_status(self, trade_id: int, status: str) -> None:
         """用于 no_key 等失败场景,只更新状态,不写 comment"""
         async with async_session() as session:
-            row = await session.get(TradeScore, trade_id)
+            stmt = select(TradeScore).where(TradeScore.trade_id == trade_id)
+            row = (await session.execute(stmt)).scalar_one_or_none()
             if row:
                 row.ai_status = status
                 await session.commit()

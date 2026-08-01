@@ -28,6 +28,17 @@
 
 ## 历史记录
 
+### 2026-08-01 | v0.1.3 | 诊断服务上线(P4.4)
+
+#### Added
+- 新增 `POST /api/diagnose/{trade_id}`:触发诊断(立即返回 `pending`,评分 + AI 评语后台异步执行,经 SSE 推送)
+- 新增 `GET /api/diagnose/{trade_id}`:查询诊断状态与结果(`pending` / `success` / `no_key` / `failed`,含 `score` / `breakdown` / `ai_comment`)
+- `POST /api/transactions`:录入成功后自动异步触发诊断(后台任务,不阻塞响应)
+- 新增 SSE 事件 `trade.scored`(评分完成)与 `trade.failed`(缺 Key 或 LLM 调用失败,`reason` 说明);`trade.commented`(评语完成)事件已预留(v0.1.0 已注册,本轮实际推送)
+
+#### Changed
+- `trade_scores` 表读写修正:主键为自增 `id`,`trade_id` 为唯一键;此前所有仓储查询误用 `id` 当 `trade_id` 查(评分永远查不到)
+
 ### 2026-08-01 | v0.1.2 | 计算器接受多种代码格式(P3.6 联调)
 
 #### Changed

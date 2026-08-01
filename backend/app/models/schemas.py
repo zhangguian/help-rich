@@ -158,6 +158,23 @@ class WatchlistListOut(BaseModel):
 
 
 # ============================================================
+# === 诊断输出(P4.4 / api-contract §1.5) ===
+# ============================================================
+
+class DiagnoseOut(BaseModel):
+    """GET /api/diagnose/{trade_id} 响应
+
+    status: pending(未出) / success / no_key / failed
+    """
+    trade_id: int
+    status: str
+    score: Optional[int] = None
+    breakdown: Optional[dict] = None  # {"集中度": 15, ...}
+    ai_comment: Optional[str] = None
+    ai_status: Optional[str] = None
+
+
+# ============================================================
 # === 错误响应统一格式 ===
 # ============================================================
 
