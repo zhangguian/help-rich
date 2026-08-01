@@ -61,10 +61,19 @@ export function ScreenshotWizard({ onClose }: { onClose: () => void }) {
         const err = await r.json().catch(() => ({}));
         const code = err.detail?.code ?? 'UPLOAD_FAILED';
         const msg = err.detail?.message ?? `上传失败 (${r.status})`;
-        showToast({ type: 'error', message: msg });
-        // OCR 失败/无 Key → 自动切换到粘贴模式
+        // OCR 失败/无 Key → 自动切换到粘贴模式(友好提示,非错误)
         if (code === 'OCR_FAILED' || code === 'NO_KEY' || code === 'OCR_EMPTY') {
+          showToast({
+            type: 'warning',
+            message: 'OCR 未识别,已自动切换到 JSON 粘贴模式',
+          });
           setMode('paste');
+          // 滚动到粘贴输入框
+          setTimeout(() => {
+            document.querySelector<HTMLTextAreaElement>('textarea')?.focus();
+          }, 100);
+        } else {
+          showToast({ type: 'error', message: msg });
         }
         return;
       }
