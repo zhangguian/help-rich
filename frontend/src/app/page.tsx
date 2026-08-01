@@ -65,6 +65,9 @@ export default async function Home() {
           <Link href={`/annual-report/${new Date().getFullYear() - 1}`}>
             <Button variant="secondary">📊 年账单</Button>
           </Link>
+          <Link href="/risk-report">
+            <Button variant="secondary">🛡 风险报告</Button>
+          </Link>
           <Link href="/settings">
             <Button variant="ghost">⚙ 设置</Button>
           </Link>

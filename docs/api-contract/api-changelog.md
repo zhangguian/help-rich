@@ -28,6 +28,18 @@
 
 ## 历史记录
 
+### 2026-08-01 | v0.3.1 | 风险敞口报告 + A2 真实数据源 blocked 标记
+
+#### Added
+- **风险敞口 API**(C1):`risk_service.calc_risk()` + 1 端点:
+  - `GET /api/risk-report` 返回:总持仓 / 总市值 / 单股集中度 / HHI 指数 / 板块分散 / 风险评分(0~100,三档 低/中/高)+ 智能警告(集中度 > 30% / HHI > 2500 / 同板块 / 持仓过少)
+  - 风险评分权重:单股最大占比 40% + HHI 30% + 持仓数 15% + 板块数 15%
+- **风险报告页面** `/risk-report`:4 宫格 + 警告区 + 单股集中度横向条形图 + 板块分布,首页 [🛡 风险报告] 入口
+
+#### Blocked(v0.2.5+ 跟进)
+- **A2 资金流真实数据源**:东财 `push2.eastmoney.com` 在公司网络被防火墙 RST(直接 + akshare 包装 + qgqpBId cookie 都无法连通,curl 000),网易 `money.163.com` 502,新浪/腾讯无资金流分类字段。**所有免费数据源 blocked by 公司网络**;真实接入需付费 API(雪球 Pro / 同花顺 iFinD / Wind)或公司网络放行东财 IP 段。当前继续用 v0.2.1 mock 流式推送
+- **K 线接真实数据源**:同上(底层走东财 blocked)。当前用 mock 随机游走(虽然新浪 money.finance.sina.com.cn K 线 API 通,可作为低成本替换)
+
 ### 2026-08-01 | v0.2.0 | 截图字段语义统一(holdings 处理)
 
 #### Fixed
