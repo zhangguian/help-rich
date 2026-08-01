@@ -71,6 +71,33 @@ api.interceptors.response.use(
   },
 );
 
+/** 请求拦截器:camelCase → snake_case(后端 Pydantic 字段约定) */
+api.interceptors.request.use(
+  (config) => {
+    if (config.data && typeof config.data === 'object' && !(config.data instanceof FormData)) {
+      config.data = camelToSnake(config.data);
+    }
+    return config;
+  },
+  (error) => Promise.reject(error),
+);
+
+/**
+ * camelCase → snake_case 转换(请求 body 用)
+ */
+function camelToSnake(obj: unknown): unknown {
+  if (Array.isArray(obj)) return obj.map(camelToSnake);
+  if (obj !== null && typeof obj === 'object' && !(obj instanceof Date)) {
+    return Object.fromEntries(
+      Object.entries(obj as Record<string, unknown>).map(([k, v]) => [
+        k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`),
+        camelToSnake(v),
+      ]),
+    );
+  }
+  return obj;
+}
+
 /**
  * snake_case → camelCase 转换(递归对象/数组)
  */
