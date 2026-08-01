@@ -38,25 +38,64 @@ export default function SettingsPage() {
 
       <ScreenshotPanel />
 
-      <Card padding="md" className="space-y-2">
-        <div className="font-semibold">📋 关于</div>
-        <div className="text-sm text-text-sec">
-          买股工具室 MVP v0.1.0 — 个人股票投资辅助工具
+      <Card padding="md" className="space-y-3">
+        <div>
+          <div className="font-semibold">🕰 历史工具</div>
+          <div className="text-xs text-text-ter mt-1">
+            记账 / 报表向功能已从工作台撤出,如需使用请从下方进入。
+          </div>
         </div>
-        <div className="text-xs text-text-ter mt-2">
-          ⚠ 投资有风险,本工具所有输出仅供参考,不构成投资建议。
-        </div>
-        <div className="pt-2 flex gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <Link href="/transactions">
-            <Button variant="secondary" size="sm">
+            <Button variant="secondary" className="w-full">
               📋 流水
             </Button>
           </Link>
           <Link href="/calculator">
-            <Button variant="secondary" size="sm">
+            <Button variant="secondary" className="w-full">
               🧮 计算器
             </Button>
           </Link>
+          <Link href="/annual-report/2025">
+            <Button variant="secondary" className="w-full">
+              📅 年账单
+            </Button>
+          </Link>
+          <Link href="/risk-report">
+            <Button variant="secondary" className="w-full">
+              ⚠️ 风险报告
+            </Button>
+          </Link>
+          <Link href="/rebalance">
+            <Button variant="secondary" className="w-full">
+              ⚖️ 调仓建议
+            </Button>
+          </Link>
+          <Link href="/provider-stats">
+            <Button variant="secondary" className="w-full">
+              📊 Provider 占比
+            </Button>
+          </Link>
+          <Link href="/holdings-health">
+            <Button variant="secondary" className="w-full">
+              🩺 持仓健康
+            </Button>
+          </Link>
+          <Link href="/sector-fund-flow">
+            <Button variant="secondary" className="w-full">
+              🗂 板块资金流
+            </Button>
+          </Link>
+        </div>
+      </Card>
+
+      <Card padding="md" className="space-y-2">
+        <div className="font-semibold">📋 关于</div>
+        <div className="text-sm text-text-sec">
+          买股工具室 v0.4 — 小白股民买股看股辅助工具
+        </div>
+        <div className="text-xs text-text-ter mt-2">
+          ⚠ 投资有风险,本工具所有输出仅供参考,不构成投资建议。
         </div>
       </Card>
     </main>

@@ -28,6 +28,20 @@
 
 ## 历史记录
 
+### 2026-08-02 | v0.4.2 | 技术指标 + AI 解读层(买股工具室核心)
+
+#### Added(新增)
+- `GET /api/stock/{code}/analysis`:技术指标 + AI 白话解读。返回 `{stock_code, indicators, ai}`:
+  - `indicators`:均线(ma5/10/20/60 + ma_series 各 60 点)/ 量能(量比 ratio、放量缩量 state)/ 通道(线性回归斜率,窗口 60,阈值 ±0.0015)/ 支撑压力(MA20/MA60 + 近 20/60 日高低点)/ 企稳三段式(站上 MA20 + 回踩不破前低 + 末日量能放大)
+  - `ai`:LLM 白话解读(看多看空中性 view + 趋势/量能/关键价位/操作建议/风险提示);LLM 未配置或失败 → `ai: null` 纯指标降级,页面永不空白
+  - 错误码:代码格式非法 → 422 `INVALID_STOCK_CODE`;K 线数据源不可用 → 502 `DATA_SOURCE_UNAVAILABLE`
+- `POST /api/stock/{code}/chat` body `{question}`:单轮 AI 问答(持仓成本自动从 positions 取,喂给 LLM);未配置 Key → 503 `LLM_NOT_CONFIGURED`
+- `app.services.ta_service.compute_indicators`:纯确定性指标计算(输入 120 根日 K,零 LLM 参与)
+- `app.services.stock_advice_service`:get_stock_analysis / ask_stock_question(pydantic schema 校验 + JSON 提取容错 markdown 代码块)
+
+#### Test
+- 新增 `tests/test_ta_service.py` 17 条 + `tests/test_stock_advice.py` 14 条(FakeLLM + fake httpx 拦截新浪);总 325 全绿
+
 ### 2026-08-02 | v0.3.0 | Day 8 A3 多 Provider 占比月度统计
 
 #### Added(新增)
