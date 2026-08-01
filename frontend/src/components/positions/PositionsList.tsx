@@ -1,8 +1,12 @@
 'use client';
 
+import { useState } from 'react';
+
 import clsx from 'clsx';
 
+import { PositionDetailModal } from '@/components/positions/PositionDetailModal';
 import { StopLossButton } from '@/components/stop-loss/StopLossButton';
+import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { useStopLossChecker } from '@/hooks/useStopLossChecker';
 import { decimalFormat } from '@/lib/decimalFormat';
@@ -16,6 +20,7 @@ import type { Position } from '@/lib/types';
  */
 export function PositionsList({ positions }: { positions: Position[] }) {
   const { alertEl } = useStopLossChecker(positions);
+  const [detail, setDetail] = useState<{ code: string; name: string | null } | null>(null);
 
   const pnlClass = (v: number | null) =>
     v === null ? 'text-text-ter' : v >= 0 ? 'text-up' : 'text-down';
@@ -96,7 +101,16 @@ export function PositionsList({ positions }: { positions: Position[] }) {
                       ¥{decimalFormat(p.realizedPnl)}
                     </span>
                   </div>
-                  <div className="pt-1">
+                  <div className="pt-1 flex flex-wrap gap-1 justify-end">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setDetail({ code: p.stockCode, name: p.stockName })
+                      }
+                    >
+                      📊 K 线
+                    </Button>
                     <StopLossButton position={p} />
                   </div>
                 </div>
@@ -105,6 +119,15 @@ export function PositionsList({ positions }: { positions: Position[] }) {
           );
         })}
       </div>
+
+      {detail && (
+        <PositionDetailModal
+          open={true}
+          onClose={() => setDetail(null)}
+          stockCode={detail.code}
+          stockName={detail.name}
+        />
+      )}
       {alertEl}
     </>
   );

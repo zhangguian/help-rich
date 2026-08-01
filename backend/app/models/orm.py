@@ -180,6 +180,66 @@ class ScreenshotRecord(Base):
 
 
 # ============================================================
+# === v0.2:资金流表(E) ===
+# ============================================================
+
+class FundFlow(Base):
+    """单只股票的资金流入流出事件(E,backend-arch §7.x)
+
+    mock 数据:每分钟 1 条(small_amount 中小单 / medium 中单 / large 大单 / super 特大单)
+    SSE 推送给前端实时滚动。
+    """
+    __tablename__ = "fund_flow"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    direction: Mapped[str] = mapped_column(String, nullable=False)  # in / out
+    amount: Mapped[str] = mapped_column(String, nullable=False)  # 万元
+    category: Mapped[str] = mapped_column(String, nullable=False)  # small/medium/large/super
+    source: Mapped[str] = mapped_column(String, default="mock")  # mock/eastmoney/sina
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index("idx_fund_flow_code_time", "stock_code", "timestamp"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<FundFlow {self.stock_code} {self.direction} {self.amount}万 @ {self.timestamp}>"
+
+
+# ============================================================
+# === v0.2.1:K 线缓存表(D) ===
+# ============================================================
+
+class KlineCache(Base):
+    """单只股票日 K 线缓存(D,TradingView Lightweight Charts)
+
+    MVP:首次请求时 mock 生成 + 落库;v0.2.2 接 akshare/yahoo 真实数据源替换 mock。
+    """
+    __tablename__ = "kline_cache"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    period: Mapped[str] = mapped_column(String, nullable=False, default="daily")  # daily/weekly/60min
+    open_price: Mapped[str] = mapped_column(String, nullable=False)
+    high_price: Mapped[str] = mapped_column(String, nullable=False)
+    low_price: Mapped[str] = mapped_column(String, nullable=False)
+    close_price: Mapped[str] = mapped_column(String, nullable=False)
+    volume: Mapped[int] = mapped_column(Integer, default=0)
+    source: Mapped[str] = mapped_column(String, default="mock")  # mock/akshare/yahoo
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        Index("idx_kline_code_period_date", "stock_code", "period", "trade_date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<KlineCache {self.stock_code} {self.period} {self.trade_date}>"
+
+
+# ============================================================
 # === v1.5:止损表(P5.1 实施) ===
 # ============================================================
 

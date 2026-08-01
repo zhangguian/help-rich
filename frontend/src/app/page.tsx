@@ -62,6 +62,9 @@ export default async function Home() {
           <Link href="/calculator">
             <Button>🧮 计算器</Button>
           </Link>
+          <Link href={`/annual-report/${new Date().getFullYear() - 1}`}>
+            <Button variant="secondary">📊 年账单</Button>
+          </Link>
           <Link href="/settings">
             <Button variant="ghost">⚙ 设置</Button>
           </Link>

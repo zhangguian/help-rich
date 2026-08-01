@@ -105,6 +105,11 @@ export function ReflectionCard() {
                 查看持仓
               </Button>
             </Link>
+            <Link href={`/annual-report/${new Date().getFullYear() - 1}`}>
+              <Button size="sm" variant="ghost">
+                年度账单
+              </Button>
+            </Link>
             <Link href="/transactions">
               <Button size="sm" variant="ghost">
                 回顾流水
