@@ -95,7 +95,7 @@ function Do-Start {
 
     Write-Host ""
     Write-Host "  backend health: " -NoNewline
-    if (Wait-Health $BackendPort "/api/health" 60) {
+    if (Wait-Health $BackendPort "/api/admin/health" 60) {
         Write-Host "OK http://127.0.0.1:$BackendPort" -ForegroundColor Green
     } else {
         Write-Host "TIMEOUT log: $BackendErrLog" -ForegroundColor Red
