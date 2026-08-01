@@ -39,18 +39,16 @@ async def get_recent(stock_code: str, limit: int = 30) -> dict:
 
 @router.post("/{stock_code}/generate")
 async def manual_generate(stock_code: str) -> dict:
-    """手动触发 1 条 mock 数据(测试用)"""
-    flow = await generate_one(stock_code)
-    # 推 SSE
-    await event_bus.publish({
-        "event": "fund_flow",
-        "stock_code": stock_code,
-        "direction": flow.direction,
-        "amount": flow.amount,
-        "category": flow.category,
-        "timestamp": flow.timestamp.isoformat(),
-    })
-    return {"ok": True, "id": flow.id}
+    """手动触发:从新浪资金流排行查该股并落库(guide §7,完全真实数据)"""
+    try:
+        flow = await generate_one(stock_code)
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "DATA_SOURCE_UNAVAILABLE", "message": str(e)},
+        ) from e
+    return {"ok": True, "id": flow["id"]}
 
 
 @router.get("/{stock_code}/events")

@@ -28,6 +28,22 @@
 
 ## 历史记录
 
+### 2026-08-01 | v0.3.2 | 完全删除 mock 数据 + 接真实数据源(guide)
+
+#### Changed
+- **K 线**:`kline_service.fetch_klines` 完全删除 `_mock_klines()`;改接 guide §3.2 新浪 `https://quotes.sina.cn/cn/api/jsonp_v2.php/.../CN_MarketDataService.getKLineData`(实测 ✅ 200);返回失败抛 `KLineSourceUnavailable`;`GET /api/kline/{code}` 数据源不可用时返 502 `DATA_SOURCE_UNAVAILABLE`(无 mock 兜底)
+- **资金流**:`fund_flow_service` 完全删除 `_random_event()`;改接 guide §7 新浪 `https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_ssggzj`(排行,实测 ✅ 200);后台 `start_sina_scheduler` 每 60s 拉 SH/SZ/BJ 三市场前 50 名;`generate_one` 查指定股 → 数据源不可用或不在排行返 `FundFlowSourceUnavailable`(502)
+
+#### Removed
+- **`_mock_klines()` 随机游走** + **`_random_event()` 资金流分类权重** + **`start_mock_generator` 假数据后台任务**——全部删除,生产代码 0 mock
+
+#### Test 改用 httpx.MockTransport(测试基础设施,**非生产 mock**)
+- 23 条新测试(11 K 线 + 12 资金流)用 fake `httpx.AsyncClient` 拦截,验证 endpoint shape + 解析 + 错误处理
+
+#### 端到端实测
+- K 线 `GET /api/kline/600519.SH?limit=3` → 200,3 根日 K 真实数据(2026-07-30 ~ 2026-08-01,价格区间 1505-1582)
+- 资金流 `POST /api/fund-flow/600519.SH/generate` → 502 `DATA_SOURCE_UNAVAILABLE`(茅台今日不在新浪前 80 名资金流,真实场景友好提示)
+
 ### 2026-08-01 | v0.3.1 | 风险敞口报告 + A2 真实数据源 blocked 标记
 
 #### Added

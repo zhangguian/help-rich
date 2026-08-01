@@ -61,20 +61,16 @@ async def lifespan(app: FastAPI):
         logger.error("Alembic 启动失败: %s", e)
         raise
 
-    # 2. 资金流 mock 生成器(v0.2.1:E)— 后台任务,持续生成 mock 资金流事件
+    # 2. 资金流新浪调度器(v0.3.2:真实数据,无 mock)— 后台任务,每 60s 拉一次 3 个市场排行
     # 测试环境跳过(测试 conftest 不期望后台无限循环)
     import os as _os
 
     if not _os.environ.get("PYTEST_CURRENT_TEST"):
-        from app.repositories.transaction_repo import transaction_repo
-        from app.services.fund_flow_service import start_mock_generator
+        from app.services.fund_flow_service import start_sina_scheduler
 
-        items, _ = await transaction_repo.list_all(limit=50)
-        stock_codes = list({tx.stock_code for tx in items})
-        if stock_codes:
-            import asyncio as _asyncio
+        import asyncio as _asyncio
 
-            _asyncio.create_task(start_mock_generator(stock_codes, interval_sec=60))
+        _asyncio.create_task(start_sina_scheduler(interval_sec=60))
 
     logger.info(f"盘后诊股室后端启动 — v0.2.0,数据库={settings.database_url}")
     yield

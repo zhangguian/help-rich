@@ -1,77 +1,128 @@
-"""K 线图服务(D)
+"""K 线图服务(guide §3.2 新浪备用)
 
-- MVP:首次请求 mock 生成 N 根日 K 线 + 落库(v0.2.1)
-- v0.2.2:接 akshare/yahoo-finance2 真实数据源替换 mock
-- 设计:缓存命中走 cache;miss 调 fetch_kline + 落库
+- 数据源:guide §3.2 新浪 K 线 JSONP(`https://quotes.sina.cn/.../CN_MarketDataService.getKLineData`)
+- 测试 ✅ 200(2026-08-01 实测)
+- 其他数据源(guide §3.1 东财 push2his、§3.3 腾讯 web.ifzq)实测被公司网络封,跳过
+- **完全真实数据**,无 mock;失败抛 KLineSourceUnavailable
 """
+import json
 import logging
-import math
-import random
-from datetime import date, timedelta
+import re
+from datetime import date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
-from app.db import async_session
-from app.models.orm import KlineCache
+import httpx
 
 logger = logging.getLogger(__name__)
 
 
-def _mock_klines(stock_code: str, count: int = 60) -> list[dict]:
-    """生成 mock 日 K 线(随机游走,基于代码哈希的"基础价")
+class KLineSourceUnavailable(Exception):
+    """K 线数据源不可用(网络/接口变更/反爬)"""
 
-    返回格式:
-      [{date, open, high, low, close, volume}, ...]
-    按日期升序。
+
+def _to_sina_symbol(stock_code: str) -> str:
+    """guide §1.1:600519.SH → sh600519"""
+    code, _, market = stock_code.partition(".")
+    market = market.lower() if market else "sh"
+    market = {"SH": "sh", "SZ": "sz", "BJ": "bj"}.get(market.upper(), market.lower())
+    return f"{market}{code}"
+
+
+def _to_sina_scale(period: str) -> int:
+    """guide §1.3 scale 编码"""
+    return {
+        "1min": 1, "5min": 5, "15min": 15, "30min": 30, "60min": 60,
+        "daily": 240, "weekly": 1200, "monthly": 1440,
+    }.get(period, 240)
+
+
+async def _fetch_sina_kline(
+    stock_code: str, period: str, count: int
+) -> list[dict[str, Any]]:
+    """guide §3.2 新浪 K 线(JSONP,需剥壳)
+
+    返回:[
+      {date, open, high, low, close, volume, turnover?}
+    ] 升序
     """
-    # 用代码 hash 给每只股一个稳定的基础价(900-2000)
-    base = 1000 + (hash(stock_code) % 1100)
-    rng = random.Random(stock_code)  # 确定性 seed
-    price = base
-    today = date.today()
-    rows = []
-    for i in range(count):
-        d = today - timedelta(days=count - 1 - i)
-        # 日波动 ±3%
-        change = rng.uniform(-0.03, 0.03)
-        open_p = price
-        close_p = max(0.01, price * (1 + change))
-        high_p = max(open_p, close_p) * (1 + rng.uniform(0, 0.015))
-        low_p = min(open_p, close_p) * (1 - rng.uniform(0, 0.015))
-        volume = rng.randint(500_000, 5_000_000)
-        rows.append({
-            "trade_date": d,
-            "open": f"{open_p:.3f}",
-            "high": f"{high_p:.3f}",
-            "low": f"{low_p:.3f}",
-            "close": f"{close_p:.3f}",
-            "volume": volume,
+    import time
+    import random
+
+    symbol = _to_sina_symbol(stock_code)
+    scale = _to_sina_scale(period)
+    callback = f"callback_{int(time.time() * 1000)}{random.randint(0, 999)}"
+    url = f"https://quotes.sina.cn/cn/api/jsonp_v2.php/{callback}/CN_MarketDataService.getKLineData"
+    params = {
+        "symbol": symbol,
+        "scale": scale,
+        "ma": "no",
+        "datalen": count,
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://finance.sina.com.cn",
+    }
+    async with httpx.AsyncClient(trust_env=False, timeout=15) as client:
+        resp = await client.get(url, params=params, headers=headers)
+        resp.raise_for_status()
+        text = resp.text
+
+    # JSONP 剥壳:callback_xxx([...]);
+    m = re.search(r"\((.*)\)\s*;?\s*$", text, re.DOTALL)
+    if not m:
+        raise KLineSourceUnavailable(f"新浪 K 线返回非 JSONP 格式: {text[:200]}")
+    json_text = m.group(1)
+    try:
+        rows = json.loads(json_text)
+    except json.JSONDecodeError as e:
+        raise KLineSourceUnavailable(f"新浪 K 线 JSON 解析失败: {e}") from e
+    if not isinstance(rows, list) or not rows:
+        raise KLineSourceUnavailable(
+            f"新浪 K 线返回空(可能接口已变更 / {stock_code} 无 K 线)"
+        )
+
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        # 字段映射(guide §3.2:day/open/high/low/close/volume)
+        day = r.get("day") or r.get("datalabel") or r.get("date")
+        if not day:
+            continue
+        # 分钟级 day 是 "2026-08-01 09:30" 格式
+        if " " in day:
+            day = day.split(" ")[0]
+        out.append({
+            "date": day,
+            "open": r.get("open", "0"),
+            "high": r.get("high", "0"),
+            "low": r.get("low", "0"),
+            "close": r.get("close", "0"),
+            "volume": int(r.get("volume", 0) or 0),
         })
-        price = close_p
-    return rows
+    return out
 
 
 async def fetch_klines(
-    stock_code: str,
-    period: str = "daily",
-    count: int = 60,
-) -> list[dict]:
-    """获取 K 线(优先 cache,miss mock 生成)
+    stock_code: str, period: str = "daily", count: int = 60
+) -> list[dict[str, Any]]:
+    """拉 K 线(guide §3.2 新浪;数据源失败抛 KLineSourceUnavailable,不兜底 mock)
 
-    Args:
-        stock_code: 6 位代码(可带后缀)
-        period: daily / weekly / 60min(目前只支持 daily mock)
-        count: 根数(默认 60 ≈ 3 个月日 K)
-
-    Returns:
-        [{date, open, high, low, close, volume}, ...] 升序
+    缓存层:DB 优先,miss 调真实接口,落库
     """
+    from app.db import async_session
+    from app.models.orm import KlineCache
     from sqlalchemy import select
 
-    # 1. 查缓存
+    # 1. 缓存优先
     async with async_session() as session:
         stmt = (
             select(KlineCache)
-            .where(KlineCache.stock_code == stock_code, KlineCache.period == period)
+            .where(
+                KlineCache.stock_code == stock_code,
+                KlineCache.period == period,
+            )
             .order_by(KlineCache.trade_date.desc())
             .limit(count)
         )
@@ -91,37 +142,38 @@ async def fetch_klines(
             for r in reversed(cached)
         ]
 
-    # 2. miss → mock 生成 + 落库
-    rows = _mock_klines(stock_code, count)
+    # 2. 真实接口(失败抛 KLineSourceUnavailable,无 mock)
+    rows = await _fetch_sina_kline(stock_code, period, count)
+    if not rows:
+        raise KLineSourceUnavailable(f"新浪 K 线返回空数据: {stock_code}")
+
+    # 3. 落库
     async with async_session() as session:
-        for row in rows:
+        for r in rows:
+            try:
+                d = (
+                    datetime.strptime(r["date"], "%Y-%m-%d").date()
+                    if " " not in r["date"]
+                    else datetime.strptime(r["date"], "%Y-%m-%d %H:%M").date()
+                )
+            except ValueError:
+                continue
             session.add(
                 KlineCache(
                     stock_code=stock_code,
-                    trade_date=row["trade_date"],
+                    trade_date=d,
                     period=period,
-                    open_price=row["open"],
-                    high_price=row["high"],
-                    low_price=row["low"],
-                    close_price=row["close"],
-                    volume=row["volume"],
-                    source="mock",
+                    open_price=r["open"],
+                    high_price=r["high"],
+                    low_price=r["low"],
+                    close_price=r["close"],
+                    volume=r["volume"],
+                    source="sina",
                 )
             )
         await session.commit()
-    logger.info("K 线 mock 生成并落库: %s %s (%d 根)", stock_code, period, len(rows))
-
-    return [
-        {
-            "date": r["trade_date"].isoformat(),
-            "open": r["open"],
-            "high": r["high"],
-            "low": r["low"],
-            "close": r["close"],
-            "volume": r["volume"],
-        }
-        for r in rows
-    ]
+    logger.info("K 线新浪落库: %s %s (%d 根)", stock_code, period, len(rows))
+    return rows
 
 
-__all__ = ["fetch_klines"]
+__all__ = ["fetch_klines", "KLineSourceUnavailable"]
