@@ -2,6 +2,7 @@ import Link from 'next/link';
 
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
+import { NewsFeed } from '@/components/news/NewsFeed';
 import { PositionsList } from '@/components/positions/PositionsList';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 import { ReflectionCard } from '@/components/reflection/ReflectionCard';
@@ -71,6 +72,9 @@ export default async function Home() {
           <Link href="/rebalance">
             <Button variant="secondary">🎯 调仓建议</Button>
           </Link>
+          <Link href="/sector-fund-flow">
+            <Button variant="secondary">💰 板块资金</Button>
+          </Link>
           <Link href="/settings">
             <Button variant="ghost">⚙ 设置</Button>
           </Link>
@@ -129,6 +133,10 @@ export default async function Home() {
       <section className="mt-8">
         <h2 className="text-lg font-semibold mb-3">截图识别</h2>
         <ScreenshotPanel />
+      </section>
+
+      <section className="mt-8">
+        <NewsFeed />
       </section>
 
       <OnboardingHint />

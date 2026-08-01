@@ -96,3 +96,68 @@ class SinaClient(DataSource):
             )
         except (ValueError, decimal.InvalidOperation):
             return None
+
+
+# ==================== 板块资金流排行 (guide §7) ====================
+
+async def fetch_sector_fund_flow_rank(
+    fenlei: int = 0, num: int = 20, sort: str = "netamount", asc: int = 0
+) -> list[dict]:
+    """guide §7 新浪板块资金流排行
+
+    fenlei: 0=全部 1=行业 2=概念 3=地域
+    sort: netamount|netbuy|change
+    asc: 0=降序 1=升序
+    """
+    url = (
+        "https://vip.stock.finance.sina.com.cn/"
+        "quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_bk"
+    )
+    params = {"page": 1, "num": num, "sort": sort, "asc": asc, "fenlei": fenlei}
+    async with httpx.AsyncClient(
+        headers=SINA_HEADERS, timeout=15.0, trust_env=False
+    ) as client:
+        resp = await client.get(url, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+    if not isinstance(data, list):
+        raise ValueError(f"新浪板块资金返回非数组: {type(data).__name__}")
+    return data
+
+
+# ==================== 7×24 快讯 (guide §9.2) ====================
+
+_JSONP_PATTERN = re.compile(r"\((.*)\)\s*;?\s*$", re.DOTALL)
+
+
+async def fetch_sina_news(page: int = 1, page_size: int = 20) -> list[dict]:
+    """guide §9.2 新浪 7×24 快讯(JSONP 需剥壳)"""
+    import json
+    import time
+
+    url = "https://zhibo.sina.com.cn/api/zhibo/feed"
+    params = {
+        "page": page,
+        "page_size": page_size,
+        "zhibo_id": 152,
+        "tag_id": 0,
+        "dire": "f",
+        "dpc": 1,
+        "pagesize": page_size,
+        "id": 4161089,
+        "type": 0,
+        "_": int(time.time() * 1000),
+    }
+    async with httpx.AsyncClient(
+        headers=SINA_HEADERS, timeout=15.0, trust_env=False
+    ) as client:
+        resp = await client.get(url, params=params)
+        resp.raise_for_status()
+        text = resp.text
+    m = _JSONP_PATTERN.search(text)
+    if m:
+        data = json.loads(m.group(1))
+    else:
+        # 无 callback 时直接返回纯 JSON
+        data = json.loads(text)
+    return data.get("result", {}).get("data", {}).get("feed", {}).get("list", [])

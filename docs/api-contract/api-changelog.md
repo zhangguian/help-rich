@@ -28,6 +28,18 @@
 
 ## 历史记录
 
+### 2026-08-01 | v0.3.3 | 板块资金排行 + 7×24 快讯(新浪 guide §7 / §9.2)
+
+#### Added
+- 新增 `GET /api/sector-fund-flow?fenlei=0|1|2|3&num=20&sort=netamount|netbuy|change`:新浪板块资金流排行(`MoneyFlow.ssl_bkzj_bk`,实测 200)。返回 `{fenlei, fenlei_label, count, items[]}`,item 含 `name/change_pct/inamount_yi/outamount_yi/netamount_yi/turnover_yi/top_stock`;非法 fenlei/num/sort → 400 `INVALID_*`;数据源不可用 → 502 `DATA_SOURCE_UNAVAILABLE`
+- 新增 `GET /api/news/sina?page=1&page_size=20`:新浪 7×24 快讯(`zhibo.sina.com.cn/api/zhibo/feed`,实测 200,兼容 JSONP / 纯 JSON 两种返回)。返回 `{page, count, items[]}`,item 含 `id/rich_text/type/create_time/tag`;参数越界 → 400;数据源不可用 → 502 `DATA_SOURCE_UNAVAILABLE`
+
+#### Changed
+- `app/data/sina.py` 新增 `fetch_sector_fund_flow_rank()` / `fetch_sina_news()`(复用 `SINA_HEADERS`,`trust_env=False` 直连,JSONP 剥壳正则 `\((.*)\)\s*;?\s*$`)
+
+#### Test
+- 新增 `tests/test_sina_data.py` 9 条:板块资金解析 / 非数组报错 / 快讯 JSONP + 纯 JSON / 非法 JSONP 报错 / 端点 200 / 400 / 502
+
 ### 2026-08-01 | v0.3.2 | 完全删除 mock 数据 + 接真实数据源(guide)
 
 #### Changed
