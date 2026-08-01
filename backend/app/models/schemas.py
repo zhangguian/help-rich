@@ -47,6 +47,23 @@ class LlmTestResponse(BaseModel):
     error: Optional[str] = None
 
 
+class LlmProviderItem(BaseModel):
+    """GET /api/llm/providers 单项"""
+    name: str
+    model: str
+    configured: bool
+
+
+class LlmProvidersOut(BaseModel):
+    """GET /api/llm/providers 响应"""
+    items: list[LlmProviderItem]
+
+
+class LlmSettingsOut(BaseModel):
+    """GET/POST /api/llm/settings 响应"""
+    active_provider: str
+
+
 # ============================================================
 # === 交易流水(P2.1 实施) ===
 # ============================================================

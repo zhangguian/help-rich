@@ -28,6 +28,16 @@
 
 ## 历史记录
 
+### 2026-08-01 | v0.1.5 | Provider 设置 API 升级(P4.2e/f)
+
+#### Added
+- 新增 `GET /api/llm/providers`:可用 provider 列表(名称/模型/配置状态,设置页下拉用)
+- 新增 `GET /api/llm/settings`:获取当前激活 provider
+- 新增 `POST /api/llm/settings`(body `{active_provider}`):切换激活 provider;未知 provider 返回 400 `INVALID_PROVIDER`
+
+#### Changed
+- `POST /api/llm/test`:从 Key 格式校验(假延迟 100ms)升级为**真实 API 调用**(`chat("你是连接测试助手", "回复 OK")`,重试 1 次);失败返回具体错误信息(401 等)
+
 ### 2026-08-01 | v0.1.4 | 多 Provider 落地(P4.2b/c/d)
 
 #### Added

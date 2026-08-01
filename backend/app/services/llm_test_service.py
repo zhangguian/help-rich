@@ -1,22 +1,20 @@
-"""LLM 测试服务(轻量 stub,MVP 阶段先验证 Key 格式 + DB 读写)
+"""LLM 测试服务(P4.2e:真实 API 调用)
 
-真正的 LLM 调用在 P4.2 实施,这里只验证:
-1. Key 是否能加密/解密往返
-2. Key 是否有效(粗略检查:非空 + 长度合理)
-3. 返回延迟(模拟 100ms)
-
-P4.2 升级:真正调 Provider.chat("回复 OK")
+1. 取解密 Key,未配置 → 直接失败
+2. factory.get(provider) 实例化
+3. 真正调 Provider.chat("回复 OK")(短超时,重试 1 次)
 """
-import asyncio
 import time
 
+from app.llm.base import LLMError
+from app.llm.factory import provider_factory
 from app.models.schemas import LlmTestResponse
 from app.repositories.llm_keys_repo import llm_keys_repo
 
 
 class LlmTestService:
     async def test_provider(self, provider: str) -> LlmTestResponse:
-        """测试 provider 连接(P1.4 阶段只验证 Key 存在 + 格式)"""
+        """测试 provider 连接:真实调一次 API"""
         t0 = time.time()
 
         # 1. 取解密 Key
@@ -28,16 +26,24 @@ class LlmTestService:
                 error=f"{provider} 未配置 Key",
             )
 
-        # 2. 粗略校验
-        if not plaintext or len(plaintext) < 8:
+        # 2. 实例化(缺 Key 返回 None)
+        llm = await provider_factory.get(provider)
+        if llm is None:
             return LlmTestResponse(
                 ok=False,
                 latency_ms=int((time.time() - t0) * 1000),
-                error="Key 格式无效",
+                error=f"{provider} 未配置 Key",
             )
 
-        # 3. 模拟延迟(P4.2 真正调 API)
-        await asyncio.sleep(0.1)
+        # 3. 真实调用
+        try:
+            await llm.chat("你是连接测试助手", "回复 OK", max_retries=1)
+        except LLMError as e:
+            return LlmTestResponse(
+                ok=False,
+                latency_ms=int((time.time() - t0) * 1000),
+                error=str(e),
+            )
 
         return LlmTestResponse(
             ok=True,

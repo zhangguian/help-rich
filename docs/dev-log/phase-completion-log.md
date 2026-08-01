@@ -49,6 +49,7 @@
 | 16:15~16:50 | P4.4 诊断编排服务 | 3h / 0.7h | score_and_notify:评分→safe_write→SSE scored→LLM→comment;降级链:无 Key→`no_key`+trade.failed,LLM 异常→`failed`+trade.failed;录入交易自动异步触发;**老 bug 炸出:TradeScore.trade_id 非主键(自增 id),repo 全用 `session.get(TradeScore, trade_id)` 按 id 查 → 评分永远查不到**(P2.1 遗留,本轮改 select where trade_id);SSE 端到端实测:trade.scored(55分) → trade.failed(DeepSeek 401 key 无效,真实降级)全通;11 用例,全套 131 绿 |
 | 16:50~17:00 | 留痕 + git push | — / 0.2h | api-changelog v0.1.3(diagnose 端点 + trade_scores 修复);ADR 无新增(降级设计沿用 §11.3.5 既有规格) |
 | 17:00~17:15 | P4.2b/c/d 多 Provider 落地 | 2.5h / 0.3h | 三家 API 全是 OpenAI 兼容格式 → 抽 `OpenAICompatClient` 共享实现(DeepSeek 顺手瘦身,原来那份重试代码删掉);MiniMax `abab6.5s-chat` / 豆包 `doubao-pro-32k` 各一行子类 + 单测;**坑:BACKOFF_BASE 从 deepseek.py 移走后 3 条旧测试 monkeypatch 路径挂** → 统一改 patch `app.llm.base.BACKOFF_BASE`;**P4.2d 补漏:score_and_notify 的 upsert 原来硬编码 ai_provider="deepseek",切换 provider 后标签错** → 提前取 active 传入;138 tests 全绿 |
+| 17:15~17:30 | P4.2e/f Provider API + A/B fixture | 1.5h / 0.3h | 新增 GET /providers + GET/POST /settings 3 端点;**test 端点从假校验升级为真实 API 调用**(重试 1 次,失败返回具体错误);P4.2f 写 `test_llm_prompt_consistency.py`:捕获 3 个 client 的 HTTP body 断言 messages 完全一致(A/B 唯一变量是 model 字段,输入一致性是 A/B 的前提);149 tests 全绿 |
 
 ## 关键经验(全项目复盘用)
 
