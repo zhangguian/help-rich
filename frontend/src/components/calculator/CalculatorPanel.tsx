@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/Card';
 import { PnlHeatmap } from '@/components/charts/PnlHeatmap';
 import { decimalFormat } from '@/lib/decimalFormat';
 import { apiGet, apiPost } from '@/lib/api';
+import { normalizeCode } from '@/lib/stockCode';
 import type {
   CalculatorBefore,
   CalculatorAfter,
@@ -28,7 +29,6 @@ export function CalculatorPanel() {
   const [action, setAction] = useState<'buy' | 'sell'>('buy');
   const [txShares, setTxShares] = useState(500);
   const [txPrice, setTxPrice] = useState('11.000');
-
   const [result, setResult] = useState<CalculatorResponse | null>(null);
   const [calculating, setCalculating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +48,7 @@ export function CalculatorPanel() {
     };
   }, []);
 
-  const currentPosition = positions.find((p) => p.stockCode === stockCode);
+  const currentPosition = positions.find((p) => p.stockCode === normalizeCode(stockCode));
 
   // 实时计算(输入即算,300ms debounce)
   useEffect(() => {
@@ -73,7 +73,7 @@ export function CalculatorPanel() {
     setError(null);
     try {
       const resp = await apiPost<CalculatorResponse>('/calculator', {
-        stockCode,
+        stockCode: normalizeCode(stockCode) ?? stockCode,
         action,
         txShares,
         txPrice,
@@ -134,8 +134,8 @@ export function CalculatorPanel() {
               type="text"
               value={stockCode}
               onChange={(e) => setStockCode(e.target.value)}
-              maxLength={6}
-              placeholder="股票代码"
+              maxLength={12}
+              placeholder="600519 或 600519.SH"
               className="flex-1 px-3 py-2 border border-border-strong rounded-sm font-mono"
             />
           </div>

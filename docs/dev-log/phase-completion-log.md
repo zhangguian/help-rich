@@ -37,6 +37,7 @@
 | 15:10~15:40 | P3.5.2 首页今日盈亏 UI | 1.5h / 0.5h | 首页改 4 宫格(总成本/总浮盈/今日盈亏/持仓数)+ 持仓卡今日盈亏/浮动盈亏;**揪出 Day 2 起就存在的严重 bug:前端 axios baseURL 无 `/api` 前缀,所有页面从未真正连上后端!** |
 | 15:40~16:10 | P3.5.3 场景标识 + API 修复 | 0.5h / 0.5h | TransactionForm 代码校验支持 `600519` / `600519.SH` / `sh600519`;**root cause:`.env.local` 里 `NEXT_PUBLIC_API_URL=http://localhost:8000`(无 /api)覆盖了代码默认值**;改为 `http://127.0.0.1:8000/api`(127.0.0.1 还规避 Node SSR 的 localhost→::1 IPv6 问题) |
 | 16:10~16:20 | P3.5.4 验收 + 留痕 | 1h / 0.2h | 45 tests 全绿(覆盖率 66%);首页 SSR 渲染出 今日盈亏 -1,116.00 / 24.00 / 浮动 1,155.60;ADR-0005 + decisions-index + phase-log 更新 |
+| 16:20~17:00 | P3.6 计算器联调 | 2h / 0.7h | **两处代码格式 bug**:(1) calculator API `stock_code` 仍是纯 6 位强约束,`get_position('000001')` 查不到 DB 里的 `000001.SZ` → before.shares 恒 0;(2) 前端 CalculatorPanel `positions.find(p => p.stockCode === '000001')` 永远匹配不上。修复:API 侧 schema validator 复用 normalize_code;前端新增 `lib/stockCode.ts`(与后端同规则)+ find 时归一化;新增 3 条 calculator 测试(48 全绿);**顺手修 tsconfig `isolatedModules`+`verbatimModuleSyntax` 冲突(initial commit 遗留,dev 不暴露,build 才炸)**;`next build` 4 页面全过;curl 实测卖买/超额 422 全对 |
 
 ## 关键经验(全项目复盘用)
 

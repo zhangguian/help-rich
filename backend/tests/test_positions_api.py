@@ -148,3 +148,55 @@ class TestQuotesDegraded:
         assert p["current_price"] is None
         assert p["today_pnl"] is None
         assert p["floating_pnl"] is None
+
+
+class TestCalculatorNormalize:
+    """P3.6 联调:calculator 用纯 6 位代码也能查到带后缀的持仓"""
+
+    def test_calc_with_bare_code_finds_position(self, client, patch_quotes):
+        _seed_tx(client)
+        r = client.post(
+            "/api/calculator",
+            json={
+                "stock_code": "000001",  # 纯 6 位,应规范化到 000001.SZ
+                "action": "buy",
+                "tx_shares": 500,
+                "tx_price": "11.000",
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        # 找到持仓:before.shares = 1000(seed 的 000001)
+        assert data["before"]["shares"] == 1000
+        # 加仓后 1500
+        assert data["after"]["shares"] == 1500
+        # input 已规范化
+        assert data["input"]["stock_code"] == "000001.SZ"
+
+    def test_calc_sell_over_quota(self, client, patch_quotes):
+        _seed_tx(client)
+        r = client.post(
+            "/api/calculator",
+            json={
+                "stock_code": "000001",
+                "action": "sell",
+                "tx_shares": 5000,
+                "tx_price": "12.000",
+            },
+        )
+        assert r.status_code == 422
+        assert r.json()["detail"]["code"] == "INSUFFICIENT_SHARES"
+
+    def test_calc_with_suffix_code(self, client, patch_quotes):
+        _seed_tx(client)
+        r = client.post(
+            "/api/calculator",
+            json={
+                "stock_code": "000001.SZ",
+                "action": "buy",
+                "tx_shares": 100,
+                "tx_price": "11.500",
+            },
+        )
+        assert r.status_code == 200
+        assert r.json()["before"]["shares"] == 1000

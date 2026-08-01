@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.core.cost_engine import (
     PRICE_QUANTUM,
@@ -20,11 +20,24 @@ router = APIRouter(tags=["calculator"])
 
 
 class CalculatorRequest(BaseModel):
-    """POST /api/calculator body"""
-    stock_code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    """POST /api/calculator body
+
+    stock_code: 接受 600519 / 600519.SH / sh600519,统一转规范格式(P3.5.1)
+    """
+    stock_code: str
     action: Literal["buy", "sell"]
     tx_shares: int = Field(gt=0)
     tx_price: Decimal = Field(gt=0, max_digits=10, decimal_places=3)
+
+    @field_validator("stock_code")
+    @classmethod
+    def _normalize_stock_code(cls, v: str) -> str:
+        from app.core.stock_code import normalize_code
+
+        normalized = normalize_code(v)
+        if normalized is None:
+            raise ValueError("股票代码格式应为 6 位数字或带市场后缀(如 600519.SH)")
+        return normalized
 
 
 class PnlGridRow(BaseModel):

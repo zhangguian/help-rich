@@ -28,6 +28,14 @@
 
 ## 历史记录
 
+### 2026-08-01 | v0.1.2 | 计算器接受多种代码格式(P3.6 联调)
+
+#### Changed
+- `POST /api/calculator`:`stock_code` 从纯 6 位数字(min_length/max_length/pattern 强约束)放宽为接受 `600519` / `600519.SH` / `sh600519`,由 schema validator 统一规范化为带后缀格式后查持仓(修复:之前用纯 6 位查询永远匹配不到持仓,`before.shares` 恒为 0)
+
+#### Fixed
+- 修复 stock_code 与持仓代码格式不一致导致计算器无法读取当前持仓的问题
+
 ### 2026-08-01 | v0.1.1 | 行情接入 + stock_code 规范化为带后缀
 
 #### Added
