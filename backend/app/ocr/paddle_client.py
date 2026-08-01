@@ -23,8 +23,12 @@ class PaddleOCRClient:
             try:
                 from paddleocr import PaddleOCR
 
+                # paddleocr 3.x 参数:use_textline_orientation(替换 2.x 的 use_angle_cls)
+                # show_log 在 3.x 不再支持
                 self._ocr = await asyncio.to_thread(
-                    PaddleOCR, use_angle_cls=True, lang="ch", show_log=False
+                    PaddleOCR,
+                    use_textline_orientation=True,
+                    lang="ch",
                 )
             except Exception as e:  # noqa: BLE001
                 self._load_error = str(e)
