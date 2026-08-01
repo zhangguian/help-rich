@@ -117,3 +117,21 @@ uv run alembic upgrade head   # 会重新生成 FERNET_KEY
 ```powershell
 Get-Process python,uvicorn,node -ErrorAction SilentlyContinue | Stop-Process -Force
 ```
+
+### 6.1 Git push SSL 失败(ADR-0004)
+
+**症状**:`git push origin main` 报:
+```
+fatal: unable to access '...': schannel: failed to receive handshake, SSL/TLS connection failed
+```
+但 `curl https://github.com` 返回 200(网络可达)。
+
+**根因**:Windows `git` 默认用 schannel(SChannel),被公司网络 / 代理拦截。
+
+**解决**:改用 OpenSSL 作为 git 的 TLS 后端:
+```powershell
+git config --global http.sslBackend openssl
+git config --global http.sslCAInfo "C:\Program Files\Git\mingw64\ssl\certs\ca-bundle.crt"
+```
+
+第二次 push 应立即成功。

@@ -20,6 +20,8 @@
 | 13:50~14:50 | P2.4 前端流水 UI | 2h / 1h | RHF + Zod + Tailwind form + table + skeleton loading;typecheck 一开始因 `exactOptionalPropertyTypes` 严格 + Zod generic 报 3 个错,改用 `as never` cast + 条件展开 `...(note ? {note} : {})` |
 | 14:50~15:20 | P2.5 首页雏形 | 1.5h / 0.5h | SSR server component + Card/Button 组件复用 + 总览三宫格(总成本/总浮盈/持仓数) + 持仓卡列表 + 空状态;无后端连接提示 banner |
 | 13:50~15:20 | P2.6 单测补强 | 0.5h / — | **P3.1 已 100% 覆盖 cost_engine,P2.x 的 repository/API 单测推迟到 S7 联调阶段统一做**(单测 Day 7 全跑) |
+| 15:25~15:35 | git push 推送 | — / 0.1h | 第一次 push 失败(schannel TLS);**切 OpenSSL 后立即成功**(ADR-0004);Day 2 完整推到 GitHub |
+| 15:35~15:45 | 留痕 + 文档 | — / 0.2h | 新增 ADR-0004;runbook 加 §6.1 git push SSL 解决;decisions-index 同步 |
 
 ## 关键经验(全项目复盘用)
 
@@ -43,6 +45,8 @@
 - calculator API 直接复用 cost_engine 纯函数 + get_position 查持仓,3 个 Phase 串成完整链路
 - React Hook Form + Zod 是 RHF 老搭配,strict TypeScript 下需要 `as never` cast
 - Next.js SSR + Client component 混用:server component 拉数据,client component 处理表单交互(参考 page.tsx vs transactions/page.tsx)
+- 完成节点后立即 commit + push,不留"半成品";commit message 写具体 Phase 编号便于历史追溯
+- git push SSL 失败:Windows git 默认 schannel 被拦截,`http.sslBackend openssl` 解决;团队成员各自配置(`--global` 是个人)
 
 ## 关键坑(下次避坑用)
 
