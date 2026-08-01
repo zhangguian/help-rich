@@ -58,9 +58,49 @@ def build_trade_line(sanitized: dict) -> str:
     )
 
 
+# ============================================================
+# === 截图识别 Prompt(backend-arch §9.7.5 / P8) ===
+# ============================================================
+
+OCR_SYSTEM = (
+    "你是同花顺 App 截图 OCR 文本解析专家。"
+    "从 OCR 提取的文本中识别持仓 / 流水 / 自选股字段,返回合法 JSON。"
+    '末尾固定加"以上不构成投资建议"。'
+)
+
+OCR_USER_TEMPLATE = """OCR 提取文本:
+\"\"\"
+{ocr_text}
+\"\"\"
+
+字段定义:
+- 持仓:stock_code(6位), stock_name, shares(int), cost_price(3位小数), market_value(2位小数)
+- 流水:stock_code, stock_name, action(buy/sell), shares(int), price(3位小数), trade_date(YYYY-MM-DD)
+- 自选股:stock_code, stock_name
+
+输出合法 JSON:
+{{
+  "screenshot_type": "position | transactions | watchlist",
+  "items": [ ... ],
+  "confidence": 0.0~1.0,
+  "notes": "..."
+}}
+
+约束:代码读不清就标 confidence < 0.5;价格只取 OCR 数字,不要估算;JSON 合法无尾逗号。
+"""
+
+
+def build_ocr_prompt(ocr_text: str) -> str:
+    """组装 OCR 解析 prompt"""
+    return OCR_USER_TEMPLATE.format(ocr_text=ocr_text)
+
+
 __all__ = [
     "DIAGNOSE_SYSTEM",
     "DIAGNOSE_USER_TEMPLATE",
     "build_diagnose_user_prompt",
     "build_trade_line",
+    "OCR_SYSTEM",
+    "OCR_USER_TEMPLATE",
+    "build_ocr_prompt",
 ]

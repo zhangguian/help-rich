@@ -50,6 +50,7 @@
 | 16:50~17:00 | 留痕 + git push | — / 0.2h | api-changelog v0.1.3(diagnose 端点 + trade_scores 修复);ADR 无新增(降级设计沿用 §11.3.5 既有规格) |
 | 17:00~17:15 | P4.2b/c/d 多 Provider 落地 | 2.5h / 0.3h | 三家 API 全是 OpenAI 兼容格式 → 抽 `OpenAICompatClient` 共享实现(DeepSeek 顺手瘦身,原来那份重试代码删掉);MiniMax `abab6.5s-chat` / 豆包 `doubao-pro-32k` 各一行子类 + 单测;**坑:BACKOFF_BASE 从 deepseek.py 移走后 3 条旧测试 monkeypatch 路径挂** → 统一改 patch `app.llm.base.BACKOFF_BASE`;**P4.2d 补漏:score_and_notify 的 upsert 原来硬编码 ai_provider="deepseek",切换 provider 后标签错** → 提前取 active 传入;138 tests 全绿 |
 | 17:15~17:30 | P4.2e/f Provider API + A/B fixture | 1.5h / 0.3h | 新增 GET /providers + GET/POST /settings 3 端点;**test 端点从假校验升级为真实 API 调用**(重试 1 次,失败返回具体错误);P4.2f 写 `test_llm_prompt_consistency.py`:捕获 3 个 client 的 HTTP body 断言 messages 完全一致(A/B 唯一变量是 model 字段,输入一致性是 A/B 的前提);149 tests 全绿 |
+| 17:30~17:50 | P8.1~P8.5 截图识别后端 | 5.5h / 0.7h | **R22 实测:PaddleOCR 3.7 在 Win + Python 3.11 装包 OK**(uv pip install,依赖 ~30 包);5 端点全落地;screenshot_records 表 + repo;PaddleOCR lazy init 封装(兼容 3.x `predict` / 2.x `ocr` API);本地规则优先(免 LLM 成本),规则未命中才走 LLM;降级路径粘贴 JSON;**坑 1:OCR prompt 模板的 `{字段定义}` 花括号没转义被 .format 吞**;**坑 2(同源老 bug):watchlist 仓储 `session.get(Watchlist, stock_code)` 按主键 id 查 → contains 恒 False,自选股判定从未生效**(与 trade_scores 同坑,顺手修 add/remove/contains);upload 需 `python-multipart`;175 tests 全绿 |
 
 ## 关键经验(全项目复盘用)
 

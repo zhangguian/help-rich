@@ -28,6 +28,24 @@
 
 ## 历史记录
 
+### 2026-08-01 | v0.1.6 | 截图识别后端(P8.1~P8.5)
+
+#### Added
+- 新增 5 个截图识别端点:
+  - `POST /api/screenshot/upload`(multipart):上传截图,OCR(PaddleOCR 本地)+ 规则/LLM 解析,返回待确认 items;非 jpg/png/webp → 415,>5MB → 413,OCR 失败/无 Key → 422(提示降级)
+  - `POST /api/screenshot/parse-paste`(body `{raw_json}`):降级路径,粘贴外网模型 JSON;非法 JSON → 422 `INVALID_JSON`
+  - `GET /api/screenshot/pending`:待确认列表
+  - `POST /api/screenshot/{id}/confirm`(body `{items, screenshot_type}`):确认后入库 transactions / watchlist;已确认 → 409,空 items → 422
+  - `POST /api/screenshot/{id}/reject`:取消,删除原图
+- 新增 `screenshot_records` 表(pending / confirmed / rejected 状态机)
+- 新增 `GET /api/llm/providers` + `GET/POST /api/llm/settings`(v0.1.5 已列,本轮文档对齐)
+
+#### Changed
+- `POST /api/llm/test` 升级为真实 API 调用(仅 Key 格式校验的旧行为移除)
+
+#### Fixed
+- watchlist 仓储按主键 `id` 查 `stock_code` 的 bug(与 trade_scores 同源,`contains`/`add`/`remove` 全部修正)——此前自选股判定恒 False
+
 ### 2026-08-01 | v0.1.5 | Provider 设置 API 升级(P4.2e/f)
 
 #### Added

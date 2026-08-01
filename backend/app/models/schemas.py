@@ -192,6 +192,38 @@ class DiagnoseOut(BaseModel):
 
 
 # ============================================================
+# === 截图识别(P8 / api-contract §1.6) ===
+# ============================================================
+
+class ScreenshotParseOut(BaseModel):
+    """POST /api/screenshot/upload 与 parse-paste 响应"""
+    record_id: int
+    items: list[dict]
+    screenshot_type: Optional[str] = None
+    ocr_text: Optional[str] = None
+
+
+class ScreenshotPendingItem(BaseModel):
+    """GET /api/screenshot/pending 单项"""
+    record_id: int
+    items: list[dict]
+    screenshot_type: Optional[str] = None
+    source: str
+    uploaded_at: datetime
+
+
+class ScreenshotConfirmRequest(BaseModel):
+    """POST /api/screenshot/{id}/confirm body(可编辑后确认)"""
+    items: list[dict]
+    screenshot_type: str
+
+
+class ScreenshotPasteRequest(BaseModel):
+    """POST /api/screenshot/parse-paste body(降级路径)"""
+    raw_json: str
+
+
+# ============================================================
 # === 错误响应统一格式 ===
 # ============================================================
 

@@ -8,6 +8,10 @@ from app.models.orm import Watchlist
 
 
 class WatchlistRepository:
+    async def _get_by_code(self, session, stock_code: str) -> Optional[Watchlist]:
+        stmt = select(Watchlist).where(Watchlist.stock_code == stock_code)
+        return (await session.execute(stmt)).scalar_one_or_none()
+
     async def add(
         self,
         stock_code: str,
@@ -16,7 +20,7 @@ class WatchlistRepository:
         note: str | None = None,
     ) -> Watchlist:
         async with async_session() as session:
-            existing = await session.get(Watchlist, stock_code)
+            existing = await self._get_by_code(session, stock_code)
             if existing:
                 # 已在,更新 name + note
                 if stock_name:
@@ -44,7 +48,7 @@ class WatchlistRepository:
 
     async def remove(self, stock_code: str) -> bool:
         async with async_session() as session:
-            row = await session.get(Watchlist, stock_code)
+            row = await self._get_by_code(session, stock_code)
             if row is None:
                 return False
             await session.delete(row)
@@ -53,7 +57,7 @@ class WatchlistRepository:
 
     async def contains(self, stock_code: str) -> bool:
         async with async_session() as session:
-            return (await session.get(Watchlist, stock_code)) is not None
+            return (await self._get_by_code(session, stock_code)) is not None
 
 
 watchlist_repo = WatchlistRepository()

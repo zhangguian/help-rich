@@ -10,6 +10,7 @@ from app.api.events import router as events_router
 from app.api.llm_keys import router as llm_keys_router
 from app.api.positions import router as positions_router
 from app.api.quotes import router as quotes_router
+from app.api.screenshot import router as screenshot_router
 from app.api.transactions import router as transactions_router
 from app.core.config import settings
 from app.core.logging import configure_logging, logger
@@ -54,3 +55,4 @@ app.include_router(llm_keys_router, prefix="/api")
 app.include_router(transactions_router, prefix="/api")
 app.include_router(positions_router, prefix="/api")
 app.include_router(quotes_router, prefix="/api")
+app.include_router(screenshot_router, prefix="/api")

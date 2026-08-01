@@ -144,3 +144,35 @@ class TradeScore(Base):
 
     def __repr__(self) -> str:
         return f"<TradeScore trade_id={self.trade_id} score={self.score}>"
+
+
+# ============================================================
+# === v2.0:截图识别临时记录(P8.1 实施) ===
+# ============================================================
+
+class ScreenshotRecord(Base):
+    """截图识别临时记录(backend-arch §6.1 v2.0)
+
+    用户确认后才入库 transactions / watchlist。
+    source: ocr_llm(主路径)/ manual_paste(降级)
+    status: pending / confirmed / rejected
+    """
+    __tablename__ = "screenshot_records"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    file_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    ocr_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parsed_items: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
+    screenshot_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    source: Mapped[str] = mapped_column(String, default="ocr_llm")
+    status: Mapped[str] = mapped_column(String, default="pending")
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("idx_screenshot_status", "status"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ScreenshotRecord {self.id} status={self.status}>"
