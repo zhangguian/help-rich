@@ -31,6 +31,8 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # 环境变量优先于 .env(测试可注入 DATABASE_URL)
+        env_priority=True,
     )
 
 

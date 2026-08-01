@@ -18,6 +18,8 @@
 |---|---|---|---|
 | GET | /health | 系统 | 健康检查 |
 | GET | /positions | 持仓 | 持仓列表(含今日盈亏) |
+| GET | /quotes/{code} | 行情 | 单只实时行情(P3.5 新增) |
+| GET | /quotes | 行情 | 批量实时行情,最多 50 只(P3.5 新增) |
 | GET | /transactions | 流水 | 流水列表 |
 | POST | /transactions | 流水 | 录入交易 |
 | PATCH | /transactions/{id} | 流水 | 修改 |
@@ -58,6 +60,52 @@
 ```json
 { "status": "ok" }
 ```
+
+---
+
+## 2.5 行情(P3.5 新增)
+
+### 2.5.1 GET /api/quotes/{code}
+
+**目的**:获取单只实时行情(新浪主 + 腾讯备 + 5 分钟缓存)
+
+**请求参数**:
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| code | str(path) | `600519.SH` / `000001.SZ` / `830799.BJ` |
+
+**响应 200**:
+```json
+{
+  "code": "600519.SH",
+  "name": "贵州茅台",
+  "current_price": "1350.600",
+  "prev_close": "1361.760",
+  "open": "1330.030",
+  "high": "1355.720",
+  "low": "1325.770",
+  "change": "-11.160",
+  "change_pct": -0.82,
+  "volume": 5512752,
+  "amount": "7373462605.000",
+  "timestamp": "2026-08-01T14:03:52",
+  "turnover_pct": null,
+  "pe": null,
+  "pb": null
+}
+```
+
+**错误码**:
+| code | HTTP | 触发条件 |
+|---|---|---|
+| — | 422 | 代码格式错误(需 6 位数字 + .SH/.SZ/.BJ) |
+| — | 503 | 行情源不可用(新浪 + 腾讯都失败) |
+
+### 2.5.2 GET /api/quotes?codes=600519.SH,000001.SZ
+
+**目的**:批量获取行情,最多 50 只,返回数组。
+
+**错误码**:同上(422 含具体非法代码)。
 
 ---
 
@@ -176,40 +224,41 @@
 
 ### 4.1 GET /api/positions
 
-**目的**:获取当前持仓列表(由 transactions 实时聚合)
+**目的**:获取当前持仓列表(由 transactions 实时聚合,P3.5.1 起含行情字段)
 
 **响应 200**:
 ```json
 {
   "items": [
     {
-      "stock_code": "000001",
+      "stock_code": "000001.SZ",
       "stock_name": "平安银行",
       "shares": 1000,
       "avg_cost": "10.333",
       "total_cost": "10333.00",
+      "realized_pnl": "399.90",
       "current_price": "10.500",
       "prev_close": "10.000",
       "today_pnl": "500.00",
-      "today_pnl_pct": 5.0,
-      "floating_pnl": "167.00",
-      "floating_pnl_pct": 1.61
+      "floating_pnl": "167.00"
     }
   ]
 }
 ```
 
-**业务说明**:
+**字段说明**:
 - `shares` / `avg_cost` 来自 transactions 聚合(加权平均)
-- `current_price` / `prev_close` 来自行情接口(akshare / 东财),缓存 5 分钟
-- `today_pnl` = `(current_price - prev_close) × shares`
-- `floating_pnl` = `(current_price - avg_cost) × shares`
+- `stock_code` 统一为带市场后缀格式(`600519.SH` / `000001.SZ`,P3.5.1 起)
+- `current_price` / `prev_close` 来自行情接口(新浪主 + 腾讯备),缓存 5 分钟
+- `today_pnl` = `(current_price - prev_close) × shares`(今日盈亏)
+- `floating_pnl` = `(current_price - avg_cost) × shares`(浮动盈亏)
+- **行情全部失败时**:`current_price` / `prev_close` / `today_pnl` / `floating_pnl` 为 `null`(前端降级显示 "--"),HTTP 仍 200
 - 所有金额字段是 **字符串**(精度保护)
 
 **错误码**:
 | code | HTTP | 触发条件 |
 |---|---|---|
-| AKSHARE_FAILED | 503 | 行情源不可用(返回缓存 + 标记陈旧) |
+| — | 200 | 行情失败不报错,字段置 null(降级) |
 
 ---
 
@@ -222,7 +271,7 @@
 **请求体**:
 | 字段 | 类型 | 必填 | 约束 |
 |---|---|---|---|
-| stock_code | str | 是 | 6 位数字 |
+| stock_code | str | 是 | 6 位数字或带后缀,如 `600519.SH`(P3.5.1 起统一规范化) |
 | action | enum | 是 | buy / sell |
 | tx_shares | int | 是 | > 0 |
 | tx_price | Decimal | 是 | > 0,3 位小数 |

@@ -52,14 +52,27 @@ class LlmTestResponse(BaseModel):
 # ============================================================
 
 class TransactionCreate(BaseModel):
-    """POST /api/transactions body"""
-    stock_code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    """POST /api/transactions body
+
+    stock_code: 接受 600519 / 600519.SH / sh600519,统一存规范格式 600519.SH
+    """
+    stock_code: str
     action: Literal["buy", "sell"]
     shares: int = Field(gt=0)
     price: Decimal = Field(gt=0, max_digits=10, decimal_places=3)
     trade_date: date
     stock_name: Optional[str] = None
     note: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("stock_code")
+    @classmethod
+    def _normalize_stock_code(cls, v: str) -> str:
+        from app.core.stock_code import normalize_code
+
+        normalized = normalize_code(v)
+        if normalized is None:
+            raise ValueError("股票代码格式应为 6 位数字或带市场后缀(如 600519.SH)")
+        return normalized
 
 
 class TransactionUpdate(BaseModel):
@@ -113,9 +126,19 @@ class TransactionListOut(BaseModel):
 
 class WatchlistAdd(BaseModel):
     """POST /api/watchlist body"""
-    stock_code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    stock_code: str
     stock_name: Optional[str] = None
     note: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("stock_code")
+    @classmethod
+    def _normalize_stock_code(cls, v: str) -> str:
+        from app.core.stock_code import normalize_code
+
+        normalized = normalize_code(v)
+        if normalized is None:
+            raise ValueError("股票代码格式应为 6 位数字或带市场后缀(如 600519.SH)")
+        return normalized
 
 
 class WatchlistOut(BaseModel):

@@ -15,7 +15,10 @@ export interface ApiError {
 }
 
 export const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
+  // 用 127.0.0.1 而非 localhost:Node 的 dns.lookup('localhost') 返回 ::1(IPv6),
+  // 而后端 uvicorn 只监听 IPv4,SSR 端 fetch 会失败
+  // 路径以 /api 开头(后端路由前缀,见 backend-arch §7.1)
+  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api',
   timeout: 10000,
   headers: { 'Content-Type': 'application/json' },
 });
@@ -61,7 +64,11 @@ function snakeToCamel(obj: unknown): unknown {
   return obj;
 }
 
-/** 便捷方法 */
+/**
+ * 便捷方法
+ * 注意:url 保留前导斜杠,axios 的 combineURLs 会正确拼接 baseURL 路径(/api)。
+ * 例:apiGet('/positions') → http://127.0.0.1:8000/api/positions
+ */
 export const apiGet = <T>(url: string) => api.get<T>(url).then((r) => r.data);
 export const apiPost = <T>(url: string, body?: unknown) =>
   api.post<T>(url, body).then((r) => r.data);

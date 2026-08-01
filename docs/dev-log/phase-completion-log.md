@@ -25,9 +25,30 @@
 | 16:15~16:35 | P3.3 + P3.4 CalculatorPanel + PnlHeatmap | 5h / 1h | 300ms debounce 实时计算 + 自研 SVG PnlHeatmap 21 档 + 当前价标线 + 加仓区间高亮 + hover 放大 + 移动端占位 |
 | 16:35~16:45 | git push P3.3+P3.4 | — / 0.1h | schannel 又失败一次(ca-bundle 路径错了);**路径修正为 `D:\git\Git\...` 后 OK**;ADR-0004 / runbook 更新路径验证方法 |
 
+## Day 3 — 2026-08-01(下午段)
+
+| 时间 | Phase | 估时 / 实际 | 经验 / 坑 |
+|---|---|---|---|
+| 14:00~14:10 | P3.5 行情数据层 | 2h / 0.5h | **东财 push2his 被公司网络限流**(首次通后续 0.15s 断连);akshare 底层也走东财同样挂;**实测新浪 hq.sinajs.cn + 腾讯 qt.gtimg.cn 稳定** → 新浪主+腾讯备(ADR-0005);httpx 走系统代理导致 TLS 被断开 → `trust_env=False`;腾讯字段偏移(high 取到涨跌%)靠逐字段核对修正 |
+| 14:10~14:20 | P3.5 缓存 + QuoteService | 2h / 0.3h | JSONCache 原子写(临时文件 + os.replace);QuoteService 主备降级链 + 5min TTL;**单只路径 bug(list 当 quote 用)被测试抓出** |
+| 14:20~14:40 | P3.5.1 stock_code 迁移 | 1h / 0.3h | schema 原 `min=6 max=6` 纯数字 → 带后缀(600519.SH);新增 `core/stock_code.py normalize_code()`(前缀推断市场 6/9→SH,0/1/2/3→SZ,4/8→BJ);`db_migrations.py` 幂等迁移(启动时 create_all 后跑) |
+| 14:40~14:50 | P3.5.1 PositionOut today_pnl | 1h / 0.3h | positions API 注入 QuoteService;返回 current_price / prev_close / today_pnl / floating_pnl,行情全失败降级 null(前端 "--") |
+| 14:50~15:10 | P3.5 后端测试 | — / 0.3h | 新增 test_stock_code(15 用例) + test_quote_service(9 用例,mock 数据源不依赖网络) + test_positions_api(4 用例,TestClient + monkeypatch);**pytest-asyncio 0.24 的 asyncio_mode=auto 配置不生效** → 测试内部 asyncio.run 包装(最稳);conftest.py 设 DATABASE_URL 隔离测试库;单例 QuoteService 需 monkeypatch get_quote_service 而非类 |
+| 15:10~15:40 | P3.5.2 首页今日盈亏 UI | 1.5h / 0.5h | 首页改 4 宫格(总成本/总浮盈/今日盈亏/持仓数)+ 持仓卡今日盈亏/浮动盈亏;**揪出 Day 2 起就存在的严重 bug:前端 axios baseURL 无 `/api` 前缀,所有页面从未真正连上后端!** |
+| 15:40~16:10 | P3.5.3 场景标识 + API 修复 | 0.5h / 0.5h | TransactionForm 代码校验支持 `600519` / `600519.SH` / `sh600519`;**root cause:`.env.local` 里 `NEXT_PUBLIC_API_URL=http://localhost:8000`(无 /api)覆盖了代码默认值**;改为 `http://127.0.0.1:8000/api`(127.0.0.1 还规避 Node SSR 的 localhost→::1 IPv6 问题) |
+| 16:10~16:20 | P3.5.4 验收 + 留痕 | 1h / 0.2h | 45 tests 全绿(覆盖率 66%);首页 SSR 渲染出 今日盈亏 -1,116.00 / 24.00 / 浮动 1,155.60;ADR-0005 + decisions-index + phase-log 更新 |
+
 ## 关键经验(全项目复盘用)
 
 <!-- 每条经验不超过一行 -->
+
+- **东财被公司网络限流,新浪/腾讯可用** —— 数据源要多备一个,且要用 curl 实测再写适配器
+- httpx 默认走系统代理(即使 trust_env 相关),受限网络下 `httpx.Client(trust_env=False)` 直连
+- axios baseURL 合并:**baseURL 末尾带 `/api` + url 保留前导斜杠** 才正确拼出 `/api/positions`;无前导斜杠会拼成 `apipositions`
+- Next.js SSR 的 axios baseURL 优先级:`NEXT_PUBLIC_API_URL`(.env.local)> 代码默认值 —— 排查"代码改了没生效"先看环境变量
+- Node `dns.lookup('localhost')` 返回 `::1`(IPv6),后端只绑 IPv4 时 SSR fetch 失败;统一用 `127.0.0.1`
+- pytest-asyncio 配置 in pyproject 在旧版本可能不生效,测试内部 `asyncio.run()` 最稳
+- 模块级单例(全局 `_quote_service`)在测试里 monkeypatch 类名无效,要 patch 工厂函数 `get_quote_service`
 
 - PowerShell 启动后台服务:**Job 会被父 shell 回收**;改用 `Start-Process -WindowStyle Hidden`
 - PowerShell 调本地 HTTP:优先 `curl.exe --noproxy "*"`,比 `Invoke-WebRequest` 稳

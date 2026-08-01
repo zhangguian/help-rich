@@ -8,13 +8,14 @@ import type { Position, PositionListResponse } from '@/lib/types';
 import { apiGet } from '@/lib/api';
 
 /**
- * 首页持仓概览(P2.5 实施,frontend-arch §10.1 / ui-ux §4.1)
+ * 首页持仓概览(P2.5 实施,P3.5.2 接入行情)
  *
- * 顶部:总览(总市值 / 总成本 / 总浮盈)
- * 中部:持仓列表(无持仓 → 空状态)
+ * 顶部:总览(总市值 / 总成本 / 总浮盈 + 今日盈亏)
+ * 中部:持仓列表(每只含 今日盈亏 / 浮动盈亏 / 现价)
  * 底部:快捷入口(录入流水 / 计算器)
  *
- * 当前价 / 今日盈亏 / 浮盈(依赖行情接口,P3.5 实施)
+ * 行情字段 currentPrice / todayPnl / floatingPnl:
+ *   后端返回 null 时(行情源不可用)降级显示 "--"
  */
 export default async function Home() {
   let positions: Position[] = [];
@@ -29,10 +30,11 @@ export default async function Home() {
   }
 
   const totalCost = positions.reduce((sum, p) => sum + Number(p.totalCost), 0);
-  // MVP 阶段无 current_price,floating_pnl 暂用 0
-  const floatingPnl = 0;
+  const floatingPnl = positions.reduce((sum, p) => sum + Number(p.floatingPnl ?? 0), 0);
+  const todayPnl = positions.reduce((sum, p) => sum + Number(p.todayPnl ?? 0), 0);
+  const hasQuotes = positions.some((p) => p.currentPrice !== null);
 
-  return (
+  const pnlClass = (v: number) => (v >= 0 ? 'text-up' : 'text-down');  return (
     <main className="min-h-screen p-8 max-w-6xl mx-auto">
       {!backendOk && (
         <Card className="mb-6 border-warn">
@@ -59,8 +61,8 @@ export default async function Home() {
         </div>
       </header>
 
-      {/* 总览 */}
-      <div className="grid grid-cols-3 gap-4 mb-8">
+      {/* 总览(P3.5.2:4 宫格) */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
         <Card padding="md">
           <div className="text-text-sec text-sm mb-1">总成本</div>
           <div className="text-2xl font-mono font-semibold">
@@ -68,11 +70,22 @@ export default async function Home() {
           </div>
         </Card>
         <Card padding="md">
-          <div className="text-text-sec text-sm mb-1">总浮盈(MVP 暂为 0)</div>
-          <div className="text-2xl font-mono font-semibold text-text-ter">
-            ¥{decimalFormat(floatingPnl.toFixed(2))}
+          <div className="text-text-sec text-sm mb-1">总浮盈</div>
+          <div className={`text-2xl font-mono font-semibold ${pnlClass(floatingPnl)}`}>
+            {hasQuotes ? `¥${decimalFormat(floatingPnl.toFixed(2))}` : '--'}
           </div>
-          <div className="text-xs text-text-ter mt-1">P3.5 接入行情后填充</div>
+          <div className="text-xs text-text-ter mt-1">
+            {hasQuotes ? '现价 - 加权成本' : '行情暂不可用'}
+          </div>
+        </Card>
+        <Card padding="md">
+          <div className="text-text-sec text-sm mb-1">今日盈亏</div>
+          <div className={`text-2xl font-mono font-semibold ${pnlClass(todayPnl)}`}>
+            {hasQuotes ? `¥${decimalFormat(todayPnl.toFixed(2))}` : '--'}
+          </div>
+          <div className="text-xs text-text-ter mt-1">
+            {hasQuotes ? '现价 - 昨收' : '行情暂不可用'}
+          </div>
         </Card>
         <Card padding="md">
           <div className="text-text-sec text-sm mb-1">持仓数</div>
@@ -93,35 +106,68 @@ export default async function Home() {
         </Card>
       ) : (
         <div className="space-y-3">
-          {positions.map((p) => (
-            <Card key={p.stockCode} padding="md">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="font-semibold">
-                    {p.stockName ?? p.stockCode}
-                    <span className="text-text-ter text-sm ml-2 font-mono">
-                      {p.stockCode}
-                    </span>
+          {positions.map((p) => {
+            const today = Number(p.todayPnl ?? 0);
+            const floating = Number(p.floatingPnl ?? 0);
+            return (
+              <Card key={p.stockCode} padding="md">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="font-semibold">
+                      {p.stockName ?? p.stockCode}
+                      <span className="text-text-ter text-sm ml-2 font-mono">
+                        {p.stockCode}
+                      </span>
+                    </div>
+                    <div className="text-sm text-text-sec mt-1">
+                      持仓 <span className="font-mono">{p.shares}</span> 股 ·
+                      加权成本{' '}
+                      <span className="font-mono">¥{decimalFormat(p.avgCost)}</span>
+                      {p.currentPrice !== null && (
+                        <>
+                          {' '}
+                          · 现价{' '}
+                          <span className="font-mono">
+                            ¥{decimalFormat(p.currentPrice)}
+                          </span>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div className="text-sm text-text-sec mt-1">
-                    持仓 <span className="font-mono">{p.shares}</span> 股 ·
-                    加权成本 <span className="font-mono">¥{p.avgCost}</span> ·
-                    总成本 <span className="font-mono">¥{decimalFormat(p.totalCost)}</span>
+                  <div className="text-right space-y-1">
+                    <div>
+                      <span className="text-xs text-text-ter mr-2">今日盈亏</span>
+                      <span
+                        className={`font-mono font-semibold ${
+                          p.todayPnl !== null ? pnlClass(today) : 'text-text-ter'
+                        }`}
+                      >
+                        {p.todayPnl !== null ? `¥${decimalFormat(p.todayPnl)}` : '--'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-xs text-text-ter mr-2">浮动盈亏</span>
+                      <span
+                        className={`font-mono font-semibold ${
+                          p.floatingPnl !== null ? pnlClass(floating) : 'text-text-ter'
+                        }`}
+                      >
+                        {p.floatingPnl !== null
+                          ? `¥${decimalFormat(p.floatingPnl)}`
+                          : '--'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-xs text-text-ter mr-2">已实现盈亏</span>
+                      <span className={`font-mono font-semibold ${pnlClass(Number(p.realizedPnl))}`}>
+                        ¥{decimalFormat(p.realizedPnl)}
+                      </span>
+                    </div>
                   </div>
                 </div>
-                <div className="text-right">
-                  <div className="text-xs text-text-ter">已实现盈亏</div>
-                  <div
-                    className={`text-lg font-mono font-semibold ${
-                      Number(p.realizedPnl) >= 0 ? 'text-down' : 'text-up'
-                    }`}
-                  >
-                    ¥{decimalFormat(p.realizedPnl)}
-                  </div>
-                </div>
-              </div>
-            </Card>
-          ))}
+              </Card>
+            );
+          })}
         </div>
       )}
 

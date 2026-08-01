@@ -28,6 +28,19 @@
 
 ## 历史记录
 
+### 2026-08-01 | v0.1.1 | 行情接入 + stock_code 规范化为带后缀
+
+#### Added
+- 新增 `GET /api/quotes/{code}` + `GET /api/quotes?codes=...`(实时行情,新浪主+腾讯备+5min 缓存)
+
+#### Changed
+- `POST /api/transactions` / `POST /api/watchlist`:`stock_code` 从纯 6 位数字放宽为接受 `600519` / `600519.SH` / `sh600519`,入库统一为带后缀格式(600519.SH)
+- `GET /api/positions`:新增 `current_price` / `prev_close` / `today_pnl` / `floating_pnl`;行情失败时这些字段为 `null`(不再 503)
+- `GET /api/transactions`:`stock_code` 筛选参数同样接受两种格式
+
+#### Deprecated
+- `today_pnl_pct` / `floating_pnl_pct` 字段(v0.1.0 文档提及但从未实现,已从契约移除)
+
 ### 2026-08-01 | v0.1.0 | MVP 初始版
 
 #### Added

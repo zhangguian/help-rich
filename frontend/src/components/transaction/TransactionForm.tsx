@@ -14,7 +14,12 @@ import { Button } from '../ui/Button';
  * 交易录入表单(frontend-arch §10.3 / ui-ux §4.3)
  */
 const schema = z.object({
-  stockCode: z.string().length(6).regex(/^\d{6}$/, '股票代码必须是 6 位数字'),
+  stockCode: z
+    .string()
+    .regex(
+      /^(?:\d{6}(?:\.(?:SH|SZ|BJ|sh|sz|bj))?|(?:sh|sz|bj)\d{6})$/,
+      '格式:6 位数字 或 600519.SH(可省略市场后缀)'
+    ),
   action: z.enum(['buy', 'sell']),
   shares: z.number().int().positive('股数必须 > 0'),
   price: z.string().regex(/^\d+(\.\d{1,3})?$/, '价格格式:数字,最多 3 位小数'),
@@ -80,8 +85,8 @@ export function TransactionForm({ onSuccess, onCancel }: TransactionFormProps) {
           <input
             type="text"
             inputMode="numeric"
-            maxLength={6}
-            placeholder="000001"
+            maxLength={12}
+            placeholder="600519 或 600519.SH"
             className="w-full px-3 py-2 border border-border-strong rounded-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent"
             {...register('stockCode')}
           />

@@ -66,7 +66,7 @@ export interface TransactionListResponse {
   total: number;
 }
 
-/** 持仓(P2.3) */
+/** 持仓(P2.3, P3.5.1 扩展行情字段) */
 export interface Position {
   stockCode: string;
   stockName: string | null;
@@ -74,10 +74,34 @@ export interface Position {
   avgCost: string;
   totalCost: string;
   realizedPnl: string;
+  /** P3.5.1 行情字段,行情不可用时为 null */
+  currentPrice: string | null;
+  prevClose: string | null;
+  todayPnl: string | null;
+  floatingPnl: string | null;
 }
 
 export interface PositionListResponse {
   items: Position[];
+}
+
+/** 实时行情(P3.5) */
+export interface Quote {
+  code: string;
+  name: string;
+  currentPrice: string;
+  prevClose: string;
+  open: string;
+  high: string;
+  low: string;
+  change: string;
+  changePct: number;
+  volume: number;
+  amount: string;
+  timestamp: string;
+  turnoverPct: number | null;
+  pe: number | null;
+  pb: number | null;
 }
 
 /** 计算器(P3.2) */

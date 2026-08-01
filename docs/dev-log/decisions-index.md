@@ -8,6 +8,7 @@
 | 0002 | ProviderFactory 改 async + 返回 None | 已采纳 | 2026-08-01 | v2.1 Key UI 决策:缺 Key 时优雅降级 |
 | 0003 | ORM Base 改为直接 import 避免循环导入 | 已采纳 | 2026-08-01 | P1.4 阶段发现:models/orm.py 通过 __init__.py 绕路 import 会导致 Base.metadata 为空,create_all 漏表 |
 | 0004 | Git push 用 OpenSSL 而非 schannel | 已采纳 | 2026-08-01 | 公司网络拦截 git schannel TLS;切 OpenSSL 解决 |
+| 0005 | 行情源用新浪主+腾讯备;stock_code 带市场后缀 | 已采纳 | 2026-08-01 | 东财/akshare 被公司网络限流;新增 normalize_code + 幂等迁移 |
 
 ## 状态说明
 

@@ -26,7 +26,7 @@ router = APIRouter(tags=["transactions"])
 
 @router.get("/transactions", response_model=TransactionListOut)
 async def list_transactions(
-    stock_code: Optional[str] = Query(default=None, min_length=6, max_length=6),
+    stock_code: Optional[str] = Query(default=None),
     start_date: Optional[date] = Query(default=None),
     end_date: Optional[date] = Query(default=None),
     limit: int = Query(default=50, le=200),
@@ -35,7 +35,12 @@ async def list_transactions(
     """列出流水(支持分页 / 筛选)
 
     v2.1 §3.1
+    stock_code: 接受 600519 / 600519.SH,统一转规范格式
     """
+    if stock_code:
+        from app.core.stock_code import normalize_code
+
+        stock_code = normalize_code(stock_code) or stock_code
     items, total = await transaction_repo.list_all(
         stock_code=stock_code, limit=limit, offset=offset
     )
