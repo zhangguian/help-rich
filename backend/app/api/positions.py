@@ -1,4 +1,9 @@
-"""持仓 API(P2.3 实施,P3.5.1 扩展行情字段)
+"""持仓 API(P2.3 实施,P3.5.1 扩展行情字段,v0.4.0 持仓主数据化)
+
+v0.4.0:positions 表为主数据(手动录入 / 截图导入 / 流水同步),
+- GET    /api/positions          列出当前持仓(含今日盈亏)
+- POST   /api/positions          手动录入 / 覆盖单只持仓(每股成本价)
+- DELETE /api/positions/{code}   删除单只持仓(流水保留)
 
 P3.5.1(今日盈亏):引入 QuoteService(新浪主 + 腾讯备 + 5min 缓存),
 返回 current_price / prev_close / today_pnl / floating_pnl。
@@ -6,9 +11,15 @@ P3.5.1(今日盈亏):引入 QuoteService(新浪主 + 腾讯备 + 5min 缓存),
 """
 from decimal import Decimal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
-from app.services.position_service import get_all_positions
+from app.models.schemas import PositionCreate
+from app.services.position_service import (
+    delete_position,
+    get_all_positions,
+    get_position,
+    upsert_position,
+)
 from app.services.quote_service import QuoteService
 
 router = APIRouter(tags=["positions"])
@@ -65,3 +76,45 @@ async def list_positions() -> dict:
             item["floating_pnl"] = None
         items.append(item)
     return {"items": items}
+
+
+@router.post("/positions", status_code=201)
+async def create_position(payload: PositionCreate) -> dict:
+    """手动录入 / 覆盖单只持仓(v0.4.0)
+
+    覆盖语义:以用户提交的股数/每股成本价为准;已实现盈亏保留流水部分。
+    """
+    pos = await upsert_position(
+        stock_code=payload.stock_code,
+        shares=payload.shares,
+        cost_price=payload.cost_price,
+        stock_name=payload.stock_name,
+    )
+    return {
+        "stock_code": pos.stock_code,
+        "stock_name": pos.stock_name,
+        "shares": pos.shares,
+        "total_cost": str(pos.total_cost.quantize(Decimal("0.01"))),
+        "avg_cost": str(pos.avg_cost),
+        "realized_pnl": str(pos.realized_pnl.quantize(Decimal("0.01"))),
+    }
+
+
+@router.delete("/positions/{code}", status_code=204)
+async def remove_position(code: str) -> None:
+    """删除单只持仓(v0.4.0)
+
+    联动语义:持仓是主数据,流水是它的影子事件记录。
+    删除持仓 → 同时删除该股票全部流水 + 评分(trade_scores 级联删除),防止 recalc 复活。
+    """
+    from app.core.stock_code import normalize_code
+    from app.repositories.transaction_repo import transaction_repo
+
+    normalized = normalize_code(code) or code
+    deleted = await delete_position(normalized)
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "POSITION_NOT_FOUND", "message": f"持仓 {normalized} 不存在"},
+        )
+    await transaction_repo.delete_by_stock(normalized)

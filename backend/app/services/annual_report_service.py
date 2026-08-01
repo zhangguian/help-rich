@@ -31,6 +31,20 @@ async def get_annual_report(year: int) -> dict:
         stmt = select(Transaction).order_by(Transaction.trade_date, Transaction.id)
         all_tx = list((await session.execute(stmt)).scalars().all())
 
+    if not all_tx:
+        # v0.4.0:无流水 → 明确提示(持仓可直接导入,不强制有流水)
+        return {
+            "year": year,
+            "realized_profit": "0.00",
+            "realized_loss": "0.00",
+            "net_pnl": "0.00",
+            "closed_count": 0,
+            "win_rate": 0.0,
+            "top5_profit": [],
+            "top5_loss": [],
+            "no_transactions": True,
+        }
+
     # 2. 按 stock 分桶,逐笔跑 cost_engine
     holdings: dict[str, dict] = {}  # code -> {"shares": int, "cost": Decimal}
     closed_in_year: list[dict] = []  # [{code, name, realized_pnl, closed_at: date}]
@@ -90,6 +104,7 @@ async def get_annual_report(year: int) -> dict:
              "realized_pnl": str(c["realized_pnl"]), "trade_date": c["trade_date"]}
             for c in top5_loss
         ],
+        "no_transactions": False,
     }
 
 

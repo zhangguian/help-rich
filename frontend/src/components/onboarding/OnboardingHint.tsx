@@ -66,7 +66,7 @@ export function OnboardingHint() {
 
   const STEPS = [
     {
-      title: '👋 欢迎使用盘后诊股室',
+      title: '👋 欢迎使用买股工具室',
       desc: '3 步快速体验:录入 → 评分 → 止损',
     },
     {

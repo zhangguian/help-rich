@@ -18,8 +18,8 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: '盘后诊股室',
-  description: '个人股票 AI 诊断 Agent — 本地 Web 工具',
+  title: '买股工具室',
+  description: '个人股票投资辅助工具 — 本地 Web 工具',
 };
 
 export default function RootLayout({

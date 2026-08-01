@@ -18,7 +18,13 @@ import type { Position } from '@/lib/types';
  * - 每只持仓卡:右侧 [+ 设止损] / [🛡 ¥价格][⚡][🗑]
  * - 轮询检查:15s 拉最新行情,触达止损 → 弹 StopLossAlert
  */
-export function PositionsList({ positions }: { positions: Position[] }) {
+export function PositionsList({
+  positions,
+  onDelete,
+}: {
+  positions: Position[];
+  onDelete?: (p: Position) => void;
+}) {
   const { alertEl } = useStopLossChecker(positions);
   const [detail, setDetail] = useState<{ code: string; name: string | null } | null>(null);
 
@@ -112,6 +118,16 @@ export function PositionsList({ positions }: { positions: Position[] }) {
                       📊 K 线
                     </Button>
                     <StopLossButton position={p} />
+                    {onDelete && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-down"
+                        onClick={() => onDelete(p)}
+                      >
+                        🗑 删除
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>

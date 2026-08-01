@@ -22,6 +22,7 @@ interface AnnualReportData {
   netPnl: string;
   closedCount: number;
   winRate: number;
+  noTransactions?: boolean;
   top5Profit: Array<{
     stockCode: string;
     stockName: string | null;
@@ -91,6 +92,16 @@ export default function AnnualReportPage({
 
       {data && !loading && (
         <>
+          {/* v0.4.0:无流水提示(持仓可直接导入,不强制有流水) */}
+          {data.noTransactions && (
+            <Card padding="md" className="border-warn">
+              <p className="text-warn text-sm">
+                ⚠ {year} 年还没有交易流水。年账单基于流水计算;若只想管理持仓,
+                可直接在首页通过「截图识别 → 粘贴持仓 JSON」或「+ 添加持仓」导入。
+              </p>
+            </Card>
+          )}
+
           {/* 4 宫格总览 */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Card padding="md">

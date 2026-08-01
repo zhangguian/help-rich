@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """盘后诊股室后端配置(v2.1:Key 不从 .env 读,从 SQLite 加密表读)"""
+    """买股工具室后端配置(v2.1:Key 不从 .env 读,从 SQLite 加密表读)"""
 
     # LLM API Keys(后端 v2.1 改造:不再从 settings 读)
     # 保留 .env 字段用于 v2.0 兼容(自动迁移到 SQLite)

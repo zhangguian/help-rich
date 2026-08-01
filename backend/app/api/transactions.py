@@ -70,7 +70,7 @@ async def create_transaction(
     v2.1 §3.2
     P4.4:录入后异步触发诊断(评分 + AI 评语,SSE 推送)
     """
-    # 校验:卖出不能超过持仓(P2.3 加的实时校验)
+    # 校验:卖出不能超过持仓(v0.4.0 改读持仓表主数据)
     if payload.action == "sell":
         from app.services.position_service import get_position
 
@@ -88,6 +88,11 @@ async def create_transaction(
 
     price_str = format(payload.price, ".3f")  # Decimal → "10.500"
 
+    # v0.4.0:变更前捕获导入基准(流水入库后无法再推导)
+    from app.services.position_service import capture_delta
+
+    delta = await capture_delta(payload.stock_code)
+
     async def _do_create():
         return await transaction_repo.create(
             stock_code=payload.stock_code,
@@ -100,6 +105,11 @@ async def create_transaction(
         )
 
     tx = await safe_write(_do_create)
+
+    # v0.4.0:流水变动 → 同步持仓(买入加权 / 卖出减仓 / 清仓删行)
+    from app.services.position_service import recalc_position
+
+    await recalc_position(tx.stock_code, delta)
 
     # P4.4:异步触发诊断(评分 + AI 评语,SSE 推送,不阻塞录入响应)
     from app.services.diagnose_service import diagnose_service
@@ -116,6 +126,17 @@ async def update_transaction(tx_id: int, payload: TransactionUpdate) -> Transact
     if "price" in updates:
         updates["price"] = format(updates["price"], ".3f")
 
+    # v0.4.0:修改前捕获导入基准(改完无法再推导变更前流水)
+    from app.services.position_service import capture_delta, recalc_position
+
+    before = await transaction_repo.get_by_id(tx_id)
+    if before is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "TX_NOT_FOUND", "message": f"交易 #{tx_id} 不存在"},
+        )
+    delta = await capture_delta(before.stock_code)
+
     async def _do_update():
         return await transaction_repo.update(tx_id, **updates)
 
@@ -126,6 +147,8 @@ async def update_transaction(tx_id: int, payload: TransactionUpdate) -> Transact
             detail={"code": "TX_NOT_FOUND", "message": f"交易 #{tx_id} 不存在"},
         )
 
+    await recalc_position(tx.stock_code, delta)
+
     from app.repositories.trade_score_repo import trade_score_repo
     score = await trade_score_repo.get_by_trade_id(tx.id)
     return TransactionOut.from_orm_with_score(tx, score.score if score else None)
@@ -133,6 +156,22 @@ async def update_transaction(tx_id: int, payload: TransactionUpdate) -> Transact
 
 @router.delete("/transactions/{tx_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_transaction(tx_id: int) -> None:
+    # v0.4.0:删除前先取 stock_code,删除后重算持仓(删流水不丢导入基准)
+    from app.db import async_session as _db_session
+    from app.models.orm import Transaction as _TxOrm
+    from sqlalchemy import select as _select
+
+    async with _db_session() as _s:
+        _row = (
+            await _s.execute(_select(_TxOrm).where(_TxOrm.id == tx_id))
+        ).scalar_one_or_none()
+        _code = _row.stock_code if _row else None
+
+    # v0.4.0:删除前捕获导入基准(删后无法推导变更前流水)
+    from app.services.position_service import capture_delta
+
+    delta = await capture_delta(_code) if _code else None
+
     async def _do_delete():
         return await transaction_repo.delete(tx_id)
 
@@ -142,6 +181,11 @@ async def delete_transaction(tx_id: int) -> None:
             status_code=404,
             detail={"code": "TX_NOT_FOUND", "message": f"交易 #{tx_id} 不存在"},
         )
+
+    if _code and delta is not None:
+        from app.services.position_service import recalc_position
+
+        await recalc_position(_code, delta)
 
 
 # ============================================================

@@ -68,6 +68,27 @@ class LlmSettingsOut(BaseModel):
 # === 交易流水(P2.1 实施) ===
 # ============================================================
 
+class PositionCreate(BaseModel):
+    """POST /api/positions body(v0.4.0 手动录入/截图导入持仓)
+
+    每股成本价口径:shares × cost_price = total_cost
+    """
+    stock_code: str
+    shares: int = Field(gt=0)
+    cost_price: Decimal = Field(gt=0, max_digits=10, decimal_places=3)
+    stock_name: Optional[str] = None
+
+    @field_validator("stock_code")
+    @classmethod
+    def _normalize_stock_code(cls, v: str) -> str:
+        from app.core.stock_code import normalize_code
+
+        normalized = normalize_code(v)
+        if normalized is None:
+            raise ValueError("股票代码格式应为 6 位数字或带市场后缀(如 600519.SH)")
+        return normalized
+
+
 class TransactionCreate(BaseModel):
     """POST /api/transactions body
 
@@ -210,6 +231,7 @@ class AnnualReportOut(BaseModel):
     win_rate: float
     top5_profit: list[dict]
     top5_loss: list[dict]
+    no_transactions: bool = False  # v0.4.0:无流水时前端提示"导入持仓或录入流水"
 
 
 # ============================================================

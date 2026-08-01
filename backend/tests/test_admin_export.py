@@ -28,6 +28,7 @@ def _clean(client):
     from app.models.orm import (
         LlmApiKey,
         LlmSettings,
+        Position,
         ScreenshotRecord,
         StopLoss,
         TradeScore,
@@ -46,6 +47,7 @@ def _clean(client):
                 LlmSettings,
                 Watchlist,
                 Transaction,
+                Position,
             ):
                 await session.execute(delete(m))
             await session.commit()
@@ -127,6 +129,7 @@ class TestRoundTrip:
         from app.models.orm import (
             LlmApiKey,
             LlmSettings,
+            Position,
             ScreenshotRecord,
             StopLoss,
             TradeScore,
@@ -139,7 +142,7 @@ class TestRoundTrip:
             async with async_session() as session:
                 for m in (
                     TradeScore, StopLoss, ScreenshotRecord,
-                    LlmApiKey, LlmSettings, Watchlist, Transaction,
+                    LlmApiKey, LlmSettings, Watchlist, Transaction, Position,
                 ):
                     await session.execute(sqla_delete(m))
                 await session.commit()

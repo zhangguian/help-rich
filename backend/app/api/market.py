@@ -1,10 +1,16 @@
 """板块资金流 / 新浪快讯 API
 
 - GET /api/sector-fund-flow?fenlei=0  板块资金排行(guide §7)
+- GET /api/sector-fund-flow/events   SSE 板块异动推送(v0.4.1)
 - GET /api/news/sina?page=1&page_size=20  新浪 7×24 快讯(guide §9.2)
 """
-from fastapi import APIRouter, HTTPException
+import asyncio
+import json
 
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+
+from app.services.event_bus import event_bus
 from app.services.news_service import get_sina_news
 from app.services.sector_fund_flow_service import FENLEI_MAP, get_sector_fund_flow
 
@@ -50,6 +56,49 @@ async def get_sector_fund_flow_endpoint(
         "count": len(items),
         "items": items,
     }
+
+
+@router.get("/sector-fund-flow/events")
+async def sector_fund_flow_events(fenlei: int | None = None):
+    """SSE:订阅板块资金流异动(v0.4.1)
+
+    后台调度器每 60s 检测一次,异动 publish `sector_fund_flow_alert`,
+    客户端按 fenlei 过滤(fenlei 不传 = 全部)。
+    """
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+
+    async def push(msg: dict):
+        if msg.get("event") != "sector_fund_flow_alert":
+            return
+        if fenlei is not None and msg.get("fenlei") != fenlei:
+            return
+        await queue.put(msg)
+
+    unsub = event_bus.subscribe_callback(
+        push,
+        filter_fn=lambda m: m.get("event") == "sector_fund_flow_alert",
+    )
+
+    async def event_stream():
+        yield f"data: {json.dumps({'event': 'subscribed', 'kind': 'sector_fund_flow', 'fenlei': fenlei}, ensure_ascii=False)}\n\n"
+        try:
+            while True:
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=30)
+                    yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ":heartbeat\n\n"
+        finally:
+            await unsub()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/news/sina")

@@ -1,6 +1,6 @@
 # Release Notes v0.2.0(2026-08-01)
 
-> 盘后诊股室 MVP 发布版 — **Day 1~8 全部 phase 完成**
+> 买股工具室 MVP 发布版 — **Day 1~8 全部 phase 完成**
 
 ## 🎯 概览
 

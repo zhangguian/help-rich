@@ -44,6 +44,28 @@ class BaseLLM(ABC):
     def model_name(self) -> str:
         raise NotImplementedError
 
+    async def chat_with_image(
+        self,
+        system: str,
+        user_prompt: str,
+        image_data_url: str,
+        temperature: float = 0.3,
+        max_retries: int = 3,
+    ) -> str:
+        """多模态 chat:文本 + 图片(base64 data URL)
+
+        默认 raise NotImplementedError;支持视觉的 Provider(MiniMax)override。
+        screenshot_service OCR 失败时 fallback 到本方法。
+        """
+        raise NotImplementedError(
+            f"{self.name} 不支持视觉识别,只能 OCR 文本模式"
+        )
+
+    @property
+    def supports_vision(self) -> bool:
+        """是否支持图像输入(默认 False,视觉模型 override 返回 True)"""
+        return False
+
 
 class OpenAICompatClient(BaseLLM):
     """OpenAI 兼容 chat API 通用实现(DeepSeek / MiniMax / 豆包共用)

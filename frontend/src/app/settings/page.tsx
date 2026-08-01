@@ -41,7 +41,7 @@ export default function SettingsPage() {
       <Card padding="md" className="space-y-2">
         <div className="font-semibold">📋 关于</div>
         <div className="text-sm text-text-sec">
-          盘后诊股室 MVP v0.1.0 — 个人股票 AI 诊断 Agent
+          买股工具室 MVP v0.1.0 — 个人股票投资辅助工具
         </div>
         <div className="text-xs text-text-ter mt-2">
           ⚠ 投资有风险,本工具所有输出仅供参考,不构成投资建议。

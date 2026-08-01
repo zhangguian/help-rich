@@ -185,23 +185,41 @@ class ScreenshotService:
         return "position"
 
     async def confirm(self, record_id: int, items: list[dict], screenshot_type: str) -> None:
-        """用户确认后入库 transactions / watchlist
+        """用户确认后入库 transactions / watchlist / positions
 
-        position / holdings 类型:持仓是视图(由 transactions 聚合),不入库主数据。
+        v0.4.0 变更:position / holdings 类型不再拒绝,改为逐行 upsert 持仓表
+        (持仓是主数据,股民真实持仓可直接导入)。
         """
         from datetime import date as date_cls
 
-        # 持仓类型:显式拒绝入库,让前端 toast 提示用户
-        if screenshot_type in ("position", "holdings"):
-            await screenshot_repo.mark_rejected(record_id)
-            raise ScreenshotError(
-                "持仓快照是视图(由交易流水实时聚合),不入库主数据。"
-                "请通过 POST /api/transactions 录入每笔流水。",
-                code="HOLDINGS_NOT_PERSISTED",
-            )
-
         async def _do():
-            if screenshot_type == "transactions":
+            if screenshot_type in ("position", "holdings"):
+                # 持仓快照 → 持仓表(代码/名称/股数/每股成本价)
+                from app.services.position_service import upsert_position
+
+                for item in items:
+                    code = item.get("stock_code")
+                    shares = item.get("shares")
+                    if not code or not shares:
+                        raise ScreenshotError(
+                            f"持仓行缺少 stock_code 或 shares: {item}",
+                            code="MISSING_FIELD",
+                        )
+                    price = item.get("cost_price") or item.get("price")
+                    if price is None or float(price) <= 0:
+                        raise ScreenshotError(
+                            f"{code} 缺少成本价,请在预览中补填后重试",
+                            code="MISSING_PRICE",
+                        )
+                    from decimal import Decimal
+
+                    await upsert_position(
+                        stock_code=str(code),
+                        shares=int(shares),
+                        cost_price=Decimal(str(price)),
+                        stock_name=item.get("stock_name"),
+                    )
+            elif screenshot_type == "transactions":
                 for item in items:
                     trade_date = item["trade_date"]
                     if isinstance(trade_date, str):

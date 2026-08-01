@@ -210,7 +210,7 @@ export function CalculatorPanel() {
   );
 }
 
-function ResultGrid({ before, after }: { before: CalculatorBefore; after: CalculatorAfter }) {
+function ResultGrid({ after }: { before: CalculatorBefore; after: CalculatorAfter }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
       <Stat label="新股数" value={`${after.shares.toLocaleString()} 股`} />

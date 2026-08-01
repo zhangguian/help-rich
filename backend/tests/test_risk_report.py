@@ -18,12 +18,13 @@ def client():
 @pytest.fixture(autouse=True)
 def _clean(client):
     from app.db import async_session
-    from app.models.orm import TradeScore, Transaction
+    from app.models.orm import Position, TradeScore, Transaction
 
     async def _do():
         async with async_session() as session:
             await session.execute(delete(TradeScore))
             await session.execute(delete(Transaction))
+            await session.execute(delete(Position))
             await session.commit()
 
     asyncio.run(_do())
@@ -106,6 +107,7 @@ class TestRiskReportAPI:
         from datetime import date
 
         from app.repositories.transaction_repo import transaction_repo
+        from app.services.position_service import recalc_position
 
         async def seed():
             await transaction_repo.create(
@@ -118,6 +120,9 @@ class TestRiskReportAPI:
                 action="buy", shares=1000, price="12.000",
                 trade_date=date(2026, 7, 2),
             )
+            # v0.4.0:直接走 repo 不经 API,需显式同步持仓主数据
+            await recalc_position("600519.SH")
+            await recalc_position("000001.SZ")
 
         asyncio.run(seed())
 

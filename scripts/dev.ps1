@@ -1,4 +1,4 @@
-# 盘后诊股室 - 一键启动 / 停止 开发服务
+# 买股工具室 - 一键启动 / 停止 开发服务
 #
 # Usage:
 #   powershell -File scripts/dev.ps1                # default start

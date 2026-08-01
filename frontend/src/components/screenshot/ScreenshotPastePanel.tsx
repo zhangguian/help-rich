@@ -16,7 +16,7 @@ import { Button } from '../ui/Button';
  *
  * 三选一填入示例(transactions / holdings / watchlist),覆盖截图识别主要场景:
  * - transactions:流水,confirm 后写入 transactions 表
- * - holdings  :持仓快照,confirm 后**拒绝入库**(持仓是视图),用于预览展示
+ * - holdings  :持仓快照,confirm 后**导入持仓主数据**(v0.4.0,price 为每股成本价)
  * - watchlist :自选股,confirm 后写入 watchlist 表
  */
 const EXAMPLES: Record<string, object> = {

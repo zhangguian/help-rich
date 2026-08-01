@@ -1,4 +1,4 @@
-"""盘后诊股室后端入口(MVP v2.1)"""
+"""买股工具室后端入口(MVP v2.1)"""
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -13,6 +13,7 @@ from app.api.calculator import router as calculator_router
 from app.api.diagnose import router as diagnose_router
 from app.api.events import router as events_router
 from app.api.fund_flow import router as fund_flow_router
+from app.api.holdings_health import router as holdings_health_router
 from app.api.kline import router as kline_router
 from app.api.llm_keys import router as llm_keys_router
 from app.api.market import router as market_router
@@ -69,20 +70,23 @@ async def lifespan(app: FastAPI):
 
     if not _os.environ.get("PYTEST_CURRENT_TEST"):
         from app.services.fund_flow_service import start_sina_scheduler
+        from app.services.sector_fund_flow_service import start_sector_scheduler
 
         import asyncio as _asyncio
 
         _asyncio.create_task(start_sina_scheduler(interval_sec=60))
+        # v0.4.1:板块资金异动检测(60s 拉一次,异动 publish)
+        _asyncio.create_task(start_sector_scheduler(interval_sec=60))
 
-    logger.info(f"盘后诊股室后端启动 — v0.2.0,数据库={settings.database_url}")
+    logger.info(f"买股工具室后端启动 — v0.2.0,数据库={settings.database_url}")
     yield
     await engine.dispose()
 
 
 app = FastAPI(
-    title="盘后诊股室",
+    title="买股工具室",
     version="0.1.0",
-    description="个人股票 AI 诊断 Agent — 本地 Web 工具(MVP)",
+    description="个人股票投资辅助工具 — 本地 Web 工具(MVP)",
     lifespan=lifespan,
 )
 
@@ -103,6 +107,7 @@ app.include_router(calculator_router, prefix="/api")
 app.include_router(diagnose_router, prefix="/api")
 app.include_router(events_router, prefix="/api")
 app.include_router(fund_flow_router, prefix="/api")
+app.include_router(holdings_health_router, prefix="/api")
 app.include_router(kline_router, prefix="/api")
 app.include_router(llm_keys_router, prefix="/api")
 app.include_router(market_router, prefix="/api")

@@ -81,5 +81,16 @@ class TransactionRepository:
             await session.commit()
             return True
 
+    async def delete_by_stock(self, stock_code: str) -> int:
+        """删除某股票全部流水(持仓删除时联动,v0.4.0)"""
+        from sqlalchemy import delete as sa_delete
+
+        async with async_session() as session:
+            result = await session.execute(
+                sa_delete(Transaction).where(Transaction.stock_code == stock_code)
+            )
+            await session.commit()
+            return result.rowcount or 0
+
 
 transaction_repo = TransactionRepository()

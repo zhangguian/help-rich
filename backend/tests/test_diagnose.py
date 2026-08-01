@@ -26,15 +26,16 @@ def client():
 
 @pytest.fixture(autouse=True)
 def clean_db(client):
-    """清空交易 + 评分,保证断言独立"""
+    """清空交易 + 评分 + 持仓,保证断言独立"""
     from app.db import async_session
-    from app.models.orm import TradeScore, Transaction
+    from app.models.orm import Position, TradeScore, Transaction
     from sqlalchemy import delete
 
     async def _clean():
         async with async_session() as session:
             await session.execute(delete(TradeScore))
             await session.execute(delete(Transaction))
+            await session.execute(delete(Position))
             await session.commit()
 
     asyncio.run(_clean())

@@ -148,6 +148,36 @@ class TradeScore(Base):
 
 
 # ============================================================
+# === v0.4.0:持仓表(主数据,从流水聚合翻转为持仓出发) ===
+# ============================================================
+
+class Position(Base):
+    """持仓表(v0.4.0 主数据)
+
+    股民真实持仓:手动录入 / 截图导入 / 流水同步维护。
+    流水是事件记录(复盘用),持仓由 recalc_position 保证一致:
+      持仓 = 导入基准(delta) + 全部流水聚合
+    """
+    __tablename__ = "positions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_code: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    stock_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    shares: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 总成本(金额):Decimal 存为字符串(精度保护,与 Transaction.price 一致)
+    total_cost: Mapped[str] = mapped_column(String, nullable=False)
+    # 已实现盈亏(卖出流水累计)
+    realized_pnl: Mapped[str] = mapped_column(String, default="0.00", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    def __repr__(self) -> str:
+        return f"<Position {self.stock_code} {self.shares}股 @成本={self.total_cost}>"
+
+
+# ============================================================
 # === v2.0:截图识别临时记录(P8.1 实施) ===
 # ============================================================
 

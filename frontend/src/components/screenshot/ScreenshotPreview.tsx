@@ -96,6 +96,22 @@ export function ScreenshotPreview({
     </Badge>
   );
 
+  const setCell = (rowIndex: number, key: string, value: string) => {
+    setItems((prev) =>
+      prev.map((it, i) => {
+        if (i !== rowIndex) return it;
+        const next = { ...it };
+        if (key === 'shares') {
+          const n = Number(value);
+          if (Number.isFinite(n) && n > 0) next[key] = n;
+        } else {
+          next[key] = value;
+        }
+        return next;
+      }),
+    );
+  };
+
   const confirm = async () => {
     setBusy(true);
     try {
@@ -103,15 +119,27 @@ export function ScreenshotPreview({
         items,
         screenshotType,
       });
-      showToast({ type: 'success', message: `已确认 ${items.length} 条入库` });
+      showToast({
+        type: 'success',
+        message: isPositionLike
+          ? `已导入 ${items.length} 只持仓`
+          : `已确认 ${items.length} 条入库`,
+      });
+      // v0.4.0:持仓导入后通知持仓区刷新
+      if (isPositionLike) {
+        window.dispatchEvent(new CustomEvent('positions-updated'));
+      }
       onClose();
     } catch (e: unknown) {
       // 后端 detail.code(axios 拦截器标准化为 camelCase)
       const detail =
         (e as { response?: { data?: { detail?: { code?: string; message?: string } } } })
           .response?.data?.detail;
-      if (detail?.code === 'HOLDINGS_NOT_PERSISTED') {
-        showToast({ type: 'warning', message: detail.message ?? '持仓不入库' });
+      if (detail?.code === 'MISSING_PRICE') {
+        showToast({
+          type: 'warning',
+          message: detail.message ?? '缺少成本价,请补填后重试',
+        });
       } else {
         showToast({ type: 'error', message: detail?.message ?? '确认失败,请重试' });
       }
@@ -154,7 +182,7 @@ export function ScreenshotPreview({
         <span className="font-mono font-semibold">{items.length}</span> 条记录
         {isPositionLike && (
           <span className="ml-2 text-warn text-xs">
-            (持仓是视图,确认将拒绝入库)
+            (将导入持仓,可点击表格数字补填/修改成本价)
           </span>
         )}
         ,请核对后确认。
@@ -201,19 +229,31 @@ export function ScreenshotPreview({
                     {String(it[nameKey] ?? '')}
                   </td>
                 )}
-                {detailKeys.map((k) => (
-                  <td
-                    key={k}
-                    className={clsx(
-                      'px-3 py-2 whitespace-nowrap',
-                      INT_FIELDS.has(k) || NUM_FIELDS.has(k) || CURRENCY_FIELDS.has(k)
-                        ? 'text-right font-mono'
-                        : '',
-                    )}
-                  >
-                    {formatCell(k, it[k])}
-                  </td>
-                ))}
+                {detailKeys.map((k) => {
+                  const editable =
+                    isPositionLike && (k === 'shares' || k === 'price' || k === 'cost_price');
+                  return (
+                    <td
+                      key={k}
+                      className={clsx(
+                        'px-3 py-2 whitespace-nowrap',
+                        INT_FIELDS.has(k) || NUM_FIELDS.has(k) || CURRENCY_FIELDS.has(k)
+                          ? 'text-right font-mono'
+                          : '',
+                      )}
+                    >
+                      {editable ? (
+                        <input
+                          defaultValue={String(it[k] ?? '')}
+                          onBlur={(e) => setCell(i, k, e.target.value)}
+                          className="w-24 text-right font-mono text-sm px-1 py-0.5 border border-border-def rounded-sm bg-bg-surface focus:border-accent"
+                        />
+                      ) : (
+                        formatCell(k, it[k])
+                      )}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
@@ -232,12 +272,10 @@ export function ScreenshotPreview({
             variant="primary"
             onClick={confirm}
             loading={busy}
-            disabled={isPositionLike}
-            title={
-              isPositionLike ? '持仓是视图,不入库;请通过 /transactions 录入流水' : ''
-            }
           >
-            {isPositionLike ? '持仓不入库' : `✓ 确认入库(${items.length})`}
+            {isPositionLike
+              ? `✓ 确认导入持仓(${items.length})`
+              : `✓ 确认入库(${items.length})`}
           </Button>
         </div>
       </div>

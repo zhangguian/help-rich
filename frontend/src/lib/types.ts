@@ -85,6 +85,40 @@ export interface PositionListResponse {
   items: Position[];
 }
 
+/** 手动录入 / 覆盖持仓(v0.4.0) */
+export interface PositionCreate {
+  stockCode: string;
+  shares: number;
+  costPrice: string;
+  stockName?: string;
+}
+
+/** 持仓体检(v0.4.0) */
+export interface HoldingsHealthItem {
+  stockCode: string;
+  stockName: string | null;
+  shares: number;
+  avgCost: string;
+  currentPrice: string;
+  floatingPnl: string;
+  floatingPnlRatioPct: number;
+  concentrationPct: number;
+  status: 'profit' | 'loss' | 'flat' | 'high_concentration' | 'unknown';
+  priceAvailable: boolean;
+}
+
+export interface HoldingsHealth {
+  totalPositions: number;
+  totalMarketValue: string;
+  totalFloatingPnl: string;
+  pnlRatioPct: number;
+  riskLevel: string;
+  riskScore: number;
+  warnings: string[];
+  items: HoldingsHealthItem[];
+  quotesUnavailable: boolean;
+}
+
 /** 诊断(P4.4) */
 export interface DiagnoseOut {
   tradeId: number;

@@ -8,7 +8,7 @@ import pytest
 from app.data import sina
 from app.data.sina import fetch_sector_fund_flow_rank, fetch_sina_news
 from app.services.news_service import get_sina_news
-from app.services.sector_fund_flow_service import get_sector_fund_flow
+from app.services.sector_fund_flow_service import _detect_alerts, get_sector_fund_flow
 
 
 def make_fake_client(responses):
@@ -159,3 +159,69 @@ class TestMarketAPI:
         r = client.get("/api/news/sina")
         assert r.status_code == 502
         assert r.json()["detail"]["code"] == "DATA_SOURCE_UNAVAILABLE"
+
+
+# ============================================================
+# v0.4.1 板块资金异动检测(纯函数 _detect_alerts)
+# ============================================================
+
+def _item(name: str, net_yi: float, top_stock: str | None = None) -> dict:
+    """构造 get_sector_fund_flow 返回的 item 结构"""
+    return {
+        "name": name,
+        "netamount_yi": net_yi,
+        "top_stock": {"code": top_stock, "name": "T", "price": 0, "change_pct": 0, "ratioamount": 0} if top_stock else None,
+    }
+
+
+class TestSectorFundFlowAlerts:
+    def test_no_alert_when_unchanged(self):
+        prev = [("电子信息", 5.0, "600519.SH")]
+        curr = [_item("电子信息", 5.1, "600519.SH")]
+        assert _detect_alerts(0, prev, curr) == []
+
+    def test_alert_when_delta_exceeds_threshold(self):
+        prev = [("电子信息", 1.0, "600519.SH")]
+        curr = [_item("电子信息", 3.0, "600519.SH")]  # +2.0 亿元
+        alerts = _detect_alerts(0, prev, curr)
+        assert len(alerts) == 1
+        a = alerts[0]
+        assert a["name"] == "电子信息"
+        assert a["prev_yi"] == 1.0
+        assert a["curr_yi"] == 3.0
+        assert a["delta_yi"] == 2.0
+        assert a["reason"] == "delta"
+        assert a["fenlei"] == 0
+
+    def test_alert_when_sector_appears_with_large_net(self):
+        prev = []
+        curr = [_item("新板块", 2.5, "000001.SZ")]
+        alerts = _detect_alerts(0, prev, curr)
+        assert len(alerts) == 1
+        assert alerts[0]["reason"] == "new"
+        assert alerts[0]["delta_yi"] == 2.5
+
+    def test_no_alert_for_small_new_sector(self):
+        prev = []
+        curr = [_item("新板块", 0.3, None)]  # < 1 亿阈值
+        assert _detect_alerts(0, prev, curr) == []
+
+    def test_alert_on_top_stock_change(self):
+        prev = [("电子信息", 2.0, "600519.SH")]
+        curr = [_item("电子信息", 2.05, "000001.SZ")]  # 领涨股切换
+        alerts = _detect_alerts(0, prev, curr)
+        assert any(a["reason"].startswith("top_stock_changed") for a in alerts)
+
+    def test_fenlei_passed_through(self):
+        prev = [("板块", 1.0, None)]
+        curr = [_item("板块", 3.0, None)]
+        alerts = _detect_alerts(2, prev, curr)
+        assert alerts[0]["fenlei"] == 2
+
+    def test_custom_threshold(self):
+        prev = [("板块", 0.0, None)]
+        curr = [_item("板块", 0.3, None)]  # delta 0.3
+        # 阈值 0.5 → 0.3 < 0.5 不触发
+        assert _detect_alerts(0, prev, curr, threshold_yi=0.5) == []
+        # 阈值 0.1 → 0.3 > 0.1 触发
+        assert len(_detect_alerts(0, prev, curr, threshold_yi=0.1)) == 1

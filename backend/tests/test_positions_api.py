@@ -25,14 +25,15 @@ def client():
 
 @pytest.fixture(autouse=True)
 def clean_db(client):
-    """每个测试前清空 transactions 表,保证断言独立(依赖 client 完成建表)"""
+    """每个测试前清空 transactions + positions 表,保证断言独立(依赖 client 完成建表)"""
     from app.db import async_session
-    from app.models.orm import Transaction
+    from app.models.orm import Position, Transaction
     from sqlalchemy import delete
 
     async def _clean():
         async with async_session() as session:
             await session.execute(delete(Transaction))
+            await session.execute(delete(Position))
             await session.commit()
 
     asyncio.run(_clean())

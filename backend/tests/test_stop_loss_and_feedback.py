@@ -26,9 +26,9 @@ def client():
 
 @pytest.fixture(autouse=True)
 def _clean(client):
-    """清空测试残留(transaction + trade_score + stop_loss)"""
+    """清空测试残留(transaction + trade_score + stop_loss + position)"""
     from app.db import async_session
-    from app.models.orm import StopLoss, TradeScore, Transaction
+    from app.models.orm import Position, StopLoss, TradeScore, Transaction
     from sqlalchemy import delete
 
     async def _do():
@@ -36,6 +36,7 @@ def _clean(client):
             await session.execute(delete(TradeScore))
             await session.execute(delete(StopLoss))
             await session.execute(delete(Transaction))
+            await session.execute(delete(Position))
             await session.commit()
 
     asyncio.run(_do())

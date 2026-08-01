@@ -28,6 +28,40 @@
 
 ## 历史记录
 
+### 2026-08-02 | v0.4.1 | 板块资金异动检测 + SSE 推送(A2 资金流订阅)
+
+#### Added(新增)
+- `GET /api/sector-fund-flow/events?fenlei=N`(可选):SSE 订阅板块资金异动。后台调度器每 60s 拉一次 fenlei=0 排行,异动(净额绝对变化 ≥ 1 亿 / 领涨股切换 / 新进榜)publish `sector_fund_flow_alert`,客户端按 fenlei 过滤(不传 = 全部)
+- `app.services.sector_fund_flow_service.start_sector_scheduler(interval_sec=60)`:后台调度,异动检测纯函数 `_detect_alerts`(可单测)
+- `main.py` lifespan 启动 `start_sina_scheduler` + `start_sector_scheduler` 两个调度器
+
+#### Changed(修改)
+- `sector_fund_flow_service` 新增异动检测工具函数 `_detect_alerts / _to_snapshot / reset_snapshots`(纯函数)
+
+#### Test
+- 新增 `tests/test_sina_data.py::TestSectorFundFlowAlerts` 7 条:无变化无 alert / delta 超阈值触发 / 新进榜 / 小净额不触发 / 领涨股切换 / fenlei 透传 / 自定义阈值
+
+### 2026-08-02 | v0.4.0 | 持仓主数据化(持仓可导入 / 流水自动同步)+ 产品更名
+
+#### Breaking(破坏性)
+- `GET /api/positions` 语义变更:不再从流水实时聚合,改读 `positions` 主数据表(流水录入自动同步,导入/手动调整的持仓也可见)
+- `POST /api/screenshot/{id}/confirm`(screenshot_type=position/holdings):不再返回 422 `HOLDINGS_NOT_PERSISTED`,改为逐行写入持仓主数据(缺 code/shares → 422 `MISSING_FIELD`;缺成本价 → 422 `MISSING_PRICE`)
+- `GET /api/annual-report/{year}` 新增 `no_transactions` 字段(默认 false;无流水时 true,前端提示"可直接导入持仓")
+- 产品名:盘后诊股室 → 买股工具室(副标题 → 个人股票投资辅助工具)
+
+#### Added(新增)
+- `POST /api/positions`:手动录入 / 覆盖单只持仓(201,body `{stock_code, shares, cost_price, stock_name?}`,覆盖语义,已实现盈亏保留流水部分)
+- `DELETE /api/positions/{code}`:删除单只持仓(204,联动删除该股全部流水 + 评分,防 recalc 复活)
+- `GET /api/holdings-health`:持仓体检(真实持仓表 + 实时行情 + calc_risk;组合市值/浮盈/盈亏率/风险 + 单只 status profit|loss|flat|high_concentration|unknown + concentration_pct;行情失败降级成本价并标记 price_available=false / quotes_unavailable)
+- `positions` 表 + Alembic 迁移 `b4c2d1e6f7a8`(含从流水聚合 backfill 初始持仓)
+
+#### Changed(修改)
+- 流水变动自动同步持仓:POST/PATCH/DELETE /api/transactions 后重算该股持仓(`capture_delta` 变更前捕获导入基准 → `recalc_position` 变更后应用;卖出超额校验改读持仓主数据)
+- 诊断上下文:position_before = 导入基准(delta) + 交易前流水聚合;集中度维度读真实持仓表
+
+#### Test
+- 新增 `tests/test_positions_v040.py` 17 条:流水同步/卖出减仓/清仓删行/超额拒绝/导入基准保留/CRUD/删除联动/截图导入端到端/年账单 flag/体检;总 273 全绿
+
 ### 2026-08-01 | v0.3.3 | 板块资金排行 + 7×24 快讯(新浪 guide §7 / §9.2)
 
 #### Added

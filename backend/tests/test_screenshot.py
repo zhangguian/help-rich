@@ -7,6 +7,7 @@
 """
 import asyncio
 import json
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,14 +26,15 @@ def client():
 
 @pytest.fixture(autouse=True)
 def _db_tables(client):
-    """建表(lifespan create_all)+ 每个测试前清空 screenshot_records"""
+    """建表(lifespan create_all)+ 每个测试前清空 screenshot_records + positions"""
     from app.db import async_session
-    from app.models.orm import ScreenshotRecord
+    from app.models.orm import Position, ScreenshotRecord
     from sqlalchemy import delete
 
     async def _clean():
         async with async_session() as session:
             await session.execute(delete(ScreenshotRecord))
+            await session.execute(delete(Position))
             await session.commit()
 
     asyncio.run(_clean())
@@ -326,8 +328,8 @@ class TestScreenshotService:
 
         assert asyncio.run(watchlist_repo.contains("300750.SZ"))
 
-    def test_confirm_holdings_rejected(self):
-        """holdings 类型:持仓是视图,不入库,抛 HOLDINGS_NOT_PERSISTED"""
+    def test_confirm_holdings_imports_position(self):
+        """holdings 类型:v0.4.0 起导入持仓表(持仓主数据)"""
         record = asyncio.run(screenshot_repo.create(
             parsed_items=[{"stock_code": "001896.SZ"}], screenshot_type="holdings",
         ))
@@ -336,15 +338,34 @@ class TestScreenshotService:
              "price": "18.500", "current_price": "12.020",
              "profit": -1944.06, "profit_ratio": -35.027},
         ]
-        with pytest.raises(ScreenshotError) as exc:
-            asyncio.run(screenshot_service.confirm(record.id, items, "holdings"))
-        assert exc.value.code == "HOLDINGS_NOT_PERSISTED"
-        # 记录标记为 rejected
+        asyncio.run(screenshot_service.confirm(record.id, items, "holdings"))
+        # 记录确认成功
         got = asyncio.run(screenshot_repo.get_by_id(record.id))
-        assert got.status == "rejected"
+        assert got.status == "confirmed"
+        # 持仓真的入库了
+        from app.services.position_service import get_position
+        p = asyncio.run(get_position("001896.SZ"))
+        assert p is not None
+        assert p.shares == 300
+        assert p.avg_cost == Decimal("18.500")
 
-    def test_confirm_position_rejected(self):
-        """position 类型:同 holdings,拒绝入库"""
+    def test_confirm_position_imports_position(self):
+        """position 类型:同 holdings,导入持仓表"""
+        record = asyncio.run(screenshot_repo.create(
+            parsed_items=[], screenshot_type="position",
+        ))
+        asyncio.run(screenshot_service.confirm(
+            record.id, [{"stock_code": "600519.SH", "stock_name": "贵州茅台",
+                         "shares": 100, "cost_price": "1450.000"}], "position"
+        ))
+        from app.services.position_service import get_position
+        p = asyncio.run(get_position("600519.SH"))
+        assert p is not None
+        assert p.shares == 100
+        assert p.avg_cost == Decimal("1450.000")
+
+    def test_confirm_position_missing_shares_rejected(self):
+        """缺 shares 仍拒绝(MISSING_FIELD)"""
         record = asyncio.run(screenshot_repo.create(
             parsed_items=[], screenshot_type="position",
         ))
@@ -352,7 +373,7 @@ class TestScreenshotService:
             asyncio.run(screenshot_service.confirm(
                 record.id, [{"stock_code": "600519.SH"}], "position"
             ))
-        assert exc.value.code == "HOLDINGS_NOT_PERSISTED"
+        assert exc.value.code == "MISSING_FIELD"
 
     def test_parse_paste_holdings_keeps_type(self):
         """parse_paste:holdings 类型原样存储(不做归一化)"""
