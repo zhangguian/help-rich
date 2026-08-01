@@ -75,3 +75,6 @@ export const apiPost = <T>(url: string, body?: unknown) =>
 export const apiPut = <T>(url: string, body?: unknown) =>
   api.put<T>(url, body).then((r) => r.data);
 export const apiDelete = <T>(url: string) => api.delete<T>(url).then((r) => r.data);
+
+/** SSE 端点(原生 fetch,不走 axios)*/
+export const SSE_URL = '/events/sse';

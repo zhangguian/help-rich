@@ -85,7 +85,11 @@ class DiagnoseService:
         # 当前全部持仓(含目标交易,用于集中度 + 0 数据降级)
         all_positions = aggregate_positions(all_tx)
 
-        recent = before_trades[-RECENT_LIMIT:]
+        recent_objs = before_trades[-RECENT_LIMIT:]
+        recent = [
+            {"action": t.action, "trade_date": t.trade_date}
+            for t in recent_objs
+        ]
 
         # 3. market_ctx(MVP 中性:大盘涨跌待接指数行情,先给中性分)
         market_ctx = {"index_change_pct": 0.0, "sector_rank": None}
@@ -179,7 +183,7 @@ class DiagnoseService:
         trade_line = build_trade_line(sanitized)
         recent_summary = "、".join(
             f"{t.stock_code} {t.action} {t.shares}股@{t.trade_date}"
-            for t in recent
+            for t in recent_objs
         ) or "无"
         user_prompt = build_diagnose_user_prompt(
             trade_line=trade_line,

@@ -28,6 +28,32 @@
 
 ## 历史记录
 
+### 2026-08-01 | v0.1.8 | 前端 MVP 收尾(Day 5/6/7 前端)
+
+#### Added
+- `/settings` 设置页(P7.3):
+  - LLM Provider 卡(P7.11):3 个 provider 单选切换,激活高亮,未配置灰显
+  - LLM Key 卡(P7.12):密码框 + 显示/隐藏 + [测试连接] + 状态色
+  - 截图识别入口卡(P8.9)
+- `/transactions` 升级(P4.5~P4.10):
+  - ScoreBadge(5 档色 + 滚动数字动效)
+  - ScoreDetail 弹窗:三态(pending 骨架屏 / success 完整 / failed 重试)
+  - 评语反馈按钮(👍 有用 / 👎 没用 → PUT /api/diagnose/{id}/feedback)
+  - 脱敏 tooltip 展开实际传给 LLM 的 6 项字段
+  - 重新评分按钮(A/B 重生成,P7.11 关联)
+- 首页持仓卡(P5.3):[+ 设止损] / [🛡 ¥价格][⚡ 模拟触达][🗑 删除]
+- StopLossAlert 全屏提醒(P5.4):必选其一(止损离场/再扛一下/静音)+ Web Notification + vibrate + 蜂鸣
+- 截图上传向导(P8.6~P8.10):上传/粘贴双模式 + Dropzone + 预览表格 + 置信度标记 + 确认入库/重试
+- OnboardingHint(P7.1):3 步骤引导(localStorage 持久化关闭)
+- 通用 Modal 组件(maskClosable/escToClose 控制)
+
+#### Changed
+- SSE 客户端封装(P4.6):失败 3 次降级 5s 轮询 + online 事件回切 + localStorage 持久化 + 心跳过滤
+- 首页新增 [⚙ 设置] 入口链接
+
+#### Fixed
+- `scorer._interval_score` 期望 dict 但 diagnose_service 传 ORM 对象,导致 8 笔评分 BackgroundTasks 静默失败;修:recent 双轨(ORM 给 recent_summary + dict 给 score_trade)
+
 ### 2026-08-01 | v0.1.7 | 止损 + 评语反馈 + 年账单(P4.9/P5.1/P5.2/P6.1)
 
 #### Added

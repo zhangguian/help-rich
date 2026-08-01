@@ -2,6 +2,9 @@ import Link from 'next/link';
 
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
+import { PositionsList } from '@/components/positions/PositionsList';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
+import { ScreenshotPanel } from '@/components/screenshot/ScreenshotPanel';
 import { decimalFormat } from '@/lib/decimalFormat';
 import type { Position, PositionListResponse } from '@/lib/types';
 
@@ -58,6 +61,9 @@ export default async function Home() {
           <Link href="/calculator">
             <Button>🧮 计算器</Button>
           </Link>
+          <Link href="/settings">
+            <Button variant="ghost">⚙ 设置</Button>
+          </Link>
         </div>
       </header>
 
@@ -105,71 +111,15 @@ export default async function Home() {
           </div>
         </Card>
       ) : (
-        <div className="space-y-3">
-          {positions.map((p) => {
-            const today = Number(p.todayPnl ?? 0);
-            const floating = Number(p.floatingPnl ?? 0);
-            return (
-              <Card key={p.stockCode} padding="md">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <div className="font-semibold">
-                      {p.stockName ?? p.stockCode}
-                      <span className="text-text-ter text-sm ml-2 font-mono">
-                        {p.stockCode}
-                      </span>
-                    </div>
-                    <div className="text-sm text-text-sec mt-1">
-                      持仓 <span className="font-mono">{p.shares}</span> 股 ·
-                      加权成本{' '}
-                      <span className="font-mono">¥{decimalFormat(p.avgCost)}</span>
-                      {p.currentPrice !== null && (
-                        <>
-                          {' '}
-                          · 现价{' '}
-                          <span className="font-mono">
-                            ¥{decimalFormat(p.currentPrice)}
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  <div className="text-right space-y-1">
-                    <div>
-                      <span className="text-xs text-text-ter mr-2">今日盈亏</span>
-                      <span
-                        className={`font-mono font-semibold ${
-                          p.todayPnl !== null ? pnlClass(today) : 'text-text-ter'
-                        }`}
-                      >
-                        {p.todayPnl !== null ? `¥${decimalFormat(p.todayPnl)}` : '--'}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-xs text-text-ter mr-2">浮动盈亏</span>
-                      <span
-                        className={`font-mono font-semibold ${
-                          p.floatingPnl !== null ? pnlClass(floating) : 'text-text-ter'
-                        }`}
-                      >
-                        {p.floatingPnl !== null
-                          ? `¥${decimalFormat(p.floatingPnl)}`
-                          : '--'}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-xs text-text-ter mr-2">已实现盈亏</span>
-                      <span className={`font-mono font-semibold ${pnlClass(Number(p.realizedPnl))}`}>
-                        ¥{decimalFormat(p.realizedPnl)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </Card>
-            );
-          })}
-        </div>
+        <PositionsList positions={positions} />
       )}
+
+      <section className="mt-8">
+        <h2 className="text-lg font-semibold mb-3">截图识别</h2>
+        <ScreenshotPanel />
+      </section>
+
+      <OnboardingHint />
 
       <footer className="mt-12 text-center text-text-ter text-xs">
         ⚠ 投资有风险,本工具所有输出仅供参考,不构成投资建议。

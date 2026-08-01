@@ -85,6 +85,47 @@ export interface PositionListResponse {
   items: Position[];
 }
 
+/** 诊断(P4.4) */
+export interface DiagnoseOut {
+  tradeId: number;
+  status: 'pending' | 'success' | 'no_key' | 'failed';
+  score: number | null;
+  breakdown: Record<string, number> | null;
+  aiComment: string | null;
+  aiStatus: string | null;
+}
+
+export interface FeedbackUpdate {
+  feedback: 'useful' | 'useless' | null;
+}
+
+/** 止损(P5.1) */
+export interface StopLoss {
+  id: number;
+  stockCode: string;
+  stopLossPrice: string;
+  enabled: boolean;
+  notifySound: boolean;
+  notifyDesktop: boolean;
+  notifyVibrate: boolean;
+  lastTriggeredAt: string | null;
+}
+
+/** Provider 信息(P4.2e) */
+export interface LlmProviderItem {
+  name: string;
+  model: string;
+  configured: boolean;
+}
+
+export interface LlmProvidersOut {
+  items: LlmProviderItem[];
+}
+
+export interface LlmSettingsOut {
+  activeProvider: 'deepseek' | 'minimax' | 'doubao';
+}
+
 /** 实时行情(P3.5) */
 export interface Quote {
   code: string;
