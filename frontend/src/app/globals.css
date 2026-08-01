@@ -11,10 +11,16 @@
     color: var(--text-primary);
     min-height: 100vh;
   }
-  /* 等宽数字 */
   .font-mono {
     font-family: var(--font-geist-mono), 'JetBrains Mono', 'SF Mono', monospace;
     font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* 21 档盈亏热力图:21 等分 */
+  .grid-cols-21 {
+    grid-template-columns: repeat(21, minmax(0, 1fr));
   }
 }
 

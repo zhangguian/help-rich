@@ -889,8 +889,8 @@ MVP 完成当天(Day 8 Phase 7.10),**立即**启动 `stock_project-master` 二�
 
 | # | Phase | 估时 | 实际 | 状态 | 开始 | 完成 | 备注 |
 |---|---|---|---|---|---|---|---|
-| P3.3 | CalculatorPanel | 2h | — | ☐ | | | |
-| **P3.4** | **PnlHeatmap 21 档** | **3h** | — | ☐ | | | UI 主菜 |
+| P3.3 | CalculatorPanel(左右分栏 + 实时计算 + 数字 Mono)| 2h | 0.5h | ✅ | 15:50 | 16:15 | 300ms debounce 实时调 /calculator;typecheck 0 errors |
+| **P3.4** | **PnlHeatmap 21 档(主菜)** | **3h** | **0.5h** | **✅** | **16:15** | **16:35** | **当前价标线 + 加仓区间高亮 + hover 放大 1.2x + 颜色强度按 |pnl| 缩放** |
 | P3.5 | 股票 + 行情 | 2h | — | ☐ | | | akshare 风险点 |
 | P3.6 | 计算器联调 | 1h | — | ☐ | | | |
 | P3.5.1 | PositionOut today | 1h | — | ☐ | | | |
@@ -975,7 +975,7 @@ MVP 完成当天(Day 8 Phase 7.10),**立即**启动 `stock_project-master` 二�
 ```
 Day 1 总进度:7 / 7 Phase(2.0h / 8h = 25%)
 Day 2 总进度:4 / 5 Phase(2.1h / 8h = 26%)
-Day 3 总进度:0 / 8 Phase(0h / 8h = 0%)
+Day 3 总进度:2 / 8 Phase(1.0h / 8h = 12%)
 Day 4 总进度:0 / 4 Phase(0h / 8h = 0%)
 Day 5 总进度:0 / 11 Phase(0h / 8h = 0%)
 Day 6 总进度:0 / 5 Phase(0h / 4h = 0%)
