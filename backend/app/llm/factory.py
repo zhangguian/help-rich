@@ -13,10 +13,12 @@ from app.repositories.llm_keys_repo import llm_keys_repo
 class ProviderFactory:
     _instances: dict[str, BaseLLM] = {}
 
+    # value = (ClientClass, model_name_str)
+    # model_name 必须显式存字符串,不能访问类 property(类层面访问得到的是 property 对象)
     _BUILDERS = {
-        "deepseek": DeepSeekClient,
-        "minimax": MiniMaxClient,
-        "doubao": DoubaoClient,
+        "deepseek": (DeepSeekClient, "deepseek-chat"),
+        "minimax": (MiniMaxClient, "abab6.5s-chat"),
+        "doubao": (DoubaoClient, "doubao-pro-32k"),
     }
 
     @classmethod
@@ -31,7 +33,8 @@ class ProviderFactory:
         if key is None:
             return None
 
-        instance = cls._BUILDERS[name](key)
+        client_cls = cls._BUILDERS[name][0]
+        instance = client_cls(key)
         cls._instances[name] = instance
         return instance
 
@@ -40,8 +43,8 @@ class ProviderFactory:
         """返回所有 Provider 配置状态(前端设置页用)"""
         status = await llm_keys_repo.list_status()
         return [
-            {"name": name, "model": builder.model_name, "configured": status.get(name, False)}
-            for name, builder in cls._BUILDERS.items()
+            {"name": name, "model": model, "configured": status.get(name, False)}
+            for name, (_, model) in cls._BUILDERS.items()
         ]
 
     @classmethod
