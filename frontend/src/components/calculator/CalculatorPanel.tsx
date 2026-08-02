@@ -86,6 +86,11 @@ export function CalculatorPanel({
     (p) => p.stockCode === normalizeCode(stockCode),
   );
 
+  const currentPricePct =
+    result?.after.costPrice != null && currentPosition?.currentPrice != null
+      ? (Number(currentPosition.currentPrice) / Number(result.after.costPrice) - 1) * 100
+      : undefined;
+
   // 实时计算(输入即算,300ms debounce)
   useEffect(() => {
     if (!txPrice || !stockCode || txShares <= 0) {
@@ -244,8 +249,11 @@ export function CalculatorPanel({
                   <input
                     type="number"
                     value={txShares}
-                    onChange={(e) => setTxShares(Number(e.target.value))}
-                    min={1}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      setTxShares(v >= 1 ? v : 1);
+                    }}
+                    min={0}
                     step={100}
                     className="w-full px-3 py-2 border border-border-def rounded-md font-mono bg-bg-surface text-text-pri focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-text-ter/60"
                   />
@@ -284,7 +292,7 @@ export function CalculatorPanel({
             {calculating && <span className="text-xs text-text-ter">计算中...</span>}
           </div>
           <ResultGrid before={result.before} after={result.after} />
-          <PnlHeatmap grid={result.pnlGrid} />
+          <PnlHeatmap grid={result.pnlGrid} currentPricePct={currentPricePct} />
         </Card>
       )}
     </div>
@@ -300,7 +308,7 @@ function ResultGrid({ after }: { before: CalculatorBefore; after: CalculatorAfte
         value={after.costPrice ? `¥${after.costPrice}` : '— 清仓'}
         highlight
       />
-      <Stat label="新总成本" value={`¥${decimalFormat(after.totalCost)}`} />
+      <Stat label="持仓资金" value={`¥${decimalFormat(after.totalCost)}`} />
       <Stat
         label="已实现盈亏"
         value={`¥${decimalFormat(after.realizedPnl)}`}

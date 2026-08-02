@@ -16,11 +16,11 @@ import type { PnlGridRow } from '@/lib/types';
  */
 interface PnlHeatmapProps {
   grid: PnlGridRow[];
-  currentPricePct?: number;  // 当前价对应的 pct(用于标线)
+  currentPricePct?: number | undefined;  // 当前价对应的 pct(用于标线);undefined 时不渲染
   recommendedRange?: [number, number];  // 加仓区间(浅蓝背景)
 }
 
-export function PnlHeatmap({ grid, currentPricePct = 0, recommendedRange }: PnlHeatmapProps) {
+export function PnlHeatmap({ grid, currentPricePct, recommendedRange }: PnlHeatmapProps) {
   const [hovered, setHovered] = useState<number | null>(null);
 
   if (grid.length === 0) return null;
@@ -28,6 +28,14 @@ export function PnlHeatmap({ grid, currentPricePct = 0, recommendedRange }: PnlH
   const minPnl = Math.min(...grid.map((r) => Number(r.pnl.replace(/,/g, ''))));
   const maxPnl = Math.max(...grid.map((r) => Number(r.pnl.replace(/,/g, ''))));
   const range = Math.max(Math.abs(minPnl), Math.abs(maxPnl), 1);
+
+  const markerStyle =
+    currentPricePct !== undefined
+      ? {
+          leftPct: Math.max(2, Math.min(98, ((currentPricePct + 10) / 20) * 100)),
+          label: `当前 ${currentPricePct > 0 ? '+' : ''}${currentPricePct.toFixed(1)}%`,
+        }
+      : null;
 
   return (
     <div>
@@ -96,14 +104,14 @@ export function PnlHeatmap({ grid, currentPricePct = 0, recommendedRange }: PnlH
         </div>
 
         {/* 当前价标线 */}
-        {currentPricePct !== undefined && (
+        {markerStyle && (
           <div
             className="absolute top-0 bottom-0 w-0.5 border-l-2 border-dashed border-accent pointer-events-none"
-            style={{ left: `${((currentPricePct + 10) / 20) * 100}%` }}
-            title={`当前价对应 ${currentPricePct}%`}
+            style={{ left: `${markerStyle.leftPct}%` }}
+            title={markerStyle.label}
           >
             <div className="absolute -top-5 -translate-x-1/2 text-[10px] font-mono text-accent whitespace-nowrap">
-              当前 {currentPricePct > 0 ? `+${currentPricePct}` : currentPricePct}%
+              {markerStyle.label}
             </div>
           </div>
         )}
