@@ -209,6 +209,49 @@ export interface MarketOverview {
   fetchedAt: string;
 }
 
+/** 指数 sparkline(roadmap §3.9 大盘 Tab) */
+export interface MarketIndexSparklinePoint {
+  date: string;
+  close: number;
+}
+export interface MarketIndexSparks {
+  count: number;
+  sparks: Record<string, MarketIndexSparklinePoint[]>;
+}
+
+/** 沪深 A 股涨跌家数 + 区间分布(roadmap §3.9 大盘 Tab) */
+export interface MarketSentiment {
+  sampleSize: number;
+  upTotal: number;
+  downTotal: number;
+  flatTotal: number;
+  buckets: {
+    limitUp: number;
+    up5_10: number;
+    up1_5: number;
+    up0_1: number;
+    flat: number;
+    down0_1: number;
+    down1_5: number;
+    down5_10: number;
+    limitDown: number;
+  };
+  amountYi: number;
+}
+
+/** A 股个股主力净流入榜(roadmap §3.9 大盘 Tab,降级估算) */
+export interface MainFundFlowItem {
+  code: string;
+  name: string;
+  currentPrice: string;
+  changePct: number;
+  netamountYi: number;
+}
+export interface MainFundFlowResponse {
+  limit: number;
+  items: MainFundFlowItem[];
+}
+
 /** 计算器(P3.2) */
 export interface CalculatorRequest {
   stockCode: string;

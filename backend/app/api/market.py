@@ -13,7 +13,12 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.services.event_bus import event_bus
-from app.services.market_overview_service import get_market_overview
+from app.services.market_overview_service import (
+    fetch_main_fund_flow,
+    fetch_market_sentiment,
+    fetch_market_sparklines,
+    get_market_overview,
+)
 from app.services.news_service import get_sina_news
 from app.services.sector_fund_flow_service import FENLEI_MAP, get_sector_fund_flow
 
@@ -142,7 +147,6 @@ async def market_overview_endpoint() -> dict:
     data = await get_market_overview()
     has_any_index = any(it is not None for it in data["indexes"])
     if not has_any_index and not data["gainers"] and not data["losers"]:
-        # 三个部分全空才视为完全不可用
         raise HTTPException(
             status_code=503,
             detail={
@@ -151,6 +155,67 @@ async def market_overview_endpoint() -> dict:
             },
         )
     return data
+
+
+@router.get("/market/index-sparks")
+async def market_index_sparks_endpoint(count: int = 60) -> dict:
+    """三大主指迷你趋势线(roadmap §3.9 sparkline)
+
+    - 走新浪 K 线 JSONP,不落 KlineCache(避免与个股混表)
+    - 单只失败 → 空 list,不影响其它
+    - 全失败 → 503
+    """
+    if count < 10 or count > 200:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_COUNT", "message": "count 应在 10~200"},
+        )
+    data = await fetch_market_sparklines(count=count)
+    if not any(data.values()):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "SPARK_UNAVAILABLE",
+                "message": "指数 sparkline 数据源暂不可用",
+            },
+        )
+    return {"count": count, "sparks": data}
+
+
+@router.get("/market/sentiment")
+async def market_sentiment_endpoint() -> dict:
+    """沪深 A 股涨跌家数 + 区间分布(roadmap §3.9 涨跌分布)
+
+    注:样本量 ~200,反映情绪概览。
+    """
+    try:
+        return await fetch_market_sentiment()
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "SENTIMENT_UNAVAILABLE", "message": str(e)},
+        ) from e
+
+
+@router.get("/market/main-fund-flow")
+async def market_main_fund_flow_endpoint(limit: int = 10) -> dict:
+    """A 股个股主力净流入榜(roadmap §3.9 主力净流入)
+
+    注:此为降级方案(按涨跌幅近似估算),非真实主力净额。
+    """
+    if limit < 1 or limit > 50:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_LIMIT", "message": "limit 应在 1~50"},
+        )
+    try:
+        items = await fetch_main_fund_flow(limit=limit)
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "MAIN_FUND_UNAVAILABLE", "message": str(e)},
+        ) from e
+    return {"limit": limit, "items": items}
 
 
 __all__ = ["router"]

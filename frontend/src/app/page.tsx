@@ -15,7 +15,7 @@ import { CalculatorPanel } from '@/components/calculator/CalculatorPanel';
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { KLineChart, type KlinePeriod } from '@/components/charts/KLineChart';
 import { HoldingsHealthPanel } from '@/components/holdings-health/HoldingsHealthPanel';
-import { MarketOverviewBar } from '@/components/market/MarketOverviewBar';
+import { MarketOverviewPage } from '@/components/market/MarketOverviewPage';
 import { NewsFeed } from '@/components/news/NewsFeed';
 import { PositionStatsCards } from '@/components/positions/PositionStatsCards';
 import { PositionSummaryTable } from '@/components/positions/PositionSummaryTable';
@@ -25,11 +25,12 @@ import { GlassCard } from '@/components/ui/GlassCard';
 import { LiquidModal } from '@/components/ui/LiquidModal';
 import { WatchList, type WatchItem } from '@/components/watch/WatchList';
 
-type TabKey = 'watch' | 'position' | 'sector' | 'news' | 'settings';
+type TabKey = 'watch' | 'position' | 'market' | 'sector' | 'news' | 'settings';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'watch', label: '自选' },
   { key: 'position', label: '持仓' },
+  { key: 'market', label: '大盘' },
   { key: 'sector', label: '板块资金' },
   { key: 'news', label: '快讯' },
   { key: 'settings', label: '设置' },
@@ -227,9 +228,6 @@ export default function Workbench() {
         <span className="text-xs text-text-ter">数据源:新浪 · AI 本地配置</span>
       </header>
 
-      {/* 大盘盯盘(roadmap §3.9):三大主指 + 领涨/领跌 top3 */}
-      <MarketOverviewBar />
-
       {/* 三区主体 */}
       <div className="flex flex-1 gap-4 min-h-0">
         {/* 左 aside */}
@@ -257,6 +255,8 @@ export default function Workbench() {
                 <SectorBoard />
               ) : tab === 'news' ? (
                 <NewsFeed />
+              ) : tab === 'market' ? (
+                <MarketOverviewPage />
               ) : (
                 <>
                   {tab === 'position' && positionView === 'table' ? (
