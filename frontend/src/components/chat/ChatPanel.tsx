@@ -132,7 +132,7 @@ export function ChatPanel({ stockCode }: { stockCode: string | null }) {
     <GlassCard
       variant="active"
       padding="sm"
-      className="flex-1 flex flex-col overflow-hidden gap-2 min-h-0"
+      className="flex-1 flex flex-col overflow-hidden gap-2 h-full"
     >
       <div className="px-2 pt-1 flex items-center gap-2">
         <span className="text-sm font-semibold text-text-pri">AI 问一问</span>
