@@ -19,12 +19,12 @@ import { ScreenshotPanel } from '@/components/screenshot/ScreenshotPanel';
  * 设计要点:
  * - 复用 settings/page.tsx 原有 6 个区块内容
  * - 不带外层 <main> 容器(让父级 page.tsx 主工作台容器控制布局)
- * - 容器自带 max-w-3xl + mx-auto + py-4,适配主工作台中间区宽度
+ * - 容器自带 w-[800px] + mx-auto + py-4,适配主工作台中间区宽度
  * - 子模块客户端状态(export/import progress、screenshot modal)各自独立管理
  */
 export function SettingsPanel() {
   return (
-    <div className="h-full overflow-y-auto px-6 py-6 space-y-6">
+    <div className=" w-[800px] mx-auto  h-full overflow-y-auto px-6 py-6 space-y-6">
       <header className="space-y-1">
         <h2 className="text-2xl font-bold">设置</h2>
         <p className="text-text-sec text-sm">
@@ -32,7 +32,7 @@ export function SettingsPanel() {
         </p>
       </header>
 
-      <div className="max-w-3xl space-y-6">
+      <div className=" space-y-6">
         <ExportImportCard />
 
         <LlmProviderCard />
