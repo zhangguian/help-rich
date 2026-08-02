@@ -248,7 +248,7 @@ export function AnalysisPanel({
               </div>
               {ind.stabilize.reasons.map((r) => (
                 <div key={r.name} className="flex flex-col gap-2 text-xs">
-                  <div>
+                  <div className="flex  items-center gap-2 text-xs">
                   <span className={r.ok ? 'text-accent' : 'text-text-ter'}>{r.ok ? '✓' : '✗'}</span>
                   <span className="text-text-sec">{r.name}</span>
                   </div>

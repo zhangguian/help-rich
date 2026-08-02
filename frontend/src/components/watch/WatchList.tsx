@@ -152,7 +152,7 @@ export function WatchList({
                     e.stopPropagation();
                     setClearTarget(it);
                   }}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-text-ter hover:text-down text-xs px-1"
+                  className="absolute left-0 top-0  text-text-ter hover:text-down text-xs px-1"
                   title="一键清仓"
                 >
                   🛑
