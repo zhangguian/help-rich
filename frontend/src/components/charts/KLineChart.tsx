@@ -108,6 +108,8 @@ export function KLineChart({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  // 数据加载失败原因(展示给用户,避免静默空白)
+  const [loadError, setLoadError] = useState<string | null>(null);
   // 图例:每条线在 hover 时间点的当前值(未 hover 时为 null)
   const [hoverValues, setHoverValues] = useState<Record<string, number | null>>({});
   // 整组显隐(MA / BOLL / MACD / KDJ);volume 单独由 showVolume 控制
@@ -125,6 +127,7 @@ export function KLineChart({
 
   useEffect(() => {
     if (!containerRef.current) return;
+    setLoadError(null);
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth,
       height,
@@ -259,6 +262,7 @@ export function KLineChart({
       `/kline/${encodeURIComponent(stockCode)}/indicators?period=${period}&limit=120`,
     )
       .then((d) => {
+        setLoadError(null);
         const items = d.items;
         const candle: CandlestickData[] = items.map((it) => ({
           time: it.date as Time,
@@ -404,8 +408,16 @@ export function KLineChart({
           chart.unsubscribeCrosshairMove(handleCrosshair);
         };
       })
-      .catch(() => {
-        /* 失败静默 */
+      .catch((e) => {
+        const msg =
+          (e as { response?: { data?: { detail?: { message?: string } } } })
+            ?.response?.data?.detail?.message ??
+          (e instanceof Error ? e.message : null) ??
+          '行情加载失败';
+        setLoadError(msg);
+        if (typeof console !== 'undefined') {
+          console.warn('[KLineChart] load failed:', stockCode, period, e);
+        }
       });
 
     return () => {
@@ -470,6 +482,11 @@ export function KLineChart({
 
   return (
     <div>
+      {loadError && (
+        <div className="mb-2 px-3 py-1.5 rounded-md bg-down/10 border border-down/30 text-xs text-down">
+          ⚠ K 线加载失败:{loadError}(打开浏览器 Console 查看详情)
+        </div>
+      )}
       <div
         ref={containerRef}
         style={{ width: '100%', height }}
