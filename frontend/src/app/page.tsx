@@ -59,16 +59,29 @@ export default function Workbench() {
         apiGet<{ items: Position[] }>('/positions'),
       ]);
       setPositions(p.items);
-      const inPosition = new Set(p.items.map((x) => x.stockCode));
-      setWatchAll(
-        w.items.map((it) => ({
+      const posName = new Map(p.items.map((x) => [x.stockCode, x.stockName]));
+      // 自选 = 自选表 ∪ 持仓(持仓未加自选的自动并入,避免漏看)
+      const merged = new Map<string, WatchItem>();
+      for (const it of w.items) {
+        merged.set(it.stockCode, {
           code: it.stockCode,
-          name: it.stockName,
-          inPosition: inPosition.has(it.stockCode),
+          name: it.stockName ?? posName.get(it.stockCode) ?? null,
+          inPosition: posName.has(it.stockCode),
           quote: null,
-        })),
-      );
-      const codes = w.items.map((it) => it.stockCode);
+        });
+      }
+      for (const pos of p.items) {
+        if (!merged.has(pos.stockCode)) {
+          merged.set(pos.stockCode, {
+            code: pos.stockCode,
+            name: pos.stockName,
+            inPosition: true,
+            quote: null,
+          });
+        }
+      }
+      setWatchAll(Array.from(merged.values()));
+      const codes = Array.from(merged.keys());
       if (codes.length > 0) {
         apiGet<Quote[]>(`/quotes?codes=${codes.join(',')}`)
           .then((qs) => {
