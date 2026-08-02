@@ -62,6 +62,7 @@ class CalculatorAfter(BaseModel):
 
 
 class CalculatorResponse(BaseModel):
+    algo_version: str = "2.0"
     input: CalculatorRequest
     before: CalculatorBefore
     after: CalculatorAfter
@@ -117,6 +118,7 @@ async def calculator(req: CalculatorRequest) -> CalculatorResponse:
 
     # 5. 组装响应
     return CalculatorResponse(
+        algo_version="2.0",
         input=req,
         before=CalculatorBefore(
             shares=shares_before,

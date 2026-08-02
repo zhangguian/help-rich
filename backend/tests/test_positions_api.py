@@ -173,6 +173,8 @@ class TestCalculatorNormalize:
         assert data["after"]["shares"] == 1500
         # input 已规范化
         assert data["input"]["stock_code"] == "000001.SZ"
+        # 算法版本号标记(成本法口径)
+        assert data["algo_version"] == "2.0"
 
     def test_calc_sell_over_quota(self, client, patch_quotes):
         _seed_tx(client)
