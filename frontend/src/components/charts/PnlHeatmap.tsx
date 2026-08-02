@@ -106,11 +106,11 @@ export function PnlHeatmap({ grid, currentPricePct, recommendedRange }: PnlHeatm
         {/* 当前价标线 */}
         {markerStyle && (
           <div
-            className="absolute top-0 bottom-0 w-0.5 border-l-2 border-dashed border-accent pointer-events-none"
+            className="absolute top-0 bottom-0 w-0.5 border-l-2 border-dashed border-orange pointer-events-none"
             style={{ left: `${markerStyle.leftPct}%` }}
             title={markerStyle.label}
           >
-            <div className="absolute -top-5 -translate-x-1/2 text-[10px] font-mono text-accent whitespace-nowrap">
+            <div className="absolute -bottom-5 -translate-x-1/2 text-[10px] font-mono text-orange whitespace-nowrap">
               {markerStyle.label}
             </div>
           </div>
