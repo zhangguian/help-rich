@@ -163,8 +163,8 @@ export function ScreenshotPreview({
   };
 
   return (
-    <Card padding="lg" className="space-y-4">
-      <header className="flex items-center justify-between">
+    <Card className="max-h-[90vh] flex flex-col overflow-hidden p-4 sm:p-6">
+      <header className="flex items-center justify-between shrink-0">
         <h2 className="text-lg font-semibold flex items-center gap-2">
           预览识别结果
           {typeBadge}
@@ -177,7 +177,7 @@ export function ScreenshotPreview({
         </button>
       </header>
 
-      <div className="text-sm text-text-sec">
+      <div className="text-sm text-text-sec shrink-0">
         共识别{' '}
         <span className="font-mono font-semibold">{items.length}</span> 条记录
         {isPositionLike && (
@@ -188,9 +188,9 @@ export function ScreenshotPreview({
         ,请核对后确认。
       </div>
 
-      <div className="overflow-x-auto border border-border-def rounded-sm">
+      <div className="flex-1 min-h-0 overflow-auto border border-border-def rounded-sm">
         <table className="w-full text-sm">
-          <thead className="bg-bg-subtle text-text-sec">
+          <thead className="bg-bg-subtle text-text-sec sticky top-0 z-10">
             <tr>
               <th className="text-left px-3 py-2 whitespace-nowrap">
                 {labelOf(codeKey)}
@@ -260,7 +260,7 @@ export function ScreenshotPreview({
         </table>
       </div>
 
-      <div className="flex justify-between">
+      <div className="flex justify-between shrink-0">
         <Button variant="ghost" onClick={onRetake}>
           ↻ 重新识别
         </Button>
