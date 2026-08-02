@@ -16,6 +16,8 @@ import { ChatPanel } from '@/components/chat/ChatPanel';
 import { KLineChart, type KlinePeriod } from '@/components/charts/KLineChart';
 import { HoldingsHealthPanel } from '@/components/holdings-health/HoldingsHealthPanel';
 import { NewsFeed } from '@/components/news/NewsFeed';
+import { PositionStatsCards } from '@/components/positions/PositionStatsCards';
+import { PositionSummaryTable } from '@/components/positions/PositionSummaryTable';
 import { SectorBoard } from '@/components/sector/SectorBoard';
 import { Button } from '@/components/ui/Button';
 import { GlassCard } from '@/components/ui/GlassCard';
@@ -60,6 +62,7 @@ export default function Workbench() {
   const activeCodeRef = useRef<string | null>(null);
   const [showCalc, setShowCalc] = useState(false);
   const [showHealth, setShowHealth] = useState(false);
+  const [positionView, setPositionView] = useState<'kline' | 'table'>('kline');
 
   const fetchBase = useCallback(async () => {
     try {
@@ -252,8 +255,10 @@ export default function Workbench() {
                 <NewsFeed />
               ) : (
                 <>
-                  {activeCode ? (
-                    <GlassCard padding="sm" className="flex items-center justify-between shrink-0">
+                  {tab === 'position' && positionView === 'table' ? (
+                    <PositionStatsCards positions={positions} />
+                  ) : activeCode ? (
+                    <GlassCard padding="sm" className="flex items-center justify-between shrink-0 min-h-[80px]">
                       <div className="min-w-0">
                         <div className="flex items-center gap-3 min-w-0">
                           <span className="font-semibold text-text-pri truncate">
@@ -320,24 +325,58 @@ export default function Workbench() {
                     </GlassCard>
                   )}
 
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {PERIODS.map((p) => (
-                      <button
-                        key={p.key}
-                        onClick={() => setPeriod(p.key)}
-                        className={clsx(
-                          'px-3 py-1.5 text-sm rounded-xl transition-colors',
-                          period === p.key
-                            ? 'bg-accent-subtle text-accent border border-accent/25'
-                            : 'bg-white/5 text-text-sec hover:text-text-pri border border-white/5',
-                        )}
-                      >
-                        {p.label}
-                      </button>
-                    ))}
+                  <div className="flex items-center justify-between gap-2 shrink-0">
+                    {/* 左侧:持仓 tab 视图切换 */}
+                    {tab === 'position' && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => setPositionView('kline')}
+                          className={clsx(
+                            'px-3 py-1.5 text-sm rounded-xl transition-colors',
+                            positionView === 'kline'
+                              ? 'bg-accent-subtle text-accent border border-accent/25'
+                              : 'bg-white/5 text-text-sec hover:text-text-pri border border-white/5',
+                          )}
+                        >
+                          📈 K 线
+                        </button>
+                        <button
+                          onClick={() => setPositionView('table')}
+                          className={clsx(
+                            'px-3 py-1.5 text-sm rounded-xl transition-colors',
+                            positionView === 'table'
+                              ? 'bg-accent-subtle text-accent border border-accent/25'
+                              : 'bg-white/5 text-text-sec hover:text-text-pri border border-white/5',
+                          )}
+                        >
+                          📋 持仓表
+                        </button>
+                      </div>
+                    )}
+                    {/* 右侧:周期切换(持仓表视图下隐藏,切回 K 线再显示) */}
+                    {!(tab === 'position' && positionView === 'table') && (
+                      <div className="flex items-center gap-1.5">
+                        {PERIODS.map((p) => (
+                          <button
+                            key={p.key}
+                            onClick={() => setPeriod(p.key)}
+                            className={clsx(
+                              'px-3 py-1.5 text-sm rounded-xl transition-colors',
+                              period === p.key
+                                ? 'bg-accent-subtle text-accent border border-accent/25'
+                                : 'bg-white/5 text-text-sec hover:text-text-pri border border-white/5',
+                            )}
+                          >
+                            {p.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
-                  {activeCode ? (
+                  {tab === 'position' && positionView === 'table' ? (
+                    <PositionSummaryTable positions={positions} onSelect={selectStock} />
+                  ) : activeCode ? (
                     <div className="flex-1 min-h-0">
                       <KLineChart stockCode={activeCode} period={period} showVolume height={420} />
                     </div>
