@@ -4,6 +4,7 @@
 - POST /api/stock/{code}/chat      操作问答(自动携带持仓成本)
 - POST /api/stock/{code}/chat/stream  操作问答流式版(SSE,打字机输出)
 """
+import asyncio
 import json
 import logging
 
@@ -18,6 +19,7 @@ from app.services.stock_advice_service import (
     ask_stock_question,
     ask_stock_question_stream,
     check_llm_available,
+    find_sector_context,
     get_stock_analysis,
 )
 
@@ -28,6 +30,7 @@ router = APIRouter(prefix="/stock", tags=["stock"])
 
 class ChatRequest(BaseModel):
     question: str
+    stock_name: str | None = None
 
 
 def _is_valid_code(code: str) -> bool:
@@ -88,10 +91,19 @@ async def chat(code: str, payload: ChatRequest) -> dict:
     question = _check_question(payload.question)
 
     klines = await _load_klines(code)
-    cost = await _position_cost(code)
+    cost, sector = await asyncio.gather(
+        _position_cost(code), find_sector_context(code)
+    )
 
     try:
-        answer = await ask_stock_question(code, question, klines, position_cost=cost)
+        answer = await ask_stock_question(
+            code,
+            question,
+            klines,
+            position_cost=cost,
+            stock_name=payload.stock_name,
+            sector=sector,
+        )
     except StockAdviceUnavailable as e:
         raise HTTPException(
             status_code=503,
@@ -119,12 +131,19 @@ async def chat_stream(code: str, payload: ChatRequest) -> StreamingResponse:
         ) from e
 
     klines = await _load_klines(code)
-    cost = await _position_cost(code)
+    cost, sector = await asyncio.gather(
+        _position_cost(code), find_sector_context(code)
+    )
 
     async def gen():
         try:
             async for piece in ask_stock_question_stream(
-                code, question, klines, position_cost=cost
+                code,
+                question,
+                klines,
+                position_cost=cost,
+                stock_name=payload.stock_name,
+                sector=sector,
             ):
                 yield f"data: {json.dumps({'text': piece}, ensure_ascii=False)}\n\n"
         except StockAdviceUnavailable as e:

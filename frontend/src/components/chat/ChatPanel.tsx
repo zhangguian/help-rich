@@ -21,8 +21,15 @@ interface Msg {
  *
  * 结合行情 + 技术指标 + 持仓成本回答操作提问;单轮会话(切换股票清空)。
  * 走 /chat/stream SSE 流式接口,打字机效果输出。
+ * 作用域隔离:AI 只讨论当前股票(及所属题材),问其他股票会被拒绝。
  */
-export function ChatPanel({ stockCode }: { stockCode: string | null }) {
+export function ChatPanel({
+  stockCode,
+  stockName,
+}: {
+  stockCode: string | null;
+  stockName: string | null;
+}) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -70,7 +77,7 @@ export function ChatPanel({ stockCode }: { stockCode: string | null }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
-          body: JSON.stringify({ question: q }),
+          body: JSON.stringify({ question: q, stockName }),
         },
       );
       if (!res.ok) {
@@ -135,7 +142,9 @@ export function ChatPanel({ stockCode }: { stockCode: string | null }) {
       className="h-full flex flex-col overflow-hidden gap-2 min-h-0"
     >
       <div className="px-2 pt-1 flex items-center gap-2">
-        <span className="text-sm font-semibold text-text-pri">AI 问一问</span>
+        <span className="text-sm font-semibold text-text-pri">
+          AI 问一问{stockName && stockCode ? ` · ${stockName}` : ''}
+        </span>
         {sending && (
           <span className="inline-block w-2 h-2 rounded-full bg-accent animate-pulse" />
         )}

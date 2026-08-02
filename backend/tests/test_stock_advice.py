@@ -34,11 +34,17 @@ class FakeLLM:
 
     def __init__(self, reply: str):
         self.reply = reply
+        self.last_system = None
+        self.last_prompt = None
 
     async def chat(self, system, user, temperature=0.3, max_retries=3):
+        self.last_system = system
+        self.last_prompt = user
         return self.reply
 
     async def chat_stream(self, system, user, temperature=0.3):
+        self.last_system = system
+        self.last_prompt = user
         for i in range(0, len(self.reply), 4):
             yield self.reply[i : i + 4]
 
@@ -145,6 +151,51 @@ class TestAnalysisService:
         assert r["indicators"]["latest_close"] == 100.0
 
 
+class TestSectorScope:
+    """作用域隔离:题材反查 + 作用域化系统提示词"""
+
+    def test_match_hit(self):
+        items = [{
+            "name": "白酒", "netamount_yi": "2.3", "change_pct": "1.5",
+            "top_stock": {"code": "600519.SH", "name": "贵州茅台"},
+        }]
+        r = stock_advice_service.match_sector_from_rank(items, "600519.SH")
+        assert r == {"name": "白酒", "netamount_yi": 2.3, "change_pct": 1.5}
+
+    def test_match_miss(self):
+        assert stock_advice_service.match_sector_from_rank([], "600519.SH") is None
+        items = [{"name": "白酒", "top_stock": {"code": "000001.SZ"}}]
+        assert stock_advice_service.match_sector_from_rank(items, "600519.SH") is None
+
+    def test_build_system_with_sector(self):
+        sys = stock_advice_service.build_question_system(
+            "600519.SH", "贵州茅台", {"name": "白酒", "netamount_yi": 2.3, "change_pct": 1.5}
+        )
+        assert "贵州茅台(600519.SH)" in sys
+        assert "白酒" in sys
+        assert "忽略" in sys  # 防规则绕过
+        assert "只允许讨论" in sys
+
+    def test_build_system_no_sector(self):
+        sys = stock_advice_service.build_question_system("600519.SH", None, None)
+        assert "600519.SH" in sys
+        assert "「" not in sys  # 无题材命中,不出现题材占位
+        assert "只允许讨论 600519.SH" in sys
+
+    def test_prompt_injects_sector(self):
+        p = stock_advice_service._build_question_prompt(
+            "现在能买吗", _kline([100] * 40), None,
+            {"name": "白酒", "netamount_yi": 2.3, "change_pct": 1.5},
+        )
+        assert "白酒" in p
+        assert "2.30" in p
+        assert "+1.50%" in p
+
+    def test_prompt_no_sector_ok(self):
+        p = stock_advice_service._build_question_prompt("现在能买吗", _kline([100] * 40), None)
+        assert "题材" not in p
+
+
 class TestChatService:
     def test_success(self, monkeypatch):
         _mock_llm(monkeypatch, FakeLLM("建议减仓一半。风险提示:以上仅供参考。"))
@@ -242,6 +293,15 @@ class TestStockAPI:
         asyncio.run(_do())
         yield
 
+    @pytest.fixture(autouse=True)
+    def _no_net_sector(self, monkeypatch):
+        """chat 端点的题材反查不触网(测试内可覆盖为命中场景)"""
+
+        async def fake_get(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr(stock_advice_service, "get_sector_fund_flow", fake_get)
+
     def test_analysis_ok(self, client, monkeypatch):
         fake = make_fake_client_class([
             httpx.Response(200, text=f"cb({json.dumps(_sina_rows())});")
@@ -335,3 +395,45 @@ class TestStockAPI:
     def test_chat_stream_invalid_code_422(self, client):
         r = client.post("/api/stock/abc/chat/stream", json={"question": "能买吗?"})
         assert r.status_code == 422
+
+    def test_chat_stream_sector_scope_injection(self, client, monkeypatch):
+        """题材反查命中:系统提示词含作用域 + prompt 注入题材资金数据"""
+        fake = make_fake_client_class([
+            httpx.Response(200, text=f"cb({json.dumps(_sina_rows())});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake)
+        llm = FakeLLM("建议先观望。以上仅供参考。")
+        _mock_llm(monkeypatch, llm)
+
+        async def fake_sector(*args, **kwargs):
+            return [{
+                "name": "白酒", "netamount_yi": "2.3", "change_pct": "1.5",
+                "top_stock": {"code": "600519.SH", "name": "贵州茅台"},
+            }]
+
+        monkeypatch.setattr(stock_advice_service, "get_sector_fund_flow", fake_sector)
+
+        r = client.post(
+            "/api/stock/600519.SH/chat/stream",
+            json={"question": "现在能买吗?", "stock_name": "贵州茅台"},
+        )
+        assert r.status_code == 200
+        assert "贵州茅台(600519.SH)" in llm.last_system
+        assert "白酒" in llm.last_system
+        assert "只允许讨论" in llm.last_system
+        assert "忽略" in llm.last_system  # 防注入规则
+        assert "题材资金动向" in llm.last_prompt
+
+    def test_chat_sector_miss_still_ok(self, client, monkeypatch):
+        """题材反查未命中:作用域仅限股票本身,请求正常"""
+        fake = make_fake_client_class([
+            httpx.Response(200, text=f"cb({json.dumps(_sina_rows())});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake)
+        llm = FakeLLM("建议先观望。以上仅供参考。")
+        _mock_llm(monkeypatch, llm)
+        r = client.post("/api/stock/600519.SH/chat", json={"question": "能买吗?"})
+        assert r.status_code == 200
+        assert "只允许讨论" in llm.last_system
+        assert "「" not in llm.last_system
+        assert "题材资金动向" not in llm.last_prompt

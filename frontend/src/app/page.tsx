@@ -302,7 +302,7 @@ export default function Workbench() {
             />
           </div>
           <div className="flex-[2] min-h-0">
-            <ChatPanel stockCode={activeCode} />
+            <ChatPanel stockCode={activeCode} stockName={selectedQuote?.name ?? null} />
           </div>
         </aside>
       </div>
