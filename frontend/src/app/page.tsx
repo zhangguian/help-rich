@@ -230,15 +230,17 @@ export default function Workbench() {
 
       {/* 三区主体 */}
       <div className="flex flex-1 gap-4 min-h-0">
-        {/* 左 aside */}
-        <aside className="w-72 shrink-0 min-h-0">
-          <WatchList
-            items={visibleItems}
-            activeCode={activeCode}
-            onSelect={selectStock}
-            onChanged={fetchBase}
-          />
-        </aside>
+        {/* 左 aside:大盘 Tab 时收起,中间区占满宽度 */}
+        {tab !== 'market' && (
+          <aside className="w-72 shrink-0 min-h-0">
+            <WatchList
+              items={visibleItems}
+              activeCode={activeCode}
+              onSelect={selectStock}
+              onChanged={fetchBase}
+            />
+          </aside>
+        )}
 
         {/* 中间 K线区 */}
         <section className="flex-1 min-w-0 min-h-0 flex flex-col gap-3">
@@ -395,20 +397,22 @@ export default function Workbench() {
           </AnimatePresence>
         </section>
 
-        {/* 右侧:上操作提示 / 下 AI 对话 */}
-        <aside className="w-[22rem] shrink-0 flex flex-col gap-3 min-h-0">
-          <div className="flex-[3] min-h-0 overflow-y-auto pr-1">
-            <AnalysisPanel
-              analysis={analysis}
-              started={analysisStarted}
-              loading={analysisLoading}
-              onRefresh={refreshAnalysis}
-            />
-          </div>
-          <div className="flex-[2] min-h-0">
-            <ChatPanel stockCode={activeCode} stockName={selectedQuote?.name ?? null} />
-          </div>
-        </aside>
+        {/* 右侧:上操作提示 / 下 AI 对话 — 大盘 Tab 时收起 */}
+        {tab !== 'market' && (
+          <aside className="w-[22rem] shrink-0 flex flex-col gap-3 min-h-0">
+            <div className="flex-[3] min-h-0 overflow-y-auto pr-1">
+              <AnalysisPanel
+                analysis={analysis}
+                started={analysisStarted}
+                loading={analysisLoading}
+                onRefresh={refreshAnalysis}
+              />
+            </div>
+            <div className="flex-[2] min-h-0">
+              <ChatPanel stockCode={activeCode} stockName={selectedQuote?.name ?? null} />
+            </div>
+          </aside>
+        )}
       </div>
 
       <LiquidModal
