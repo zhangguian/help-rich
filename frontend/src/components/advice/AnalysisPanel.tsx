@@ -5,6 +5,7 @@ import clsx from 'clsx';
 
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Button } from '@/components/ui/Button';
+import { TermHint } from '@/components/ui/TermHint';
 import type {
   AnalysisResult,
   SignalFusion,
@@ -180,7 +181,9 @@ export function AnalysisPanel({
             {/* 通道 */}
             <div>
               <div className="flex items-center justify-between text-sm">
-                <span className="text-text-sec">通道</span>
+                <span className="text-text-sec inline-flex items-center">
+                  通道<TermHint term="channel" />
+                </span>
                 <span className={clsx('font-semibold', CHANNEL_META[ind.channel.state].cls)}>
                   {CHANNEL_META[ind.channel.state].label}
                 </span>
@@ -194,7 +197,9 @@ export function AnalysisPanel({
             {/* 量比 */}
             <div>
               <div className="flex items-center justify-between text-sm">
-                <span className="text-text-sec">量能</span>
+                <span className="text-text-sec inline-flex items-center">
+                  量能<TermHint term="volume" />
+                </span>
                 <span
                   className={clsx(
                     'font-semibold',
@@ -213,7 +218,9 @@ export function AnalysisPanel({
 
             {/* 均线 */}
             <div>
-              <div className="text-sm text-text-sec mb-1.5">均线</div>
+              <div className="text-sm text-text-sec mb-1.5 inline-flex items-center">
+                均线<TermHint term="ma" />
+              </div>
               <div className="grid grid-cols-2 gap-1.5">
                 {(['ma5', 'ma10', 'ma20', 'ma60'] as const).map((k) => (
                   <div key={k} className="rounded-lg bg-white/5 px-2 py-1.5">
@@ -243,7 +250,9 @@ export function AnalysisPanel({
             {/* 支撑 / 压力 */}
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <div className="text-xs text-text-ter mb-1">支撑位</div>
+                <div className="text-xs text-text-ter mb-1 inline-flex items-center">
+                  支撑位<TermHint term="support" />
+                </div>
                 <div className="flex flex-wrap gap-1">
                   {ind.supportPressure.support.length === 0 && (
                     <span className="text-xs text-text-ter">暂无</span>
@@ -259,7 +268,9 @@ export function AnalysisPanel({
                 </div>
               </div>
               <div>
-                <div className="text-xs text-text-ter mb-1">压力位</div>
+                <div className="text-xs text-text-ter mb-1 inline-flex items-center">
+                  压力位<TermHint term="pressure" />
+                </div>
                 <div className="flex flex-wrap gap-1">
                   {ind.supportPressure.pressure.length === 0 && (
                     <span className="text-xs text-text-ter">暂无</span>
@@ -279,7 +290,9 @@ export function AnalysisPanel({
             {/* 企稳 */}
             <div className="rounded-xl bg-white/5 p-3 space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-text-sec">企稳点</span>
+                <span className="text-text-sec inline-flex items-center">
+                  企稳点<TermHint term="stabilize" />
+                </span>
                 <span
                   className={clsx(
                     'font-semibold',
@@ -468,7 +481,9 @@ function MacdCard({ macd }: { macd: MacdIndicator | undefined }) {
   return (
     <div>
       <div className="flex items-center justify-between text-sm">
-        <span className="text-text-sec">MACD (12,26,9)</span>
+        <span className="text-text-sec inline-flex items-center">
+          MACD (12,26,9)<TermHint term="macd" />
+        </span>
         {cross && (
           <span
             className={clsx(
@@ -500,7 +515,9 @@ function KdjCard({ kdj }: { kdj: KdjIndicator | undefined }) {
   return (
     <div>
       <div className="flex items-center justify-between text-sm">
-        <span className="text-text-sec">KDJ (9)</span>
+        <span className="text-text-sec inline-flex items-center">
+          KDJ (9)<TermHint term="kdj" />
+        </span>
         <span className={clsx('text-xs font-semibold', zoneMeta.cls)}>{zoneMeta.label}</span>
       </div>
       <div className="grid grid-cols-3 gap-1.5 mt-1.5">
@@ -523,7 +540,9 @@ function BollCard({ boll }: { boll: BollIndicator | undefined }) {
   return (
     <div>
       <div className="flex items-center justify-between text-sm">
-        <span className="text-text-sec">BOLL (20,2)</span>
+        <span className="text-text-sec inline-flex items-center">
+          BOLL (20,2)<TermHint term="boll" />
+        </span>
         <div className="flex items-center gap-2">
           {boll.squeeze && (
             <span className="text-xs font-semibold text-warn">⚠️ 收口</span>
@@ -554,7 +573,9 @@ function VolumePriceCard({ vp }: { vp: VolumePriceIndicator | undefined }) {
   return (
     <div>
       <div className="flex items-center justify-between text-sm">
-        <span className="text-text-sec">量价四维</span>
+        <span className="text-text-sec inline-flex items-center">
+          量价四维<TermHint term="volume-price" />
+        </span>
         <span className={clsx('font-semibold text-sm', dirMeta.cls)}>
           {vp.emoji} {vp.label ?? '数据不足'}
         </span>
@@ -574,7 +595,9 @@ function PatternsCard({ patterns }: { patterns: PatternMatch[] | undefined }) {
     return (
       <div>
         <div className="flex items-center justify-between text-sm">
-          <span className="text-text-sec">形态识别</span>
+          <span className="text-text-sec inline-flex items-center">
+            形态识别<TermHint term="pattern" />
+          </span>
           <span className="text-xs text-text-ter">近期未出现典型形态</span>
         </div>
       </div>
@@ -583,7 +606,9 @@ function PatternsCard({ patterns }: { patterns: PatternMatch[] | undefined }) {
   return (
     <div>
       <div className="flex items-center justify-between text-sm">
-        <span className="text-text-sec">形态识别</span>
+        <span className="text-text-sec inline-flex items-center">
+          形态识别<TermHint term="pattern" />
+        </span>
         <span className="text-xs text-text-ter">{patterns.length} 项</span>
       </div>
       <div className="flex flex-wrap gap-1.5 mt-1.5">
@@ -613,7 +638,9 @@ function LiarCard({ liar }: { liar: LiarIndicator | undefined }) {
     return (
       <div>
         <div className="flex items-center justify-between text-sm">
-          <span className="text-text-sec">诱多诱空</span>
+          <span className="text-text-sec inline-flex items-center">
+            诱多诱空<TermHint term="liar" />
+          </span>
           <span className="text-xs text-text-ter">{liar.summary}</span>
         </div>
       </div>
@@ -622,7 +649,9 @@ function LiarCard({ liar }: { liar: LiarIndicator | undefined }) {
   return (
     <div>
       <div className="flex items-center justify-between text-sm">
-        <span className="text-text-sec">诱多诱空</span>
+        <span className="text-text-sec inline-flex items-center">
+          诱多诱空<TermHint term="liar" />
+        </span>
         <span className="text-xs text-text-ter">{liar.summary}</span>
       </div>
       <div className="space-y-1.5 mt-1.5">
@@ -660,7 +689,9 @@ function PositionCard({ position }: { position: PositionIndicator | undefined })
   return (
     <div>
       <div className="flex items-center justify-between text-sm">
-        <span className="text-text-sec">位置评估</span>
+        <span className="text-text-sec inline-flex items-center">
+          位置评估<TermHint term="position" />
+        </span>
         <span className={clsx('text-xs font-semibold', bandMeta.cls)}>{bandMeta.label}</span>
       </div>
       <div className="grid grid-cols-3 gap-1.5 mt-1.5">
