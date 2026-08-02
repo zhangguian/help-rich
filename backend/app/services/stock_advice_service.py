@@ -213,7 +213,9 @@ async def ask_stock_question(
         raise StockAdviceUnavailable("未配置 LLM Key,无法回答;可先查看技术指标")
 
     system = build_question_system(stock_code, stock_name, sector)
-    prompt = _build_question_prompt(question, klines, position_cost, sector)
+    prompt = _build_question_prompt(
+        question, klines, position_cost, sector, stock_code, stock_name
+    )
     try:
         raw = await asyncio.wait_for(
             llm.chat(system, prompt, temperature=0.4),
@@ -231,9 +233,22 @@ def _build_question_prompt(
     klines: list[dict[str, Any]],
     position_cost: float | None,
     sector: dict[str, Any] | None = None,
+    stock_code: str | None = None,
+    stock_name: str | None = None,
 ) -> str:
-    """操作问答的完整 user prompt(chat / chat/stream 共用)"""
-    ctx = json.dumps(_build_context(klines), ensure_ascii=False)
+    """操作问答的完整 user prompt(chat / chat/stream 共用)
+
+    stock_code / stock_name:显式声明当前股票,防止模型把纯数字行情块与
+    系统提示词中的作用域股票脱钩(曾出现"没发现要查什么股票")。
+    """
+    base = _build_context(klines)
+    if stock_code:
+        base["stock_code"] = stock_code
+        base["stock_name"] = stock_name
+    ctx = json.dumps(base, ensure_ascii=False)
+    stock_line = (
+        f"股票: {stock_name}({stock_code})" if stock_name else f"股票: {stock_code}"
+    )
     cost_line = (
         f"\n用户持仓成本: {position_cost} 元/股(成本是用户隐私,回答中不要复述精确数字,只用来说明盈亏方向)"
         if position_cost is not None
@@ -246,7 +261,7 @@ def _build_question_prompt(
             f"净流入 {sector['netamount_yi']:.2f} 亿,板块 {sector['change_pct']:+.2f}%"
         )
     return (
-        f"该股技术指标与最近K线:\n{ctx}{cost_line}{sector_line}\n"
+        f"{stock_line}\n该股技术指标与最近K线:\n{ctx}{cost_line}{sector_line}\n"
         f"用户提问: {question}"
     )
 
@@ -268,7 +283,9 @@ async def ask_stock_question_stream(
         raise StockAdviceUnavailable("未配置 LLM Key,无法回答;可先查看技术指标")
 
     system = build_question_system(stock_code, stock_name, sector)
-    prompt = _build_question_prompt(question, klines, position_cost, sector)
+    prompt = _build_question_prompt(
+        question, klines, position_cost, sector, stock_code, stock_name
+    )
     try:
         async for piece in llm.chat_stream(system, prompt, temperature=0.4):
             yield piece

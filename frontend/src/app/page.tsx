@@ -10,13 +10,17 @@ import { apiGet } from '@/lib/api';
 import { getAnalysisCache, setAnalysisCache } from '@/lib/analysisCache';
 import type { Position, Quote, WatchlistItem } from '@/lib/types';
 
-import { WatchList, type WatchItem } from '@/components/watch/WatchList';
 import { AnalysisPanel, type AnalysisResult } from '@/components/advice/AnalysisPanel';
+import { CalculatorPanel } from '@/components/calculator/CalculatorPanel';
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { KLineChart, type KlinePeriod } from '@/components/charts/KLineChart';
-import { SectorBoard } from '@/components/sector/SectorBoard';
+import { HoldingsHealthPanel } from '@/components/holdings-health/HoldingsHealthPanel';
 import { NewsFeed } from '@/components/news/NewsFeed';
+import { SectorBoard } from '@/components/sector/SectorBoard';
+import { Button } from '@/components/ui/Button';
 import { GlassCard } from '@/components/ui/GlassCard';
+import { LiquidModal } from '@/components/ui/LiquidModal';
+import { WatchList, type WatchItem } from '@/components/watch/WatchList';
 
 type TabKey = 'watch' | 'position' | 'sector' | 'news' | 'settings';
 
@@ -54,6 +58,8 @@ export default function Workbench() {
   const [selectedQuote, setSelectedQuote] = useState<Quote | null>(null);
   // 当前选中股票(异步回调防串:分析/缓存返回时比对,避免贴到别的股票面板)
   const activeCodeRef = useRef<string | null>(null);
+  const [showCalc, setShowCalc] = useState(false);
+  const [showHealth, setShowHealth] = useState(false);
 
   const fetchBase = useCallback(async () => {
     try {
@@ -157,6 +163,21 @@ export default function Workbench() {
   const pctClass = (v: number | undefined) =>
     v == null ? 'text-text-ter' : v > 0 ? 'text-up' : v < 0 ? 'text-down' : 'text-text-ter';
 
+  const activePosition = positions.find((p) => p.stockCode === activeCode) ?? null;
+
+  const positionPnl = useMemo(() => {
+    if (!activePosition) return null;
+    const floatingPnl =
+      activePosition.floatingPnl != null ? Number(activePosition.floatingPnl) : null;
+    const totalCost = Number(activePosition.totalCost);
+    return {
+      todayPnl: activePosition.todayPnl != null ? Number(activePosition.todayPnl) : null,
+      floatingPnl,
+      ratioPct:
+        totalCost > 0 && floatingPnl != null ? (floatingPnl / totalCost) * 100 : null,
+    };
+  }, [activePosition]);
+
   return (
     <main className="h-screen flex flex-col bg-bg-base text-text-pri p-5 gap-4 overflow-hidden">
       {/* 顶部 tab */}
@@ -233,14 +254,38 @@ export default function Workbench() {
                 <>
                   {activeCode ? (
                     <GlassCard padding="sm" className="flex items-center justify-between shrink-0">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <span className="font-semibold text-text-pri truncate">
-                          {selectedQuote?.name ?? activeCode}
-                        </span>
-                        <span className="text-xs text-text-ter font-mono">{activeCode}</span>
-                        <span className="text-[10px] px-1.5 py-px rounded bg-accent-subtle text-accent border border-accent/25">
-                          {selectedQuote?.name ? '已持仓' : ''}
-                        </span>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className="font-semibold text-text-pri truncate">
+                            {selectedQuote?.name ?? activeCode}
+                          </span>
+                          <span className="text-xs text-text-ter font-mono">{activeCode}</span>
+                          {activePosition && (
+                            <span className="text-[10px] px-1.5 py-px rounded bg-accent-subtle text-accent border border-accent/25">
+                              已持仓
+                            </span>
+                          )}
+                        </div>
+                        {positionPnl && (
+                          <div className="flex items-center gap-3 mt-0.5 text-xs font-mono">
+                            <span className={pctClass(positionPnl.todayPnl ?? undefined)}>
+                              {positionPnl.todayPnl != null
+                                ? `今日 ${positionPnl.todayPnl >= 0 ? '+' : ''}¥${positionPnl.todayPnl.toFixed(2)}`
+                                : '今日 --'}
+                            </span>
+                            <span
+                              className={pctClass(positionPnl.floatingPnl ?? undefined)}
+                            >
+                              {positionPnl.floatingPnl != null
+                                ? `浮盈 ${positionPnl.floatingPnl >= 0 ? '+' : ''}¥${positionPnl.floatingPnl.toFixed(2)} (${
+                                    positionPnl.ratioPct != null
+                                      ? `${positionPnl.ratioPct >= 0 ? '+' : ''}${positionPnl.ratioPct.toFixed(2)}%`
+                                      : '--'
+                                  })`
+                                : '浮盈 --'}
+                            </span>
+                          </div>
+                        )}
                       </div>
                       <div className="text-right shrink-0">
                         <div className="text-xl font-mono font-semibold text-text-pri">
@@ -250,6 +295,22 @@ export default function Workbench() {
                           {selectedQuote
                             ? `${selectedQuote.changePct > 0 ? '+' : ''}${selectedQuote.changePct.toFixed(2)}%`
                             : '行情加载中'}
+                        </div>
+                        <div className="flex justify-end gap-2 mt-2">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => setShowCalc(true)}
+                          >
+                            🧮 成本计算器
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => setShowHealth(true)}
+                          >
+                            🩺 持仓分析
+                          </Button>
                         </div>
                       </div>
                     </GlassCard>
@@ -306,6 +367,24 @@ export default function Workbench() {
           </div>
         </aside>
       </div>
+
+      <LiquidModal
+        open={showCalc}
+        onClose={() => setShowCalc(false)}
+        title="🧮 成本计算器"
+        size="xl"
+      >
+        <CalculatorPanel />
+      </LiquidModal>
+
+      <LiquidModal
+        open={showHealth}
+        onClose={() => setShowHealth(false)}
+        title="🩺 持仓分析"
+        size="lg"
+      >
+        <HoldingsHealthPanel />
+      </LiquidModal>
     </main>
   );
 }

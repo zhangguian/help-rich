@@ -1,11 +1,11 @@
 import Link from 'next/link';
 
-import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
 import { ExportImportCard } from '@/components/settings/ExportImportCard';
+import { HistoryToolsCard } from '@/components/settings/HistoryToolsCard';
 import { LlmKeysCard } from '@/components/settings/LlmKeysCard';
 import { LlmProviderCard } from '@/components/settings/LlmProviderCard';
 import { ScreenshotPanel } from '@/components/screenshot/ScreenshotPanel';
+import { Card } from '@/components/ui/Card';
 
 /**
  * 设置页(P7.3 + P7.11 + P7.12 + P8.9)
@@ -36,58 +36,10 @@ export default function SettingsPage() {
 
       <LlmKeysCard />
 
-      <ScreenshotPanel />
+  <ScreenshotPanel />
 
-      <Card padding="md" className="space-y-3">
-        <div>
-          <div className="font-semibold">🕰 历史工具</div>
-          <div className="text-xs text-text-ter mt-1">
-            记账 / 报表向功能已从工作台撤出,如需使用请从下方进入。
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <Link href="/transactions">
-            <Button variant="secondary" className="w-full">
-              📋 流水
-            </Button>
-          </Link>
-          <Link href="/calculator">
-            <Button variant="secondary" className="w-full">
-              🧮 计算器
-            </Button>
-          </Link>
-          <Link href="/annual-report/2025">
-            <Button variant="secondary" className="w-full">
-              📅 年账单
-            </Button>
-          </Link>
-          <Link href="/risk-report">
-            <Button variant="secondary" className="w-full">
-              ⚠️ 风险报告
-            </Button>
-          </Link>
-          <Link href="/rebalance">
-            <Button variant="secondary" className="w-full">
-              ⚖️ 调仓建议
-            </Button>
-          </Link>
-          <Link href="/provider-stats">
-            <Button variant="secondary" className="w-full">
-              📊 Provider 占比
-            </Button>
-          </Link>
-          <Link href="/holdings-health">
-            <Button variant="secondary" className="w-full">
-              🩺 持仓健康
-            </Button>
-          </Link>
-          <Link href="/sector-fund-flow">
-            <Button variant="secondary" className="w-full">
-              🗂 板块资金流
-            </Button>
-          </Link>
-        </div>
-      </Card>
+  <HistoryToolsCard />
+
 
       <Card padding="md" className="space-y-2">
         <div className="font-semibold">📋 关于</div>

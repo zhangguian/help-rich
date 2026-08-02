@@ -186,13 +186,20 @@ class TestSectorScope:
         p = stock_advice_service._build_question_prompt(
             "现在能买吗", _kline([100] * 40), None,
             {"name": "白酒", "netamount_yi": 2.3, "change_pct": 1.5},
+            "600519.SH", "贵州茅台",
         )
+        assert "股票: 贵州茅台(600519.SH)" in p
+        assert '"stock_code": "600519.SH"' in p
         assert "白酒" in p
         assert "2.30" in p
         assert "+1.50%" in p
 
     def test_prompt_no_sector_ok(self):
-        p = stock_advice_service._build_question_prompt("现在能买吗", _kline([100] * 40), None)
+        p = stock_advice_service._build_question_prompt(
+            "现在能买吗", _kline([100] * 40), None, None, "600519.SH"
+        )
+        assert "股票: 600519.SH" in p
+        assert '"stock_code": "600519.SH"' in p
         assert "题材" not in p
 
 

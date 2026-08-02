@@ -242,15 +242,17 @@ export function AnalysisPanel({
                 <span className={clsx('font-semibold', ind.stabilize.state ? 'text-accent' : 'text-text-ter')}>
                   {ind.stabilize.state ? '已企稳 ✓' : '未企稳'}
                   {ind.stabilize.price != null && (
-                    <span className="font-mono text-text-pri"> @ {ind.stabilize.price}</span>
+                    <span className="font-mono text-text-pri"> {ind.stabilize.price}</span>
                   )}
                 </span>
               </div>
               {ind.stabilize.reasons.map((r) => (
-                <div key={r.name} className="flex items-center gap-2 text-xs">
+                <div key={r.name} className="flex flex-col gap-2 text-xs">
+                  <div>
                   <span className={r.ok ? 'text-accent' : 'text-text-ter'}>{r.ok ? '✓' : '✗'}</span>
                   <span className="text-text-sec">{r.name}</span>
-                  <span className="text-text-ter font-mono truncate">{r.note}</span>
+                  </div>
+                  <div className="text-text-ter font-mono ">{r.note}</div>
                 </div>
               ))}
               <p className="text-xs text-text-ter">站住企稳点不破,可视为多头占优;跌破则谨慎</p>
