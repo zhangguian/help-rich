@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import Link from 'next/link';
 import { AnimatePresence, motion } from 'framer-motion';
 import clsx from 'clsx';
 
@@ -20,6 +19,7 @@ import { NewsFeed } from '@/components/news/NewsFeed';
 import { PositionStatsCards } from '@/components/positions/PositionStatsCards';
 import { PositionSummaryTable } from '@/components/positions/PositionSummaryTable';
 import { SectorBoard } from '@/components/sector/SectorBoard';
+import { SettingsPanel } from '@/components/settings/SettingsPanel';
 import { Button } from '@/components/ui/Button';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { LiquidModal } from '@/components/ui/LiquidModal';
@@ -192,18 +192,7 @@ export default function Workbench() {
           <nav className="flex items-center gap-1 rounded-2xl bg-white/5 p-1">
             {TABS.map((t) => {
               const isActive = tab === t.key;
-              return t.key === 'settings' ? (
-                <Link
-                  key={t.key}
-                  href="/settings"
-                  className={clsx(
-                    'px-4 py-1.5 text-sm rounded-xl transition-colors',
-                    'text-text-sec hover:text-text-pri',
-                  )}
-                >
-                  {t.label}
-                </Link>
-              ) : (
+              return (
                 <button
                   key={t.key}
                   onClick={() => setTab(t.key)}
@@ -259,6 +248,8 @@ export default function Workbench() {
                 <NewsFeed />
               ) : tab === 'market' ? (
                 <MarketOverviewPage />
+              ) : tab === 'settings' ? (
+                <SettingsPanel />
               ) : (
                 <>
                   {tab === 'position' && positionView === 'table' ? (
