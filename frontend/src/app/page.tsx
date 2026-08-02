@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import Link from 'next/link';
 import { AnimatePresence, motion } from 'framer-motion';
 import clsx from 'clsx';
 
 import { apiGet } from '@/lib/api';
+import { getAnalysisCache, setAnalysisCache } from '@/lib/analysisCache';
 import type { Position, Quote, WatchlistItem } from '@/lib/types';
 
 import { WatchList, type WatchItem } from '@/components/watch/WatchList';
@@ -51,6 +52,8 @@ export default function Workbench() {
   const [analysisStarted, setAnalysisStarted] = useState(false);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [selectedQuote, setSelectedQuote] = useState<Quote | null>(null);
+  // 当前选中股票(异步回调防串:分析/缓存返回时比对,避免贴到别的股票面板)
+  const activeCodeRef = useRef<string | null>(null);
 
   const fetchBase = useCallback(async () => {
     try {
@@ -104,25 +107,38 @@ export default function Workbench() {
     return () => clearInterval(timer);
   }, [fetchBase]);
 
-  const selectStock = useCallback(async (code: string) => {
+  const selectStock = useCallback((code: string) => {
     setActiveCode(code);
+    activeCodeRef.current = code;
     setAnalysis(null);
     setAnalysisStarted(false);
     setSelectedQuote(null);
     apiGet<Quote>(`/quotes/${encodeURIComponent(code)}`)
       .then(setSelectedQuote)
       .catch(() => {});
+    // 恢复 IndexedDB 缓存(24h 内分析过的不再重新烧 token)
+    getAnalysisCache(code).then((cached) => {
+      if (activeCodeRef.current !== code) return;
+      setAnalysis(cached);
+      setAnalysisStarted(cached != null);
+    });
   }, []);
 
   const refreshAnalysis = useCallback(() => {
-    if (!activeCode) return;
+    const code = activeCode;
+    if (!code) return;
     setAnalysisStarted(true);
     setAnalysisLoading(true);
-    apiGet<AnalysisResult>(`/stock/${encodeURIComponent(activeCode)}/analysis`, {
+    apiGet<AnalysisResult>(`/stock/${encodeURIComponent(code)}/analysis`, {
       timeout: 60000,
     })
-      .then(setAnalysis)
-      .catch(() => setAnalysis(null))
+      .then((r) => {
+        setAnalysisCache(code, r);
+        if (activeCodeRef.current === code) setAnalysis(r);
+      })
+      .catch(() => {
+        if (activeCodeRef.current === code) setAnalysis(null);
+      })
       .finally(() => setAnalysisLoading(false));
   }, [activeCode]);
 
