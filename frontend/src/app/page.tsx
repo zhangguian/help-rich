@@ -118,7 +118,9 @@ export default function Workbench() {
     if (!activeCode) return;
     setAnalysisStarted(true);
     setAnalysisLoading(true);
-    apiGet<AnalysisResult>(`/stock/${encodeURIComponent(activeCode)}/analysis`)
+    apiGet<AnalysisResult>(`/stock/${encodeURIComponent(activeCode)}/analysis`, {
+      timeout: 60000,
+    })
       .then(setAnalysis)
       .catch(() => setAnalysis(null))
       .finally(() => setAnalysisLoading(false));
