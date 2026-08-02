@@ -3,6 +3,7 @@
 指标(确定性)+ K线 → LLM 白话解读;强制 JSON + schema 校验。
 LLM 不可用 / 输出非法 → ai=None,由前端降级纯指标展示(页面永不空白)。
 """
+import asyncio
 import json
 import logging
 from typing import Any
@@ -12,6 +13,10 @@ from app.repositories.llm_settings_repo import llm_settings_repo
 from app.services.ta_service import compute_indicators
 
 logger = logging.getLogger(__name__)
+
+# LLM 调用总时间预算(秒):超过直接降级/503,保证接口快速返回,不被慢模型拖死
+LLM_ANALYSIS_BUDGET = 25.0
+LLM_QUESTION_BUDGET = 40.0
 
 ANALYSIS_SYSTEM = """你是股票技术分析助理,面向完全不懂 K 线的小白股民。
 硬性规则:
@@ -121,9 +126,14 @@ async def get_stock_analysis(
 
     ctx = json.dumps(_build_context(klines), ensure_ascii=False)
     try:
-        raw = await llm.chat(ANALYSIS_SYSTEM, f"以下为该股票技术指标与最近K线:\n{ctx}")
+        raw = await asyncio.wait_for(
+            llm.chat(ANALYSIS_SYSTEM, f"以下为该股票技术指标与最近K线:\n{ctx}"),
+            timeout=LLM_ANALYSIS_BUDGET,
+        )
         parsed = _parse_llm_json(raw)
         result["ai"] = _validate_analysis(parsed)
+    except asyncio.TimeoutError:
+        logger.warning("个股分析 LLM 超时(>%ss),降级纯指标: %s", LLM_ANALYSIS_BUDGET, stock_code)
     except Exception as e:
         logger.warning("个股分析 LLM 失败,降级纯指标(%s): %s", stock_code, e)
     return result
@@ -150,5 +160,13 @@ async def ask_stock_question(
         f"该股技术指标与最近K线:\n{ctx}{cost_line}\n"
         f"用户提问: {question}"
     )
-    raw = await llm.chat(QUESTION_SYSTEM, prompt, temperature=0.4)
+    try:
+        raw = await asyncio.wait_for(
+            llm.chat(QUESTION_SYSTEM, prompt, temperature=0.4),
+            timeout=LLM_QUESTION_BUDGET,
+        )
+    except asyncio.TimeoutError as e:
+        raise StockAdviceUnavailable(f"LLM 响应超时(>{LLM_QUESTION_BUDGET}s)") from e
+    except Exception as e:
+        raise StockAdviceUnavailable(f"LLM 调用失败: {e}") from e
     return raw.strip()

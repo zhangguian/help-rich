@@ -28,6 +28,16 @@
 
 ## 历史记录
 
+### 2026-08-02 | v0.4.3 | analysis/chat 卡死修复:LLM 总时间预算 + MiniMax 余额不足识别
+
+#### Fixed(修复)
+- **请求无响应(挂起)**:`GET /api/stock/{code}/analysis` 的 LLM 调用无总时间预算,慢模型 + 退避重试可达 90s+。加 `asyncio.wait_for` 预算(analysis 25s / chat 40s),超时自动降级 `ai=null` / 503,接口保证快速返回
+- **MiniMax 余额不足导致解析崩溃**:MiniMax 错误藏在 HTTP 200 body(`base_resp.status_code=1008 insufficient balance`),原解析 `data["choices"][0]` 抛 `'NoneType' object is not subscriptable`。修复:非零 `base_resp` → 明确 LLMError;`choices` 为空 → 明确 LLMError(不再 NoneType 崩溃)
+- **chat 不再 500**:`ask_stock_question` 的 LLM 调用异常(余额不足/网络)原样冒泡 → FastAPI 500;现在统一转 `StockAdviceUnavailable` → 503 `LLM_UNAVAILABLE`
+
+#### Test
+- 新增 4 条:analysis 超时降级 / chat 超时 503 / chat LLM 报错 503 / MiniMax base_resp 余额不足 + choices 空;总 330 全绿
+
 ### 2026-08-02 | v0.4.2 | 技术指标 + AI 解读层(买股工具室核心)
 
 #### Added(新增)

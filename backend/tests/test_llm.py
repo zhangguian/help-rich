@@ -263,6 +263,47 @@ class TestMiniMaxClient:
         out = await MiniMaxClient("sk-test").chat("system", "user")
         assert out == "MiniMax 评语"
 
+    @pytest.mark.asyncio
+    async def test_chat_insufficient_balance_raises(self, monkeypatch):
+        """MiniMax 余额不足:HTTP 200 + base_resp.status_code != 0(错误藏 body)"""
+        from app.llm.minimax import MiniMaxClient
+
+        class FakeResp:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {
+                    "choices": None,
+                    "base_resp": {"status_code": 1008, "status_msg": "insufficient balance"},
+                }
+
+        async def fake_post(self, url, headers=None, json=None):
+            return FakeResp()
+
+        monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
+        with pytest.raises(LLMError, match="1008|余额|insufficient"):
+            await MiniMaxClient("sk-test").chat("system", "user")
+
+    @pytest.mark.asyncio
+    async def test_chat_empty_choices_raises(self, monkeypatch):
+        """HTTP 200 但 choices 为空 → LLMError(非 NoneType 崩溃)"""
+        from app.llm.minimax import MiniMaxClient
+
+        class FakeResp:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {"choices": None, "base_resp": {"status_code": 0, "status_msg": "ok"}}
+
+        async def fake_post(self, url, headers=None, json=None):
+            return FakeResp()
+
+        monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
+        with pytest.raises(LLMError, match="choices"):
+            await MiniMaxClient("sk-test").chat("system", "user")
+
 
 class TestDoubaoClient:
     def test_meta(self):

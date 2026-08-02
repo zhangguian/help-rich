@@ -38,6 +38,19 @@ class FakeLLM:
         return self.reply
 
 
+class SlowLLM:
+    """模拟 LLM 卡住不返回(测试超时预算降级)"""
+
+    name = "slow"
+
+    def __init__(self, delay: float = 5.0):
+        self.delay = delay
+
+    async def chat(self, system, user, temperature=0.3, max_retries=3):
+        await asyncio.sleep(self.delay)
+        return "{}"
+
+
 def _async(value):
     async def _f(*args, **kwargs):
         return value
@@ -106,6 +119,13 @@ class TestAnalysisService:
         assert r["ai"] is None
         assert r["indicators"]["latest_close"] == 100.0
 
+    def test_llm_timeout_degrades(self, monkeypatch):
+        monkeypatch.setattr(stock_advice_service, "LLM_ANALYSIS_BUDGET", 0.05)
+        _mock_llm(monkeypatch, SlowLLM(delay=1.0))
+        r = asyncio.run(stock_advice_service.get_stock_analysis("600519.SH", _kline([100] * 40)))
+        assert r["ai"] is None
+        assert r["indicators"]["latest_close"] == 100.0
+
 
 class TestChatService:
     def test_success(self, monkeypatch):
@@ -120,6 +140,33 @@ class TestChatService:
 
     def test_no_llm_raises(self, monkeypatch):
         _mock_llm(monkeypatch, None)
+        with pytest.raises(StockAdviceUnavailable):
+            asyncio.run(
+                stock_advice_service.ask_stock_question(
+                    "600519.SH", "能买吗?", _kline([100] * 40), position_cost=None
+                )
+            )
+
+    def test_llm_timeout_raises(self, monkeypatch):
+        monkeypatch.setattr(stock_advice_service, "LLM_QUESTION_BUDGET", 0.05)
+        _mock_llm(monkeypatch, SlowLLM(delay=1.0))
+        with pytest.raises(StockAdviceUnavailable):
+            asyncio.run(
+                stock_advice_service.ask_stock_question(
+                    "600519.SH", "能买吗?", _kline([100] * 40), position_cost=None
+                )
+            )
+
+    def test_llm_error_raises(self, monkeypatch):
+        """LLM 报错(余额不足等)→ StockAdviceUnavailable(503),不冒 500"""
+
+        class BoomLLM:
+            name = "boom"
+
+            async def chat(self, system, user, temperature=0.3, max_retries=3):
+                raise RuntimeError("MiniMax 响应错误(1008): insufficient balance")
+
+        _mock_llm(monkeypatch, BoomLLM())
         with pytest.raises(StockAdviceUnavailable):
             asyncio.run(
                 stock_advice_service.ask_stock_question(

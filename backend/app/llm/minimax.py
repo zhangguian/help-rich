@@ -73,8 +73,17 @@ class MiniMaxClient(BaseLLM):
 
                 if resp.status_code == 200:
                     data = resp.json()
+                    base = data.get("base_resp") or {}
+                    if base.get("status_code"):
+                        raise LLMError(
+                            f"{self.provider_label} 响应错误({base.get('status_code')}): "
+                            f"{base.get('status_msg') or '未知'}"
+                        )
+                    choices = data.get("choices")
+                    if not choices:
+                        raise LLMError(f"{self.provider_label} 响应格式异常: choices 为空")
                     try:
-                        return data["choices"][0]["message"]["content"].strip()
+                        return choices[0]["message"]["content"].strip()
                     except (KeyError, IndexError, TypeError) as e:
                         raise LLMError(f"{self.provider_label} 响应格式异常: {e}") from e
 
@@ -140,8 +149,17 @@ class MiniMaxClient(BaseLLM):
 
                 if resp.status_code == 200:
                     data = resp.json()
+                    base = data.get("base_resp") or {}
+                    if base.get("status_code"):
+                        raise LLMError(
+                            f"{self.provider_label} 视觉响应错误({base.get('status_code')}): "
+                            f"{base.get('status_msg') or '未知'}"
+                        )
+                    choices = data.get("choices")
+                    if not choices:
+                        raise LLMError(f"{self.provider_label} 视觉响应格式异常: choices 为空")
                     try:
-                        return data["choices"][0]["message"]["content"].strip()
+                        return choices[0]["message"]["content"].strip()
                     except (KeyError, IndexError, TypeError) as e:
                         raise LLMError(
                             f"{self.provider_label} 视觉响应格式异常: {e}"
