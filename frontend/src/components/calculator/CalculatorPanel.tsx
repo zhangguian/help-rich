@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { Card } from '@/components/ui/Card';
 import { PnlHeatmap } from '@/components/charts/PnlHeatmap';
+import { TermHint } from '@/components/ui/TermHint';
 import { decimalFormat } from '@/lib/decimalFormat';
 import { apiGet, apiPost } from '@/lib/api';
 import { normalizeCode } from '@/lib/stockCode';
@@ -210,7 +211,9 @@ export function CalculatorPanel({
 
       {/* 右:输入 + 实时结果 */}
       <Card padding="md">
-        <h3 className="text-sm font-medium text-text-sec mb-3">预交易</h3>
+        <h3 className="text-sm font-medium text-text-sec mb-3 inline-flex items-center">
+          预交易<TermHint term="pre_trade" />
+        </h3>
         {positions.length === 0 ? (
           <p className="text-text-ter text-sm">暂无持仓,无法选择股票</p>
         ) : (
@@ -231,7 +234,9 @@ export function CalculatorPanel({
                     checked={action === 'buy'}
                     onChange={() => setAction('buy')}
                   />
-                  <span className="text-down">买入</span>
+                  <span className="text-down inline-flex items-center">
+                    买入<TermHint term="action_buy" />
+                  </span>
                 </label>
                 <label className="flex items-center gap-2">
                   <input
@@ -239,13 +244,17 @@ export function CalculatorPanel({
                     checked={action === 'sell'}
                     onChange={() => setAction('sell')}
                   />
-                  <span className="text-up">卖出</span>
+                  <span className="text-up inline-flex items-center">
+                    卖出<TermHint term="action_sell" />
+                  </span>
                 </label>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs text-text-ter mb-1.5">股数</label>
+                  <label className="block text-xs text-text-ter mb-1.5 inline-flex items-center">
+                    股数<TermHint term="shares" />
+                  </label>
                   <input
                     type="number"
                     value={txShares}
@@ -259,7 +268,9 @@ export function CalculatorPanel({
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-text-ter mb-1.5">成本价</label>
+                  <label className="block text-xs text-text-ter mb-1.5 inline-flex items-center">
+                    成本价<TermHint term="cost_price" />
+                  </label>
                   <input
                     type="text"
                     value={txPrice}
@@ -270,8 +281,8 @@ export function CalculatorPanel({
                 </div>
               </div>
 
-              <div className="text-xs text-text-ter">
-                交易额 ¥{decimalFormat((txShares * Number(txPrice || 0)).toFixed(2))}
+              <div className="text-xs text-text-ter inline-flex items-center">
+                交易额<TermHint term="trade_amount" /> ¥{decimalFormat((txShares * Number(txPrice || 0)).toFixed(2))}
               </div>
             </div>
 
@@ -302,15 +313,45 @@ export function CalculatorPanel({
 function ResultGrid({ after }: { before: CalculatorBefore; after: CalculatorAfter }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      <Stat label="新股数" value={`${after.shares.toLocaleString()} 股`} />
       <Stat
-        label="新成本价"
-        value={after.costPrice ? `¥${after.costPrice}` : '— 清仓'}
+        label={
+          <span className="inline-flex items-center">
+            新股数<TermHint term="new_shares" />
+          </span>
+        }
+        value={`${after.shares.toLocaleString()} 股`}
+      />
+      <Stat
+        label={
+          <span className="inline-flex items-center">
+            新成本价<TermHint term="new_cost_price" />
+          </span>
+        }
+        value={
+          after.costPrice ? (
+            `¥${after.costPrice}`
+          ) : (
+            <span className="inline-flex items-center">
+              — <TermHint term="clear_position" />
+            </span>
+          )
+        }
         highlight
       />
-      <Stat label="持仓资金" value={`¥${decimalFormat(after.totalCost)}`} />
       <Stat
-        label="已实现盈亏"
+        label={
+          <span className="inline-flex items-center">
+            持仓资金<TermHint term="total_cost" />
+          </span>
+        }
+        value={`¥${decimalFormat(after.totalCost)}`}
+      />
+      <Stat
+        label={
+          <span className="inline-flex items-center">
+            已实现盈亏<TermHint term="realized_pnl" />
+          </span>
+        }
         value={`¥${decimalFormat(after.realizedPnl)}`}
         color={Number(after.realizedPnl) >= 0 ? 'up' : 'down'}
       />
@@ -324,8 +365,8 @@ function Stat({
   highlight,
   color,
 }: {
-  label: string;
-  value: string;
+  label: React.ReactNode;
+  value: React.ReactNode;
   highlight?: boolean;
   color?: 'up' | 'down';
 }) {

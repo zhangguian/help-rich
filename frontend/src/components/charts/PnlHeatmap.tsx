@@ -4,6 +4,8 @@ import { useState } from 'react';
 
 import clsx from 'clsx';
 
+import { TermHint } from '@/components/ui/TermHint';
+
 import type { PnlGridRow } from '@/lib/types';
 
 /**
@@ -39,8 +41,11 @@ export function PnlHeatmap({ grid, currentPricePct, recommendedRange }: PnlHeatm
 
   return (
     <div>
-      <div className="text-xs text-text-sec mb-3 flex items-center gap-4">
-        <span>±10% 盈亏热力图(21 档)</span>
+      <div className="text-xs text-text-sec mb-3 flex items-center gap-4 flex-wrap">
+        <span className="inline-flex items-center">
+          ±10% 盈亏热力图<TermHint term="pnl_heatmap" />(
+          <TermHint term="pnl_grid_21" />21 档)
+        </span>
         <span className="flex items-center gap-1">
           <span className="inline-block w-3 h-3 rounded-sm bg-up/30" style={{ background: 'rgba(244,63,94,0.3)' }} />
           盈利
@@ -61,8 +66,12 @@ export function PnlHeatmap({ grid, currentPricePct, recommendedRange }: PnlHeatm
               width: `${((recommendedRange[1] - recommendedRange[0]) / 20) * 100}%`,
               background: 'rgba(37, 99, 235, 0.08)',
             }}
-            title="建议加仓区间"
-          />
+          >
+            <span className="absolute -top-3 left-1 inline-flex items-center text-[10px] text-accent">
+              <TermHint term="suggested_add_range" />
+              <span className="ml-1">建议加仓区间</span>
+            </span>
+          </div>
         )}
 
         <div className="grid grid-cols-21 gap-1">

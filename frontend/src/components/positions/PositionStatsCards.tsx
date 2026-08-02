@@ -1,6 +1,7 @@
 'use client';
 
 import { Card } from '@/components/ui/Card';
+import { TermHint } from '@/components/ui/TermHint';
 import { decimalFormat } from '@/lib/decimalFormat';
 import type { Position } from '@/lib/types';
 
@@ -38,7 +39,9 @@ export function PositionStatsCards({ positions }: { positions: Position[] }) {
       <div className="grid grid-cols-3 gap-3">
         {/* 总市值 */}
         <div>
-          <div className="text-text-sec text-xs mb-1">总市值</div>
+          <div className="text-text-sec text-xs mb-1 inline-flex items-center">
+            总市值<TermHint term="total_market_value" />
+          </div>
           <div className="text-xl font-mono font-semibold">
             {hasQuotes ? `¥${decimalFormat(totalMarketValue.toFixed(2))}` : '--'}
           </div>
@@ -48,7 +51,9 @@ export function PositionStatsCards({ positions }: { positions: Position[] }) {
         </div>
         {/* 总浮盈(占比%) */}
         <div>
-          <div className="text-text-sec text-xs mb-1">总浮盈</div>
+          <div className="text-text-sec text-xs mb-1 inline-flex items-center">
+            总浮盈<TermHint term="total_floating_pnl" />
+          </div>
           <div
             className={`text-xl font-mono font-semibold ${pctClass(totalFloatingPnl)}`}
           >
@@ -56,15 +61,22 @@ export function PositionStatsCards({ positions }: { positions: Position[] }) {
               ? `${totalFloatingPnl >= 0 ? '+' : ''}¥${decimalFormat(totalFloatingPnl.toFixed(2))}`
               : '--'}
           </div>
-          <div className="text-xs text-text-ter mt-1">
-            {hasQuotes && ratioPct != null
-              ? `占比 ${ratioPct >= 0 ? '+' : ''}${ratioPct.toFixed(2)}%`
-              : '行情暂不可用'}
+          <div className="text-xs text-text-ter mt-1 inline-flex items-center">
+            {hasQuotes && ratioPct != null ? (
+              <>
+                占比<TermHint term="pnl_ratio" /> {ratioPct >= 0 ? '+' : ''}
+                {ratioPct.toFixed(2)}%
+              </>
+            ) : (
+              '行情暂不可用'
+            )}
           </div>
         </div>
         {/* 今日盈亏 */}
         <div>
-          <div className="text-text-sec text-xs mb-1">今日盈亏</div>
+          <div className="text-text-sec text-xs mb-1 inline-flex items-center">
+            今日盈亏<TermHint term="today_pnl" />
+          </div>
           <div
             className={`text-xl font-mono font-semibold ${pctClass(totalTodayPnl)}`}
           >

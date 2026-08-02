@@ -8,6 +8,7 @@ import type { HoldingsHealth } from '@/lib/types';
 
 import { Card } from '@/components/ui/Card';
 import { SkeletonState } from '@/components/ui/States';
+import { TermHint } from '@/components/ui/TermHint';
 
 /**
  * 持仓体检面板(v0.4.0,弹窗内)
@@ -70,17 +71,23 @@ export function HoldingsHealthPanel() {
       {/* 组合总览 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card padding="md">
-          <div className="text-text-sec text-sm mb-1">持仓数</div>
+          <div className="text-text-sec text-sm mb-1 inline-flex items-center">
+            持仓数<TermHint term="position_count" />
+          </div>
           <div className="text-2xl font-mono font-semibold">{data.totalPositions}</div>
         </Card>
         <Card padding="md">
-          <div className="text-text-sec text-sm mb-1">总市值</div>
+          <div className="text-text-sec text-sm mb-1 inline-flex items-center">
+            总市值<TermHint term="total_market_value" />
+          </div>
           <div className="text-2xl font-mono font-semibold">
             ¥{decimalFormat(data.totalMarketValue)}
           </div>
         </Card>
         <Card padding="md">
-          <div className="text-text-sec text-sm mb-1">总浮盈</div>
+          <div className="text-text-sec text-sm mb-1 inline-flex items-center">
+            总浮盈<TermHint term="total_floating_pnl" />
+          </div>
           <div
             className={`text-2xl font-mono font-semibold ${
               Number(data.totalFloatingPnl) >= 0 ? 'text-up' : 'text-down'
@@ -89,18 +96,26 @@ export function HoldingsHealthPanel() {
             {Number(data.totalFloatingPnl) >= 0 ? '+' : ''}¥
             {decimalFormat(data.totalFloatingPnl)}
           </div>
-          <div className="text-xs text-text-ter mt-1">
-            盈亏率 {data.pnlRatioPct >= 0 ? '+' : ''}
+          <div className="text-xs text-text-ter mt-1 inline-flex items-center">
+            盈亏率<TermHint term="pnl_ratio" /> {data.pnlRatioPct >= 0 ? '+' : ''}
             {data.pnlRatioPct}%
           </div>
         </Card>
         <Card padding="md">
-          <div className="text-text-sec text-sm mb-1">风险等级</div>
+          <div className="text-text-sec text-sm mb-1 inline-flex items-center">
+            风险等级<TermHint term="risk_level" />
+          </div>
           <div className={`text-2xl font-mono font-semibold ${riskCls}`}>
             {data.riskLevel}
           </div>
-          <div className="text-xs text-text-ter mt-1">
-            {data.riskScore > 0 ? `风险分 ${data.riskScore}` : '无持仓'}
+          <div className="text-xs text-text-ter mt-1 inline-flex items-center">
+            {data.riskScore > 0 ? (
+              <>
+                风险分<TermHint term="risk_score" /> {data.riskScore}
+              </>
+            ) : (
+              '无持仓'
+            )}
           </div>
         </Card>
       </div>
@@ -140,7 +155,24 @@ export function HoldingsHealthPanel() {
                       <span className="text-text-ter text-sm ml-2 font-mono">
                         {p.stockCode}
                       </span>
-                      <span className={`ml-2 text-xs ${st.cls}`}>{st.text}</span>
+                      <span
+                        className={`ml-2 text-xs ${st.cls} inline-flex items-center`}
+                      >
+                        {st.text}
+                        <TermHint
+                          term={
+                            p.status === 'profit'
+                              ? 'status_profit'
+                              : p.status === 'loss'
+                                ? 'status_loss'
+                                : p.status === 'flat'
+                                  ? 'status_flat'
+                                  : p.status === 'high_concentration'
+                                    ? 'status_high_concentration'
+                                    : 'status_no_quote'
+                          }
+                        />
+                      </span>
                     </div>
                     <div className="text-sm text-text-sec mt-1">
                       {p.shares} 股 · 成本 ¥{decimalFormat(p.avgCost)} · 现价 ¥
@@ -156,9 +188,9 @@ export function HoldingsHealthPanel() {
                       {Number(p.floatingPnl) >= 0 ? '+' : ''}¥
                       {decimalFormat(p.floatingPnl)}
                     </div>
-                    <div className="text-xs text-text-ter mt-1">
+                    <div className="text-xs text-text-ter mt-1 inline-flex items-center">
                       {p.floatingPnlRatioPct >= 0 ? '+' : ''}
-                      {p.floatingPnlRatioPct}% · 占比 {p.concentrationPct}%
+                      {p.floatingPnlRatioPct}% · 占比<TermHint term="concentration" /> {p.concentrationPct}%
                     </div>
                   </div>
                 </div>
