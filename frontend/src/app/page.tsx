@@ -219,8 +219,8 @@ export default function Workbench() {
 
       {/* 三区主体 */}
       <div className="flex flex-1 gap-4 min-h-0">
-        {/* 左 aside:大盘 Tab 时收起,中间区占满宽度 */}
-        {tab !== 'market' && (
+        {/* 左 aside:大盘 / 设置 Tab 时收起,中间区占满宽度 */}
+        {tab !== 'market' && tab !== 'settings' && (
           <aside className="w-72 shrink-0 min-h-0">
             <WatchList
               items={visibleItems}
@@ -388,8 +388,8 @@ export default function Workbench() {
           </AnimatePresence>
         </section>
 
-        {/* 右侧:上操作提示 / 下 AI 对话 — 大盘 Tab 时收起 */}
-        {tab !== 'market' && (
+        {/* 右侧:上操作提示 / 下 AI 对话 — 大盘 / 设置 Tab 时收起 */}
+        {tab !== 'market' && tab !== 'settings' && (
           <aside className="w-[22rem] shrink-0 flex flex-col gap-3 min-h-0">
             <div className="flex-[3] min-h-0 overflow-y-auto pr-1">
               <AnalysisPanel
