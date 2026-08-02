@@ -208,4 +208,27 @@ export const GLOSSARY: Record<string, GlossaryEntry> = {
   main_fund_flow: {
     desc: '主力净流入:大单成交净方向(资金流入/流出)。MVP 用涨跌幅×成交额近似估算,非真实主力净额,仅供可视化参考。',
   },
+
+  // === K 线图图例指标 v2 ===
+  rsi: {
+    desc: 'RSI(Relative Strength Index,14 日):衡量一段时间内涨跌幅度对比。≥70 超买,≤30 超卖,50 为多空分界;持续上涨时高位接近 100。',
+  },
+  cci: {
+    desc: 'CCI(Commodity Channel Index,20 日):衡量价格相对均价的偏离度。>100 超买,<-100 超卖,>50 强势上涨,<-50 强势下跌。',
+  },
+  stoch: {
+    desc: 'Stochastic(14,3,3):快慢随机指标。FastK/FastD 为快线,SlowK/SlowD 为平滑后的慢线。K≥80 超买,K≤20 超卖;K 上穿 D 为金叉,下穿为死叉。',
+  },
+  mom: {
+    desc: 'MOM(Momentum,10 日):close - close[10]。正值看多,负值看空。rising/falling 表示动能方向,zero_cross_up/down 表示刚穿越零轴。',
+  },
+  wmsr: {
+    desc: 'Williams %R(14 日):范围 [-100, 0]。>−20 超买,<-80 超卖,与 Stochastic 类似但方向相反;专门衡量收盘在近期高低区间中的相对位置。',
+  },
+  skt: {
+    desc: 'Slow Stochastic:SlowK + SlowD。把 Fast Stochastic 的 %K 再做 3 日平滑,滤掉短期噪声,适合判断趋势确认与反转。',
+  },
+  fask: {
+    desc: 'Fast %K:Fast Stochastic 的 %K 值,未经 Slow 平滑的原始快线,反应短期超买超卖最灵敏。',
+  },
 };

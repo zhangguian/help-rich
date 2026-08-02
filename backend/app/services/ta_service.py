@@ -477,6 +477,294 @@ def _volume_price(
     }
 
 
+# ============ K 线图图例指标 v2:RSI / CCI / STOCH / MOM / WMSR / SKT / FASK ============
+
+
+def _rsi(closes: list[float], period: int = 14) -> dict[str, Any]:
+    """RSI(14 日,Wilder 平滑)
+
+    - 首期 gain/loss 用前 period 日均值初始化
+    - 后续 avg_gain/avg_loss 递推:prev * (period-1)/period + cur/period
+    - 数据不足(<period+1)返回空 + state=None
+    """
+    if len(closes) < period + 1:
+        return {"rsi": None, "rsi_series": [], "state": None}
+    gains: list[float] = []
+    losses: list[float] = []
+    for i in range(1, period + 1):
+        diff = closes[i] - closes[i - 1]
+        gains.append(max(diff, 0.0))
+        losses.append(max(-diff, 0.0))
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    rsi_series: list[float | None] = [None] * period  # 前 period 项 RSI 未知
+    for i in range(period, len(closes)):
+        if i == period:
+            # 首个 RSI
+            if avg_loss == 0:
+                rsi_series.append(100.0)
+            else:
+                rs = avg_gain / avg_loss
+                rsi_series.append(round(100 - 100 / (1 + rs), 2))
+        else:
+            diff = closes[i] - closes[i - 1]
+            gain = max(diff, 0.0)
+            loss = max(-diff, 0.0)
+            avg_gain = (avg_gain * (period - 1) + gain) / period
+            avg_loss = (avg_loss * (period - 1) + loss) / period
+            if avg_loss == 0:
+                rsi_series.append(100.0)
+            else:
+                rs = avg_gain / avg_loss
+                rsi_series.append(round(100 - 100 / (1 + rs), 2))
+
+    valid = [v for v in rsi_series if v is not None]
+    last = valid[-1] if valid else None
+    state = None
+    if last is not None:
+        if last >= 70:
+            state = "overbought"
+        elif last <= 30:
+            state = "oversold"
+        elif last >= 50:
+            state = "bullish"
+        elif last < 50:
+            state = "bearish"
+        else:
+            state = "neutral"
+    return {
+        "rsi": last,
+        "rsi_series": valid[-60:],
+        "state": state,
+    }
+
+
+def _cci(highs: list[float], lows: list[float], closes: list[float], period: int = 20) -> dict[str, Any]:
+    """CCI(20 日,顺势指标)
+
+    - TP = (H+L+C)/3
+    - CCI = (TP - SMA(TP, n)) / (0.015 * mean_dev)
+    - mean_dev = Σ|TP_i - SMA| / n
+    """
+    if len(closes) < period:
+        return {"cci": None, "cci_series": [], "state": None}
+    tp: list[float] = [(highs[i] + lows[i] + closes[i]) / 3 for i in range(len(closes))]
+    sma_tp = _sma(tp, period)
+    cci_series: list[float | None] = [None] * (period - 1)
+    for i in range(period - 1, len(closes)):
+        if sma_tp[i] is None:
+            cci_series.append(None)
+            continue
+        mean_dev = sum(abs(tp[j] - sma_tp[i]) for j in range(i - period + 1, i + 1)) / period
+        if mean_dev == 0:
+            cci_series.append(0.0)
+        else:
+            cci_series.append(round((tp[i] - sma_tp[i]) / (0.015 * mean_dev), 2))
+
+    valid = [v for v in cci_series if v is not None]
+    last = valid[-1] if valid else None
+    state = None
+    if last is not None:
+        if last >= 100:
+            state = "overbought"
+        elif last <= -100:
+            state = "oversold"
+        elif last >= 50:
+            state = "strong_up"
+        elif last <= -50:
+            state = "strong_down"
+        else:
+            state = "neutral"
+    return {
+        "cci": last,
+        "cci_series": valid[-60:],
+        "state": state,
+    }
+
+
+def _stoch(
+    highs: list[float], lows: list[float], closes: list[float],
+    n: int = 14, k_smooth: int = 3, d_smooth: int = 3,
+) -> dict[str, Any]:
+    """Stochastic(14, 3, 3):Fast %K / Fast %D / Slow %K / Slow %D
+
+    - Fast %K_i = (C_i - LLV_n) / (HHV_n - LLV_n) * 100
+    - Slow %K = SMA(Fast%K, k_smooth)
+    - Fast %D = SMA(Fast%K, k_smooth)(与 SlowK 同) — 但本函数按经典
+      stochastic 输出 4 条:FastK / FastD / SlowK / SlowD
+    - 经典公式:
+      * FastK = (C-LLV)/(HHV-LLV)*100
+      * FastD = SMA(FastK, k_smooth)   ← 此即 SlowK
+      * SlowK = SMA(FastK, k_smooth)   ← 同 FastD
+      * SlowD = SMA(SlowK, d_smooth)
+    - 实际:"FastD" 与 "SlowK" 是同一条线。保留两名字以兼容前端展示。
+    """
+    if len(closes) < n:
+        return {
+            "fastk": None, "fastd": None, "slowk": None, "slowd": None,
+            "fastk_series": [], "fastd_series": [], "slowk_series": [], "slowd_series": [],
+            "state": None,
+        }
+    fastk_raw: list[float | None] = [None] * (n - 1)
+    for i in range(n - 1, len(closes)):
+        h_max = max(highs[i - n + 1:i + 1])
+        l_min = min(lows[i - n + 1:i + 1])
+        if h_max == l_min:
+            fastk_raw.append(50.0)
+        else:
+            fastk_raw.append(round((closes[i] - l_min) / (h_max - l_min) * 100, 2))
+
+    fastk_only = [v for v in fastk_raw if v is not None]
+    fastd_series = _sma(fastk_only, k_smooth)
+    # 将 fastd_series 长度对齐到 closes 长度(前面补 None)
+    pad = [None] * (len(closes) - len(fastd_series))
+    fastd_aligned: list[float | None] = pad + fastd_series
+    slowk_only = [v for v in fastd_aligned if v is not None]
+    slowd_series = _sma(slowk_only, d_smooth)
+    pad2 = [None] * (len(closes) - len(slowd_series))
+    slowd_aligned: list[float | None] = pad2 + slowd_series
+    # slowk 与 fastd 数值相同,序列结构上保留
+    slowk_series = list(fastd_aligned)
+
+    valid_fastk = [v for v in fastk_raw if v is not None]
+    valid_fastd = [v for v in fastd_aligned if v is not None]
+    valid_slowd = [v for v in slowd_aligned if v is not None]
+
+    last_fastk = valid_fastk[-1] if valid_fastk else None
+    last_fastd = valid_fastd[-1] if valid_fastd else None
+    last_slowk = valid_fastd[-1] if valid_fastd else None
+    last_slowd = valid_slowd[-1] if valid_slowd else None
+
+    state = None
+    if last_fastk is not None and last_fastd is not None:
+        if last_fastk >= 80:
+            state = "overbought"
+        elif last_fastk <= 20:
+            state = "oversold"
+        elif len(valid_fastk) >= 2 and len(valid_fastd) >= 2:
+            # 金叉死叉判定(FastK vs FastD 最近两日)
+            if valid_fastk[-2] <= valid_fastd[-2] and valid_fastk[-1] > valid_fastd[-1]:
+                state = "golden_cross"
+            elif valid_fastk[-2] >= valid_fastd[-2] and valid_fastk[-1] < valid_fastd[-1]:
+                state = "dead_cross"
+            else:
+                state = "neutral"
+        else:
+            state = "neutral"
+
+    return {
+        "fastk": round(last_fastk, 2) if last_fastk is not None else None,
+        "fastd": round(last_fastd, 2) if last_fastd is not None else None,
+        "slowk": round(last_slowk, 2) if last_slowk is not None else None,
+        "slowd": round(last_slowd, 2) if last_slowd is not None else None,
+        "fastk_series": valid_fastk[-60:],
+        "fastd_series": valid_fastd[-60:],
+        "slowk_series": valid_fastd[-60:],   # slowk ≡ fastd
+        "slowd_series": valid_slowd[-60:],
+        "state": state,
+    }
+
+
+def _mom(closes: list[float], period: int = 10) -> dict[str, Any]:
+    """MOM(10 日):close[i] - close[i-period]
+
+    - 数据不足(<period+1)返回空
+    - state:rising(>0 且 5 日变化量>0)/ falling(...)
+    """
+    if len(closes) < period + 1:
+        return {"mom": None, "mom_series": [], "state": None}
+    mom_series: list[float | None] = [None] * period
+    for i in range(period, len(closes)):
+        mom_series.append(round(closes[i] - closes[i - period], 2))
+    valid = [v for v in mom_series if v is not None]
+    last = valid[-1] if valid else None
+    state = None
+    if last is not None:
+        if len(valid) >= 6:
+            delta_5 = valid[-1] - valid[-6]  # 5 个交易日前对比
+            # 持续上行/下行:末日 MOM >0 且 5 日 MOM 不降(rising);
+            # 末日 MOM <0 且 5 日 MOM 不升(falling);否则 zero_cross 或 neutral
+            if last > 0 and delta_5 >= 0:
+                state = "rising"
+            elif last < 0 and delta_5 <= 0:
+                state = "falling"
+            elif last > 0 and valid[-2] is not None and valid[-2] <= 0:
+                state = "zero_cross_up"
+            elif last < 0 and valid[-2] is not None and valid[-2] >= 0:
+                state = "zero_cross_down"
+            else:
+                state = "neutral"
+        else:
+            state = "rising" if last > 0 else ("falling" if last < 0 else "neutral")
+    return {
+        "mom": last,
+        "mom_series": valid[-60:],
+        "state": state,
+    }
+
+
+def _wmsr(highs: list[float], lows: list[float], closes: list[float], period: int = 14) -> dict[str, Any]:
+    """Williams %R(14 日,范围 [-100, 0])
+
+    - %R = (HHV_n - C) / (HHV_n - LLV_n) * -100
+    - 超买:>-20;超售:<-80
+    """
+    if len(closes) < period:
+        return {"wmsr": None, "wmsr_series": [], "state": None}
+    wmsr_series: list[float | None] = [None] * (period - 1)
+    for i in range(period - 1, len(closes)):
+        h_max = max(highs[i - period + 1:i + 1])
+        l_min = min(lows[i - period + 1:i + 1])
+        if h_max == l_min:
+            wmsr_series.append(-50.0)
+        else:
+            wmsr_series.append(round((h_max - closes[i]) / (h_max - l_min) * -100, 2))
+    valid = [v for v in wmsr_series if v is not None]
+    last = valid[-1] if valid else None
+    state = None
+    if last is not None:
+        if last >= -20:
+            state = "overbought"
+        elif last <= -80:
+            state = "oversold"
+        else:
+            state = "neutral"
+    return {
+        "wmsr": last,
+        "wmsr_series": valid[-60:],
+        "state": state,
+    }
+
+
+def _sk(stoch_dict: dict[str, Any]) -> dict[str, Any]:
+    """Slow Stochastic 视图(从 _stoch 结果提取 SlowK + SlowD)"""
+    return {
+        "slowk": stoch_dict.get("slowk"),
+        "slowd": stoch_dict.get("slowd"),
+        "slowk_series": stoch_dict.get("slowk_series", []),
+        "slowd_series": stoch_dict.get("slowd_series", []),
+        "state": stoch_dict.get("state"),  # 与 STOCH 共享 state
+    }
+
+
+def _fask(stoch_dict: dict[str, Any]) -> dict[str, Any]:
+    """Fast %K 单值视图(从 _stoch 结果提取 FastK)"""
+    fastk = stoch_dict.get("fastk")
+    state = None
+    if fastk is not None:
+        if fastk >= 80:
+            state = "overbought"
+        elif fastk <= 20:
+            state = "oversold"
+        else:
+            state = "neutral"
+    return {
+        "fastk": fastk,
+        "fastk_series": stoch_dict.get("fastk_series", []),
+        "state": state,
+    }
+
+
 def _patterns(
     closes: list[float], highs: list[float], lows: list[float], opens: list[float],
 ) -> list[dict[str, Any]]:
@@ -943,6 +1231,30 @@ def compute_indicators(klines: list[dict[str, Any]]) -> dict[str, Any]:
     if len(closes) < 21:
         degraded.append("position: len<21")
 
+    # —— v2 K 线图图例指标:RSI / CCI / STOCH / MOM / WMSR / SKT / FASK ——
+    rsi = _rsi(closes, period=14)
+    if len(closes) < 15:
+        degraded.append("rsi: len<15")
+
+    cci = _cci(highs, lows, closes, period=20)
+    if len(closes) < 20:
+        degraded.append("cci: len<20")
+
+    stoch = _stoch(highs, lows, closes, n=14, k_smooth=3, d_smooth=3)
+    if len(closes) < 14:
+        degraded.append("stoch: len<14")
+
+    mom = _mom(closes, period=10)
+    if len(closes) < 11:
+        degraded.append("mom: len<11")
+
+    wmsr = _wmsr(highs, lows, closes, period=14)
+    if len(closes) < 14:
+        degraded.append("wmsr: len<14")
+
+    skt = _sk(stoch)
+    fask = _fask(stoch)
+
     ma_summary = {
         "ma5": round(ma5_v, 2) if ma5_v is not None else None,
         "ma10": round(ma10_v, 2) if ma10_v is not None else None,
@@ -975,6 +1287,13 @@ def compute_indicators(klines: list[dict[str, Any]]) -> dict[str, Any]:
         "patterns": patterns,
         "liar": liar,
         "position": position,
+        "rsi": rsi,
+        "cci": cci,
+        "stoch": stoch,
+        "mom": mom,
+        "wmsr": wmsr,
+        "skt": skt,
+        "fask": fask,
         "signal": signal,
         "signal_series": signal_series,
         "data_quality": {

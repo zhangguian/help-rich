@@ -319,8 +319,69 @@ export interface BollIndicator {
   upperSeries: number[];
   lowerSeries: number[];
   bandwidth: number | null;
-  squeeze: boolean | null;
-  position: 'touching_upper' | 'touching_lower' | 'middle' | null;
+  squeeze: boolean;
+  position: 'touching_upper' | 'touching_lower' | 'mid' | null;
+}
+
+/** K 线图图例指标 v2(roadmap §3.9 v3):RSI / CCI / STOCH / MOM / WMSR / SKT / FASK */
+export type IndicatorState =
+  | 'overbought'
+  | 'oversold'
+  | 'bullish'
+  | 'bearish'
+  | 'strong_up'
+  | 'strong_down'
+  | 'golden_cross'
+  | 'dead_cross'
+  | 'rising'
+  | 'falling'
+  | 'zero_cross_up'
+  | 'zero_cross_down'
+  | 'neutral'
+  | null;
+
+export interface RsiIndicator {
+  rsi: number | null;
+  rsiSeries: number[];
+  state: IndicatorState;
+}
+export interface CciIndicator {
+  cci: number | null;
+  cciSeries: number[];
+  state: IndicatorState;
+}
+export interface StochIndicator {
+  fastk: number | null;
+  fastd: number | null;
+  slowk: number | null;
+  slowd: number | null;
+  fastkSeries: number[];
+  fastdSeries: number[];
+  slowkSeries: number[];
+  slowdSeries: number[];
+  state: IndicatorState;
+}
+export interface MomIndicator {
+  mom: number | null;
+  momSeries: number[];
+  state: IndicatorState;
+}
+export interface WmsrIndicator {
+  wmsr: number | null;
+  wmsrSeries: number[];
+  state: IndicatorState;
+}
+export interface SktIndicator {
+  slowk: number | null;
+  slowd: number | null;
+  slowkSeries: number[];
+  slowdSeries: number[];
+  state: IndicatorState;
+}
+export interface FaskIndicator {
+  fastk: number | null;
+  fastkSeries: number[];
+  state: IndicatorState;
 }
 
 export interface VolumePriceReason {
@@ -405,6 +466,13 @@ export interface TechnicalIndicators {
   macd: MacdIndicator;
   kdj: KdjIndicator;
   boll: BollIndicator;
+  rsi: RsiIndicator;
+  cci: CciIndicator;
+  stoch: StochIndicator;
+  mom: MomIndicator;
+  wmsr: WmsrIndicator;
+  skt: SktIndicator;
+  fask: FaskIndicator;
   volumePrice: VolumePriceIndicator;
   patterns: PatternMatch[];
   liar: LiarIndicator;

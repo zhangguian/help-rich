@@ -19,12 +19,25 @@ import {
 } from 'lightweight-charts';
 
 import { apiGet } from '@/lib/api';
+import { TermHint } from '@/components/ui/TermHint';
 import type { KlineIndicatorsResponse } from '@/lib/types';
 
 export type KlinePeriod = 'daily' | 'weekly' | 'monthly' | '60min';
 
-/** 指标组(整组开关) */
-export type OverlayGroup = 'ma' | 'boll' | 'macd' | 'kdj';
+/** 指标组(整组开关) — 含画线组与图例展示组 */
+export type OverlayGroup =
+  | 'ma'
+  | 'boll'
+  | 'macd'
+  | 'kdj'
+  | 'volume'
+  | 'rsi'
+  | 'cci'
+  | 'stoch'
+  | 'mom'
+  | 'wmsr'
+  | 'skt'
+  | 'fask';
 
 /** 外部覆盖初始显隐(可选) */
 export interface ChartOverlay {
@@ -32,14 +45,30 @@ export interface ChartOverlay {
   boll?: boolean;
   macd?: boolean;
   kdj?: boolean;
+  volume?: boolean;
+  rsi?: boolean;
+  cci?: boolean;
+  stoch?: boolean;
+  mom?: boolean;
+  wmsr?: boolean;
+  skt?: boolean;
+  fask?: boolean;
 }
 
-/** 默认显示:MA 四线 + MACD;BOLL/KDJ 默认隐藏 */
+/** 默认显示:MA 四线 + MACD + 成交量;BOLL/KDJ/RSI/CCI/STOCH/MOM/WMSR/SKT/FASK 默认隐藏 */
 const DEFAULT_VISIBLE: Record<OverlayGroup, boolean> = {
   ma: true,
   boll: false,
   macd: true,
   kdj: false,
+  volume: true,
+  rsi: false,
+  cci: false,
+  stoch: false,
+  mom: false,
+  wmsr: false,
+  skt: false,
+  fask: false,
 };
 
 interface KlineItem {
@@ -75,12 +104,59 @@ interface LegendItem {
   label: string;
   color: string;
   decimals: number;
+  /** TermHint 术语键(展示「?」知识点 tooltip) */
+  term?: string;
+}
+
+interface LegendState {
+  /** 后端 state 字符串,如 "overbought" / "oversold" / "neutral" */
+  code: string | null;
+  /** 简写中文(超买 / 超卖 / 金叉 / 死叉 / 中性 / ...) */
+  label: string;
+  /** 颜色 tone:up=红,down=绿,accent=高亮,ter=灰 */
+  tone: 'up' | 'down' | 'accent' | 'ter';
 }
 
 interface LegendRow {
   group: OverlayGroup;
   label: string;
   items: LegendItem[];
+  /** TermHint 术语键(整行加「?」) */
+  term?: string;
+  /** 图例整行显示的当前状态(从后端拿) */
+  state?: LegendState | null;
+  /** 整行的当前主值(如 RSI 末值、MACD 金叉) */
+  currentValue?: string;
+}
+
+/** state code → 中文短词 + 颜色 tone(供 chip 显示) */
+function stateOfIndicator(code: string | null): LegendState | null {
+  if (!code) return null;
+  const map: Record<string, { label: string; tone: LegendState['tone'] }> = {
+    overbought: { label: '超买', tone: 'up' },
+    oversold: { label: '超卖', tone: 'down' },
+    bullish: { label: '偏多', tone: 'up' },
+    bearish: { label: '偏空', tone: 'down' },
+    strong_up: { label: '强势', tone: 'up' },
+    strong_down: { label: '弱势', tone: 'down' },
+    golden_cross: { label: '金叉', tone: 'up' },
+    dead_cross: { label: '死叉', tone: 'down' },
+    rising: { label: '上升', tone: 'up' },
+    falling: { label: '下降', tone: 'down' },
+    zero_cross_up: { label: '上穿 0', tone: 'up' },
+    zero_cross_down: { label: '下穿 0', tone: 'down' },
+    neutral: { label: '中性', tone: 'ter' },
+  };
+  const m = map[code];
+  if (!m) return { code, label: code, tone: 'ter' };
+  return { code, label: m.label, tone: m.tone };
+}
+
+function stateOfVolume(code: string | null): LegendState | null {
+  if (!code) return null;
+  if (code === 'expand') return { code, label: '放量', tone: 'up' };
+  if (code === 'shrink') return { code, label: '缩量', tone: 'down' };
+  return { code, label: '正常', tone: 'ter' };
 }
 
 /**
@@ -110,6 +186,8 @@ export function KLineChart({
   const chartRef = useRef<IChartApi | null>(null);
   // 数据加载失败原因(展示给用户,避免静默空白)
   const [loadError, setLoadError] = useState<string | null>(null);
+  // 指标末值快照(用于图例显示当前值 + state),从 /indicators 响应解析
+  const [indicators, setIndicators] = useState<KlineIndicatorsResponse['indicators'] | null>(null);
   // 图例:每条线在 hover 时间点的当前值(未 hover 时为 null)
   const [hoverValues, setHoverValues] = useState<Record<string, number | null>>({});
   // 整组显隐(MA / BOLL / MACD / KDJ);volume 单独由 showVolume 控制
@@ -123,6 +201,14 @@ export function KLineChart({
     boll: [],
     macd: [],
     kdj: [],
+    volume: [],
+    rsi: [],
+    cci: [],
+    stoch: [],
+    mom: [],
+    wmsr: [],
+    skt: [],
+    fask: [],
   });
 
   useEffect(() => {
@@ -263,6 +349,7 @@ export function KLineChart({
     )
       .then((d) => {
         setLoadError(null);
+        setIndicators(d.indicators);
         const items = d.items;
         const candle: CandlestickData[] = items.map((it) => ({
           time: it.date as Time,
@@ -426,7 +513,11 @@ export function KLineChart({
       if (cleanup) cleanup();
       chart.remove();
       chartRef.current = null;
-      seriesMapRef.current = { ma: [], boll: [], macd: [], kdj: [] };
+      seriesMapRef.current = {
+        ma: [], boll: [], macd: [], kdj: [],
+        volume: [], rsi: [], cci: [], stoch: [],
+        mom: [], wmsr: [], skt: [], fask: [],
+      };
     };
   }, [stockCode, period, height, showVolume]);
 
@@ -440,10 +531,24 @@ export function KLineChart({
   };
 
   // ---- 图例行(整组开关:点击整行 → 切换该组显隐) ----
+  // v3:在原有 MA/BOLL/MACD/KDJ 基础上新增 RSI/CCI/STOCH/MOM/WMSR/SKT/FASK
+  // 每个新指标组不画线,仅显示当前末值 + state chip + 知识点 tooltip
+  const ind = indicators;
   const legendRows: LegendRow[] = [
     {
+      group: 'volume',
+      label: '成交量',
+      term: 'volume',
+      currentValue: ind?.volume.ratio != null ? ind.volume.ratio.toFixed(2) : '—',
+      state: ind?.volume.state
+        ? stateOfVolume(ind.volume.state)
+        : null,
+      items: [],
+    },
+    {
       group: 'ma',
-      label: '主图 MA',
+      label: 'MA',
+      term: 'ma',
       items: [
         { key: 'ma5', label: 'MA5', color: COLOR.ma5, decimals: 2 },
         { key: 'ma10', label: 'MA10', color: COLOR.ma10, decimals: 2 },
@@ -454,6 +559,7 @@ export function KLineChart({
     {
       group: 'boll',
       label: 'BOLL',
+      term: 'boll',
       items: [
         { key: 'bollUp', label: '上轨', color: COLOR.bollUp, decimals: 2 },
         { key: 'bollMid', label: '中轨', color: COLOR.bollMid, decimals: 2 },
@@ -463,6 +569,11 @@ export function KLineChart({
     {
       group: 'macd',
       label: 'MACD',
+      term: 'macd',
+      state: ind?.macd?.cross
+        ? { code: ind.macd.cross, label: ind.macd.cross === 'golden' ? '金叉' : '死叉',
+            tone: ind.macd.cross === 'golden' ? 'up' : 'down' }
+        : null,
       items: [
         { key: 'macdDif', label: 'DIF', color: COLOR.macdDif, decimals: 4 },
         { key: 'macdDea', label: 'DEA', color: COLOR.macdDea, decimals: 4 },
@@ -472,11 +583,74 @@ export function KLineChart({
     {
       group: 'kdj',
       label: 'KDJ',
+      term: 'kdj',
       items: [
         { key: 'kdjK', label: 'K', color: COLOR.kdjK, decimals: 2 },
         { key: 'kdjD', label: 'D', color: COLOR.kdjD, decimals: 2 },
         { key: 'kdjJ', label: 'J', color: COLOR.kdjJ, decimals: 2 },
       ],
+    },
+    {
+      group: 'rsi',
+      label: 'RSI',
+      term: 'rsi',
+      currentValue: ind?.rsi?.rsi != null ? ind.rsi.rsi.toFixed(2) : '—',
+      state: stateOfIndicator(ind?.rsi?.state ?? null),
+      items: [],
+    },
+    {
+      group: 'cci',
+      label: 'CCI',
+      term: 'cci',
+      currentValue: ind?.cci?.cci != null ? ind.cci.cci.toFixed(2) : '—',
+      state: stateOfIndicator(ind?.cci?.state ?? null),
+      items: [],
+    },
+    {
+      group: 'stoch',
+      label: 'STOCH',
+      term: 'stoch',
+      currentValue: ind?.stoch?.fastk != null ? `K ${ind.stoch.fastk.toFixed(2)}` : '—',
+      state: stateOfIndicator(ind?.stoch?.state ?? null),
+      items: [
+        { key: 'fastk', label: 'K', color: '#a78bfa', decimals: 2 },
+        { key: 'fastd', label: 'D', color: '#fb923c', decimals: 2 },
+      ],
+    },
+    {
+      group: 'mom',
+      label: 'MOM',
+      term: 'mom',
+      currentValue: ind?.mom?.mom != null ? ind.mom.mom.toFixed(2) : '—',
+      state: stateOfIndicator(ind?.mom?.state ?? null),
+      items: [],
+    },
+    {
+      group: 'wmsr',
+      label: 'WMSR',
+      term: 'wmsr',
+      currentValue: ind?.wmsr?.wmsr != null ? ind.wmsr.wmsr.toFixed(2) : '—',
+      state: stateOfIndicator(ind?.wmsr?.state ?? null),
+      items: [],
+    },
+    {
+      group: 'skt',
+      label: 'SKT',
+      term: 'skt',
+      currentValue: ind?.skt?.slowk != null ? `K ${ind.skt.slowk.toFixed(2)}` : '—',
+      state: stateOfIndicator(ind?.skt?.state ?? null),
+      items: [
+        { key: 'slowk', label: 'K', color: '#22d3ee', decimals: 2 },
+        { key: 'slowd', label: 'D', color: '#94a3b8', decimals: 2 },
+      ],
+    },
+    {
+      group: 'fask',
+      label: 'FASK',
+      term: 'fask',
+      currentValue: ind?.fask?.fastk != null ? ind.fask.fastk.toFixed(2) : '—',
+      state: stateOfIndicator(ind?.fask?.state ?? null),
+      items: [],
     },
   ];
 
@@ -509,12 +683,25 @@ export function KLineChart({
             >
               <span
                 className={clsx(
-                  'text-text-ter font-medium',
+                  'text-text-ter font-medium inline-flex items-center',
                   !groupVisible && 'line-through',
                 )}
               >
                 {row.label}
+                {row.term && <TermHint term={row.term} />}
               </span>
+              {/* 单指标图例项(RSI/CCI/MOM 等):显示当前值 + state chip */}
+              {row.items.length === 0 && row.currentValue && (
+                <>
+                  <span className="font-mono text-text-pri min-w-[3rem] text-right">
+                    {!groupVisible ? '—' : row.currentValue}
+                  </span>
+                  {row.state && groupVisible && (
+                    <StateChip state={row.state} />
+                  )}
+                </>
+              )}
+              {/* 折线图例项(MA/BOLL 等):保留旧 hover 显示 */}
               {row.items.map((it) => {
                 const v = hoverValues[it.key];
                 return (
@@ -540,10 +727,41 @@ export function KLineChart({
                   </span>
                 );
               })}
+              {/* 双线指标图例项(STOCH/SKT):K/D 当前末值 + state chip */}
+              {row.items.length > 0 && row.currentValue && (
+                <>
+                  {row.state && groupVisible && (
+                    <StateChip state={row.state} />
+                  )}
+                </>
+              )}
             </button>
           );
         })}
       </div>
     </div>
+  );
+}
+
+/** 图例状态小 chip(超买 / 超卖 / 金叉 / 死叉 / 中性 等) */
+function StateChip({ state }: { state: LegendState }) {
+  const toneCls =
+    state.tone === 'up'
+      ? 'bg-up/15 text-up border-up/30'
+      : state.tone === 'down'
+        ? 'bg-down/15 text-down border-down/30'
+        : state.tone === 'accent'
+          ? 'bg-accent/15 text-accent border-accent/30'
+          : 'bg-white/5 text-text-ter border-white/15';
+  return (
+    <span
+      className={clsx(
+        'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[10px] font-medium',
+        toneCls,
+      )}
+    >
+      <span className="w-1 h-1 rounded-full bg-current" />
+      {state.label}
+    </span>
   );
 }

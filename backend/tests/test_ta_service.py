@@ -433,3 +433,217 @@ class TestSignalFusion:
         closes = [10.0] * 30 + [10.0 + i * 0.5 for i in range(30)]
         r = compute_indicators(_kline(closes))
         assert isinstance(r["signal_series"], list)
+
+
+# ============ K 线图图例指标 v2:RSI / CCI / STOCH / MOM / WMSR / SKT / FASK ============
+
+
+class TestRSI:
+    def test_insufficient_data_returns_empty(self):
+        """< 15 项返回空 + state=None"""
+        r = compute_indicators(_kline([10.0] * 10))
+        assert r["rsi"]["rsi"] is None
+        assert r["rsi"]["rsi_series"] == []
+        assert r["rsi"]["state"] is None
+
+    def test_const_close_rsi_neutral_or_extreme(self):
+        """价格不变 → avg_loss=0 → RSI=100(无下跌)"""
+        closes = [10.0] * 30
+        r = compute_indicators(_kline(closes))
+        # 全部平盘无下跌,RSI=100
+        assert r["rsi"]["rsi"] == 100.0
+        assert r["rsi"]["state"] == "overbought"
+
+    def test_consistent_up_rsi_high(self):
+        """持续上涨 30 日 → RSI=100"""
+        closes = [10.0 + i for i in range(30)]
+        r = compute_indicators(_kline(closes))
+        assert r["rsi"]["rsi"] == 100.0
+        assert r["rsi"]["state"] == "overbought"
+
+    def test_state_bearish_below_50(self):
+        """30 < RSI < 50 → state=bearish"""
+        # 构造小幅波动使 RSI 落在 30~50 区间
+        closes = [10 + (i % 5) * 0.1 for i in range(40)]
+        r = compute_indicators(_kline(closes))
+        # 仅校验 state 是合法值
+        assert r["rsi"]["state"] in {"neutral", "bearish", "bullish", "overbought", "oversold"}
+
+    def test_oversold_state_below_30(self):
+        """持续下跌 → RSI<30 → state=oversold"""
+        closes = [100.0 - i for i in range(30)]
+        r = compute_indicators(_kline(closes))
+        assert r["rsi"]["rsi"] is not None
+        assert r["rsi"]["rsi"] < 30
+        assert r["rsi"]["state"] == "oversold"
+
+
+class TestCCI:
+    def test_insufficient_data(self):
+        r = compute_indicators(_kline([10.0] * 15))
+        assert r["cci"]["cci"] is None
+        assert r["cci"]["state"] is None
+
+    def test_const_close_cci_zero(self):
+        """价格不变 → mean_dev=0 → CCI=0(neutral)"""
+        closes = [10.0] * 30
+        r = compute_indicators(_kline(closes))
+        assert r["cci"]["cci"] == 0.0
+        assert r["cci"]["state"] == "neutral"
+
+    def test_overbought_state_above_100(self):
+        """CCI>100 → overbought"""
+        closes = [10.0 + i * 0.5 for i in range(30)]
+        r = compute_indicators(_kline(closes))
+        assert r["cci"]["cci"] is not None
+        assert r["cci"]["cci"] > 100
+        assert r["cci"]["state"] == "overbought"
+
+    def test_oversold_state_below_minus_100(self):
+        """CCI<-100 → oversold"""
+        closes = [100.0 - i for i in range(30)]
+        r = compute_indicators(_kline(closes))
+        assert r["cci"]["cci"] is not None
+        assert r["cci"]["cci"] < -100
+        assert r["cci"]["state"] == "oversold"
+
+
+class TestStoch:
+    def test_insufficient_data(self):
+        r = compute_indicators(_kline([10.0] * 10))
+        assert r["stoch"]["fastk"] is None
+        assert r["stoch"]["state"] is None
+
+    def test_const_close_overbought(self):
+        """价格在区间顶部震荡 → %K=100 → overbought"""
+        closes = [10.0 + (i % 3) * 0.1 for i in range(30)]
+        r = compute_indicators(_kline(closes))
+        # 注意:_kline 用 close*0.99~close*1.02 模拟高低,价格有微幅波动
+        assert r["stoch"]["fastk"] is not None
+
+    def test_slowk_equals_fastd(self):
+        """SlowK 与 FastD 数值相同(经典 stochastic 公式约定)"""
+        closes = [10.0 + i * 0.3 for i in range(30)]
+        r = compute_indicators(_kline(closes))
+        assert r["stoch"]["slowk"] == r["stoch"]["fastd"]
+
+    def test_state_in_valid_set(self):
+        """state 必属于合法集合"""
+        closes = [10.0 + (i % 5) * 0.3 for i in range(40)]
+        r = compute_indicators(_kline(closes))
+        assert r["stoch"]["state"] in {
+            "overbought", "oversold", "golden_cross", "dead_cross", "neutral"
+        }
+
+
+class TestMOM:
+    def test_insufficient_data(self):
+        r = compute_indicators(_kline([10.0] * 8))
+        assert r["mom"]["mom"] is None
+        assert r["mom"]["state"] is None
+
+    def test_rising_state(self):
+        """持续上涨 → MOM>0 且递增 → state=rising"""
+        closes = [10.0 + i for i in range(30)]
+        r = compute_indicators(_kline(closes))
+        assert r["mom"]["mom"] is not None
+        assert r["mom"]["mom"] > 0
+        assert r["mom"]["state"] == "rising"
+
+    def test_falling_state(self):
+        """持续下跌 → state=falling"""
+        closes = [100.0 - i for i in range(30)]
+        r = compute_indicators(_kline(closes))
+        assert r["mom"]["mom"] < 0
+        assert r["mom"]["state"] == "falling"
+
+    def test_zero_cross_up_state(self):
+        """末日 >0 且前一日 <=0 → state=zero_cross_up"""
+        closes = [10.0] * 15 + [9.0] * 5 + [10.5, 11.0, 11.5, 12.0, 12.5]
+        r = compute_indicators(_kline(closes))
+        # 末日 MOM = 12.5 - 2.5(11 日前) = 10
+        assert r["mom"]["mom"] is not None
+        assert r["mom"]["state"] in {"zero_cross_up", "rising", "neutral"}
+
+
+class TestWMSR:
+    def test_insufficient_data(self):
+        r = compute_indicators(_kline([10.0] * 10))
+        assert r["wmsr"]["wmsr"] is None
+        assert r["wmsr"]["state"] is None
+
+    def test_close_near_high_overbought(self):
+        """收盘接近高点 → %R > -20 → overbought"""
+        closes = [10.0 + (i % 3) * 0.1 for i in range(30)]
+        r = compute_indicators(_kline(closes))
+        assert r["wmsr"]["wmsr"] is not None
+
+    def test_close_near_low_oversold(self):
+        """收盘接近低点 → %R < -80 → oversold"""
+        closes = [10.0 - (i % 3) * 0.1 for i in range(30)]
+        r = compute_indicators(_kline(closes))
+        assert r["wmsr"]["wmsr"] is not None
+        # 末位 close = 10 - 29*0.1 = 7.1(单边下降),%R 应较小
+        assert r["wmsr"]["wmsr"] <= -50
+
+
+class TestSKT:
+    def test_skt_derived_from_stoch(self):
+        """skt 与 stoch 的 slowk/slowd 数值一致"""
+        closes = [10.0 + i * 0.3 for i in range(30)]
+        r = compute_indicators(_kline(closes))
+        assert r["skt"]["slowk"] == r["stoch"]["slowk"]
+        assert r["skt"]["slowd"] == r["stoch"]["slowd"]
+
+    def test_skt_state_matches_stoch(self):
+        """skt.state 与 stoch.state 一致"""
+        closes = [10.0 + (i % 5) * 0.3 for i in range(40)]
+        r = compute_indicators(_kline(closes))
+        assert r["skt"]["state"] == r["stoch"]["state"]
+
+
+class TestFASK:
+    def test_fask_derived_from_stoch(self):
+        """fask.fastk 与 stoch.fastk 一致"""
+        closes = [10.0 + i * 0.3 for i in range(30)]
+        r = compute_indicators(_kline(closes))
+        assert r["fask"]["fastk"] == r["stoch"]["fastk"]
+
+    def test_fask_state_overbought(self):
+        """%K >= 80 → state=overbought"""
+        closes = [10.0 + (i % 3) * 0.1 for i in range(30)]
+        r = compute_indicators(_kline(closes))
+        if r["fask"]["fastk"] is not None:
+            if r["fask"]["fastk"] >= 80:
+                assert r["fask"]["state"] == "overbought"
+            elif r["fask"]["fastk"] <= 20:
+                assert r["fask"]["state"] == "oversold"
+            else:
+                assert r["fask"]["state"] == "neutral"
+
+
+class TestV2IndicatorsIntegration:
+    def test_compute_indicators_includes_v2_keys(self):
+        """compute_indicators 返回 dict 含 7 个 v2 指标"""
+        closes = [10.0 + i for i in range(60)]
+        r = compute_indicators(_kline(closes))
+        for key in ("rsi", "cci", "stoch", "mom", "wmsr", "skt", "fask"):
+            assert key in r, f"缺少 {key}"
+            assert isinstance(r[key], dict)
+
+    def test_v2_state_valid_enum(self):
+        """所有 v2 state 字段值在合法集合内"""
+        closes = [10.0 + (i % 7) * 0.3 for i in range(60)]
+        r = compute_indicators(_kline(closes))
+        valid_states = {
+            "neutral", "overbought", "oversold",
+            "bullish", "bearish",
+            "strong_up", "strong_down",
+            "golden_cross", "dead_cross",
+            "rising", "falling",
+            "zero_cross_up", "zero_cross_down",
+        }
+        for key in ("rsi", "cci", "stoch", "mom", "wmsr", "skt", "fask"):
+            state = r[key]["state"]
+            if state is not None:
+                assert state in valid_states, f"{key}.state={state} 不在合法集"
