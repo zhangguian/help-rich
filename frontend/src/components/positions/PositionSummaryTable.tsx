@@ -2,13 +2,14 @@
 
 import clsx from 'clsx';
 
+import { TermHint } from '@/components/ui/TermHint';
 import { decimalFormat } from '@/lib/decimalFormat';
 import type { Position } from '@/lib/types';
 
 /**
  * 持仓总览表格(持仓 tab 中间区,K线切换的另一种视图)
  *
- * - 8 列只读:代码/名称 | 现价 | 今日涨幅% | 持仓股数 | 加权成本 | 今日盈亏 | 浮动盈亏 | 已实现盈亏
+ * - 9 列只读:代码/名称 | 现价 | 今日涨幅% | 持仓股数 | 加权成本 | 持仓资金 | 今日盈亏 | 浮动盈亏 | 已实现盈亏
  * - 行点击 → onSelect(stockCode):联动左右 aside(WatchList 高亮 / AnalysisPanel+ChatPanel 切股)
  * - 不持有选择 state,不显示选中行高亮(视觉反馈由左 aside 负责)
  * - 数据来自 page.tsx 已有 positions(已含 currentPrice/prevClose/todayPnl/floatingPnl/realizedPnl)
@@ -51,7 +52,12 @@ export function PositionSummaryTable({
               <th className="text-right py-2 px-2 font-normal">现价</th>
               <th className="text-right py-2 px-2 font-normal">今日%</th>
               <th className="text-right py-2 px-2 font-normal">持仓</th>
-              <th className="text-right py-2 px-2 font-normal">成本</th>
+              <th className="text-right py-2 px-2 font-normal">加权成本</th>
+              <th className="text-right py-2 px-2 font-normal">
+                <span className="inline-flex items-center">
+                  持仓资金<TermHint term="total_cost" />
+                </span>
+              </th>
               <th className="text-right py-2 px-2 font-normal">今日盈亏</th>
               <th className="text-right py-2 px-2 font-normal">浮动盈亏</th>
               <th className="text-right py-2 px-2 font-normal">已实现</th>
@@ -104,6 +110,9 @@ export function PositionSummaryTable({
                   </td>
                   <td className="py-2 px-2 text-right text-text-sec">
                     ¥{decimalFormat(p.avgCost)}
+                  </td>
+                  <td className="py-2 px-2 text-right text-text-pri">
+                    ¥{decimalFormat(p.totalCost)}
                   </td>
                   <td className={clsx('py-2 px-2 text-right', pctClass(today))}>
                     {today != null
