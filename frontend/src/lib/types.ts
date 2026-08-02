@@ -179,6 +179,36 @@ export interface Quote {
   pb: number | null;
 }
 
+/** 大盘盯盘(roadmap §3.9) */
+export interface MarketIndex {
+  code: string;
+  name: string;
+  currentPrice: string;
+  prevClose: string;
+  open: string;
+  high: string;
+  low: string;
+  change: string;
+  changePct: number;
+  volume: number;
+  amount: string;
+  timestamp: string;
+}
+
+export interface MarketMover {
+  code: string;
+  name: string;
+  currentPrice: string;
+  changePct: number;
+}
+
+export interface MarketOverview {
+  indexes: (MarketIndex | null)[];
+  gainers: MarketMover[];
+  losers: MarketMover[];
+  fetchedAt: string;
+}
+
 /** 计算器(P3.2) */
 export interface CalculatorRequest {
   stockCode: string;

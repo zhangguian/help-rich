@@ -15,6 +15,7 @@ import { CalculatorPanel } from '@/components/calculator/CalculatorPanel';
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { KLineChart, type KlinePeriod } from '@/components/charts/KLineChart';
 import { HoldingsHealthPanel } from '@/components/holdings-health/HoldingsHealthPanel';
+import { MarketOverviewBar } from '@/components/market/MarketOverviewBar';
 import { NewsFeed } from '@/components/news/NewsFeed';
 import { PositionStatsCards } from '@/components/positions/PositionStatsCards';
 import { PositionSummaryTable } from '@/components/positions/PositionSummaryTable';
@@ -225,6 +226,9 @@ export default function Workbench() {
         </div>
         <span className="text-xs text-text-ter">数据源:新浪 · AI 本地配置</span>
       </header>
+
+      {/* 大盘盯盘(roadmap §3.9):三大主指 + 领涨/领跌 top3 */}
+      <MarketOverviewBar />
 
       {/* 三区主体 */}
       <div className="flex flex-1 gap-4 min-h-0">

@@ -161,3 +161,37 @@ async def fetch_sina_news(page: int = 1, page_size: int = 20) -> list[dict]:
         # 无 callback 时直接返回纯 JSON
         data = json.loads(text)
     return data.get("result", {}).get("data", {}).get("feed", {}).get("list", [])
+
+
+# ==================== 沪深 A 股领涨/领跌排行(大盘盯盘用) ====================
+
+
+async def fetch_market_movers(direction: str = "up", num: int = 3) -> list[dict]:
+    """沪深 A 股涨幅排行(direction='up' 领涨 / 'down' 领跌,num 取前 N)
+
+    接口:https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData
+    返回字段(关键):symbol, name, trade, pricechange, changeratio
+    """
+    if direction not in {"up", "down"}:
+        raise ValueError(f"direction 应为 up/down,不是 {direction}")
+    asc = 1 if direction == "down" else 0  # up 取降序(涨幅大→小),down 取升序
+    url = (
+        "https://vip.stock.finance.sina.com.cn/"
+        "quotes_service/api/json_v2.php/Market_Center.getHQNodeData"
+    )
+    params = {
+        "node": "hs_a",
+        "sort": "changeratio",
+        "asc": asc,
+        "num": num,
+        "page": 1,
+    }
+    async with httpx.AsyncClient(
+        headers=SINA_HEADERS, timeout=15.0, trust_env=False
+    ) as client:
+        resp = await client.get(url, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+    if not isinstance(data, list):
+        raise ValueError(f"新浪涨跌排行返回非数组: {type(data).__name__}")
+    return data

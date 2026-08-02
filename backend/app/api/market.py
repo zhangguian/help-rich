@@ -1,8 +1,10 @@
-"""板块资金流 / 新浪快讯 API
+"""板块资金流 / 新浪快讯 / 大盘盯盘 API
 
-- GET /api/sector-fund-flow?fenlei=0  板块资金排行(guide §7)
-- GET /api/sector-fund-flow/events   SSE 板块异动推送(v0.4.1)
+- GET /api/sector-fund-flow?fenlei=0     板块资金排行(guide §7)
+- GET /api/sector-fund-flow/events      SSE 板块异动推送(v0.4.1)
 - GET /api/news/sina?page=1&page_size=20  新浪 7×24 快讯(guide §9.2)
+- GET /api/market/overview              大盘盯盘总览(roadmap §3.9):
+                                         三大主指 + 领涨/领跌 top3
 """
 import asyncio
 import json
@@ -11,6 +13,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.services.event_bus import event_bus
+from app.services.market_overview_service import get_market_overview
 from app.services.news_service import get_sina_news
 from app.services.sector_fund_flow_service import FENLEI_MAP, get_sector_fund_flow
 
@@ -126,6 +129,28 @@ async def get_sina_news_endpoint(page: int = 1, page_size: int = 20) -> dict:
         "count": len(items),
         "items": items,
     }
+
+
+@router.get("/market/overview")
+async def market_overview_endpoint() -> dict:
+    """大盘盯盘总览(roadmap §3.9)
+
+    - 三大主指(上证 / 深证 / 创业板)+ 领涨/领跌各 top3
+    - 全部失败 → 503(至少指数应可获取;主备源同时挂才会发生)
+    - 单一部分失败:指数缺失位为 null,领涨/领跌为 []
+    """
+    data = await get_market_overview()
+    has_any_index = any(it is not None for it in data["indexes"])
+    if not has_any_index and not data["gainers"] and not data["losers"]:
+        # 三个部分全空才视为完全不可用
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "MARKET_UNAVAILABLE",
+                "message": "大盘数据源暂不可用,请稍后重试",
+            },
+        )
+    return data
 
 
 __all__ = ["router"]
