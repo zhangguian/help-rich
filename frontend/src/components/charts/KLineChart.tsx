@@ -311,7 +311,7 @@ export function KLineChart({
       lastValueVisible: true,
     });
     seriesMapRef.current.macd.push(macdHist, macdDif, macdDea);
-    chart.priceScale('macd').applyOptions({ scaleMargins: { top: 0.62, bottom: 0.50 } });
+    chart.priceScale('macd').applyOptions({ scaleMargins: { top: 0.62, bottom: 0.28 } });
 
     // KDJ:K/D/J(独立 priceScaleId)
     const kdjLineOpt: LineSeriesPartialOptions = {
@@ -325,7 +325,7 @@ export function KLineChart({
     const kdjD = chart.addLineSeries({ ...kdjLineOpt, color: COLOR.kdjD });
     const kdjJ = chart.addLineSeries({ ...kdjLineOpt, color: COLOR.kdjJ });
     seriesMapRef.current.kdj.push(kdjK, kdjD, kdjJ);
-    chart.priceScale('kdj').applyOptions({ scaleMargins: { top: 0.74, bottom: 0.62 } });
+    chart.priceScale('kdj').applyOptions({ scaleMargins: { top: 0.74, bottom: 0.18 } });
 
     // 按初始可见性统一应用(visibleGroups 来自 props overlay)
     (Object.keys(seriesMapRef.current) as OverlayGroup[]).forEach((g) => {

@@ -204,7 +204,7 @@ export default function Workbench() {
                   {isActive && (
                     <motion.span
                       layoutId="tab-pill"
-                      className="absolute inset-0 rounded-xl bg-accent-subtle border border-accent/25"
+                      className="liquid-glass absolute inset-0 rounded-xl bg-accent-subtle border border-accent/25"
                       transition={{ type: 'spring', stiffness: 400, damping: 32 }}
                     />
                   )}
@@ -329,9 +329,9 @@ export default function Workbench() {
                         <button
                           onClick={() => setPositionView('kline')}
                           className={clsx(
-                            'px-3 py-1.5 text-sm rounded-xl transition-colors',
+                            'px-3 py-1.5 text-sm rounded-xl transition-colors ',
                             positionView === 'kline'
-                              ? 'bg-accent-subtle text-accent border border-accent/25'
+                              ? 'bg-accent-subtle text-accent border border-accent/25 liquid-glass'
                               : 'bg-white/5 text-text-sec hover:text-text-pri border border-white/5',
                           )}
                         >
@@ -340,9 +340,9 @@ export default function Workbench() {
                         <button
                           onClick={() => setPositionView('table')}
                           className={clsx(
-                            'px-3 py-1.5 text-sm rounded-xl transition-colors',
+                            'px-3 py-1.5 text-sm rounded-xl transition-colors ',
                             positionView === 'table'
-                              ? 'bg-accent-subtle text-accent border border-accent/25'
+                              ? 'bg-accent-subtle text-accent border border-accent/25 liquid-glass'
                               : 'bg-white/5 text-text-sec hover:text-text-pri border border-white/5',
                           )}
                         >
@@ -360,7 +360,7 @@ export default function Workbench() {
                             className={clsx(
                               'px-3 py-1.5 text-sm rounded-xl transition-colors',
                               period === p.key
-                                ? 'bg-accent-subtle text-accent border border-accent/25'
+                                ? 'bg-accent-subtle text-accent border border-accent/25 liquid-glass'
                                 : 'bg-white/5 text-text-sec hover:text-text-pri border border-white/5',
                             )}
                           >
