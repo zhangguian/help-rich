@@ -48,6 +48,7 @@ export default function Workbench() {
   const [quotesMap, setQuotesMap] = useState<Record<string, Quote>>({});
   const [period, setPeriod] = useState<KlinePeriod>('daily');
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [analysisStarted, setAnalysisStarted] = useState(false);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [selectedQuote, setSelectedQuote] = useState<Quote | null>(null);
 
@@ -93,19 +94,16 @@ export default function Workbench() {
   const selectStock = useCallback(async (code: string) => {
     setActiveCode(code);
     setAnalysis(null);
+    setAnalysisStarted(false);
     setSelectedQuote(null);
-    setAnalysisLoading(true);
     apiGet<Quote>(`/quotes/${encodeURIComponent(code)}`)
       .then(setSelectedQuote)
       .catch(() => {});
-    apiGet<AnalysisResult>(`/stock/${encodeURIComponent(code)}/analysis`)
-      .then(setAnalysis)
-      .catch(() => setAnalysis(null))
-      .finally(() => setAnalysisLoading(false));
   }, []);
 
   const refreshAnalysis = useCallback(() => {
     if (!activeCode) return;
+    setAnalysisStarted(true);
     setAnalysisLoading(true);
     apiGet<AnalysisResult>(`/stock/${encodeURIComponent(activeCode)}/analysis`)
       .then(setAnalysis)
@@ -267,6 +265,7 @@ export default function Workbench() {
           <div className="flex-[3] min-h-0 overflow-y-auto pr-1">
             <AnalysisPanel
               analysis={analysis}
+              started={analysisStarted}
               loading={analysisLoading}
               onRefresh={refreshAnalysis}
             />

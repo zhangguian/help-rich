@@ -53,14 +53,16 @@ const VOLUME_META = {
  * 右侧上栏 · 操作提示(roadmap 功能3/4)
  *
  * AI 分析卡(看多/看空/中性大徽章)+ 5 张技术指标卡 + 关键价位 chips。
- * AI 不可用 → 提示条 + 纯指标展示(降级)。
+ * AI 需手动触发(started=false 显示引导按钮);AI 不可用 → 提示条 + 纯指标展示(降级)。
  */
 export function AnalysisPanel({
   analysis,
+  started,
   loading,
   onRefresh,
 }: {
   analysis: AnalysisResult | null;
+  started: boolean;
   loading: boolean;
   onRefresh: () => void;
 }) {
@@ -73,7 +75,11 @@ export function AnalysisPanel({
         <div className="flex items-center justify-between">
           <span className="text-xs text-text-ter uppercase tracking-wide">AI 分析</span>
           <Button variant="ghost" onClick={onRefresh} disabled={loading}>
-            {loading ? '分析中…' : '🔄 重新分析'}
+            {loading
+              ? '分析中…'
+              : started
+                ? '🔄 重新分析'
+                : '✨ 开始分析'}
           </Button>
         </div>
 
@@ -128,7 +134,7 @@ export function AnalysisPanel({
                 ⚠ {analysis.ai.riskWarning}
               </p>
             </motion.div>
-          ) : (
+          ) : started ? (
             <motion.p
               key="noai"
               initial={{ opacity: 0 }}
@@ -137,6 +143,16 @@ export function AnalysisPanel({
               className="text-sm text-text-ter"
             >
               AI 暂不可用(未配置 Key 或服务异常),以下为纯技术指标。
+            </motion.p>
+          ) : (
+            <motion.p
+              key="idle"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="text-sm text-text-ter"
+            >
+              点击上方「✨ 开始分析」,AI 结合技术指标给你白话解读。
             </motion.p>
           )}
         </AnimatePresence>
