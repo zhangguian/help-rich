@@ -24,7 +24,7 @@ import { ScreenshotPanel } from '@/components/screenshot/ScreenshotPanel';
  */
 export function SettingsPanel() {
   return (
-    <div className="max-w-3xl mx-auto py-4 space-y-6">
+    <div className="h-full overflow-y-auto px-6 py-6 space-y-6">
       <header className="space-y-1">
         <h2 className="text-2xl font-bold">设置</h2>
         <p className="text-text-sec text-sm">
@@ -32,25 +32,27 @@ export function SettingsPanel() {
         </p>
       </header>
 
-      <ExportImportCard />
+      <div className="max-w-3xl space-y-6">
+        <ExportImportCard />
 
-      <LlmProviderCard />
+        <LlmProviderCard />
 
-      <LlmKeysCard />
+        <LlmKeysCard />
 
-      <ScreenshotPanel />
+        <ScreenshotPanel />
 
-      <HistoryToolsCard />
+        <HistoryToolsCard />
 
-      <Card padding="md" className="space-y-2">
-        <div className="font-semibold">📋 关于</div>
-        <div className="text-sm text-text-sec">
-          买股工具室 v0.4 — 小白股民买股看股辅助工具
-        </div>
-        <div className="text-xs text-text-ter mt-2">
-          ⚠ 投资有风险,本工具所有输出仅供参考,不构成投资建议。
-        </div>
-      </Card>
+        <Card padding="md" className="space-y-2">
+          <div className="font-semibold">📋 关于</div>
+          <div className="text-sm text-text-sec">
+            买股工具室 v0.4 — 小白股民买股看股辅助工具
+          </div>
+          <div className="text-xs text-text-ter mt-2">
+            ⚠ 投资有风险,本工具所有输出仅供参考,不构成投资建议。
+          </div>
+        </Card>
+      </div>
     </div>
   );
 }
