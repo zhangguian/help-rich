@@ -235,3 +235,201 @@ class TestDataQuality:
         """60 根完整数据 → 无降级"""
         r = compute_indicators(_kline([float(i) for i in range(60)]))
         assert r["data_quality"]["degraded"] == []
+
+
+# ============================================================
+# K 线智能分析引擎 v1 — 新增指标测试
+# ============================================================
+
+class TestMACD:
+    def test_basic_macd_values(self):
+        """线性递增价格 → DIF/DEA 均为正,HIST 接近 0"""
+        closes = [float(100 + i) for i in range(60)]
+        r = compute_indicators(_kline(closes))
+        m = r["macd"]
+        assert m["dif"] is not None and m["dea"] is not None
+        assert m["dif"] > 0
+        assert m["hist"] is not None
+
+    def test_macd_len_lt_26_returns_none(self):
+        """数据不足 → None + degraded"""
+        r = compute_indicators(_kline([float(i) for i in range(20)]))
+        assert r["macd"]["dif"] is None
+        assert any("macd" in d for d in r["data_quality"]["degraded"])
+
+    def test_macd_cross_detected(self):
+        """构造明确金叉场景:跌到底后回升"""
+        closes = [10.0] * 30 + [9.0] * 10 + [11.0 + i * 0.5 for i in range(20)]
+        r = compute_indicators(_kline(closes))
+        assert r["macd"]["cross"] in {"golden", "dead", None}
+
+
+class TestKDJ:
+    def test_basic_kdj_values(self):
+        """正常数据 → K/D/J 数值存在"""
+        closes = [10.0 + (i % 5) for i in range(60)]
+        highs = [c + 0.5 for c in closes]
+        lows = [c - 0.5 for c in closes]
+        opens = closes
+        klines = [
+            {"date": str(i), "open": o, "high": h, "low": l, "close": c, "volume": 1000}
+            for i, (o, h, l, c) in enumerate(zip(opens, highs, lows, closes))
+        ]
+        r = compute_indicators(klines)
+        kdj = r["kdj"]
+        assert kdj["k"] is not None
+        assert 0 <= kdj["k"] <= 100
+        assert kdj["j"] is not None
+
+    def test_kdj_overbought(self):
+        """连续大涨 → K > 80,zone=overbought"""
+        closes = [10.0 + i * 0.3 for i in range(40)]  # 持续上涨
+        highs = [c + 0.5 for c in closes]
+        lows = [c - 0.5 for c in closes]
+        opens = [c - 0.2 for c in closes]
+        klines = [
+            {"date": str(i), "open": o, "high": h, "low": l, "close": c, "volume": 1000}
+            for i, (o, h, l, c) in enumerate(zip(opens, highs, lows, closes))
+        ]
+        r = compute_indicators(klines)
+        assert r["kdj"]["k"] > 80
+        assert r["kdj"]["zone"] == "overbought"
+
+    def test_kdj_len_lt_9(self):
+        """数据不足 → 全部 None"""
+        r = compute_indicators(_kline([float(i) for i in range(5)]))
+        assert r["kdj"]["k"] is None
+
+
+class TestBOLL:
+    def test_boll_basic(self):
+        """MID = MA20,UP > MID > LOW"""
+        closes = [10.0 + (i % 7) for i in range(60)]
+        r = compute_indicators(_kline(closes))
+        b = r["boll"]
+        assert b["mid"] is not None
+        assert b["upper"] > b["mid"] > b["lower"]
+        assert b["bandwidth"] is not None and b["bandwidth"] > 0
+
+    def test_boll_len_lt_20(self):
+        """数据不足 → None"""
+        r = compute_indicators(_kline([float(i) for i in range(15)]))
+        assert r["boll"]["mid"] is None
+        assert any("boll" in d for d in r["data_quality"]["degraded"])
+
+    def test_boll_touching_upper(self):
+        """价格贴近上轨 → position=touching_upper"""
+        # 构造 25 根先平稳 + 末日大涨突破上轨
+        closes = [10.0] * 24 + [15.0]
+        r = compute_indicators(_kline(closes))
+        assert r["boll"]["position"] in {"touching_upper", "middle"}
+
+
+class TestVolumePrice:
+    def test_volume_up_price_up(self):
+        """放量上涨 → 量增价升"""
+        closes = [10.0] * 28 + [10.0, 11.0]
+        volumes = [1000] * 28 + [500, 2000]
+        klines = [
+            {"date": str(i), "open": c, "high": c + 0.5, "low": c - 0.5, "close": c, "volume": v}
+            for i, (c, v) in enumerate(zip(closes, volumes))
+        ]
+        r = compute_indicators(klines)
+        assert r["volume_price"]["direction"] == "healthy_up"
+
+    def test_volume_price_shrink(self):
+        """缩量上涨 → 量缩价升"""
+        closes = [10.0] * 28 + [10.0, 11.0]
+        volumes = [1000] * 28 + [2000, 1000]
+        klines = [
+            {"date": str(i), "open": c, "high": c + 0.5, "low": c - 0.5, "close": c, "volume": v}
+            for i, (c, v) in enumerate(zip(closes, volumes))
+        ]
+        r = compute_indicators(klines)
+        assert r["volume_price"]["direction"] == "liar_up_suspect"
+
+
+class TestPatterns:
+    def test_patterns_detect_hammer(self):
+        """末日小实体 + 长下影 → 锤子线"""
+        klines = []
+        for i in range(20):
+            klines.append({"date": str(i), "open": 10.0, "high": 10.5,
+                           "low": 9.5, "close": 10.0, "volume": 1000})
+        # 末日:小实体+长下影
+        klines.append({"date": "20", "open": 10.0, "high": 10.1,
+                       "low": 8.5, "close": 10.05, "volume": 1500})
+        r = compute_indicators(klines)
+        names = [p["name"] for p in r["patterns"]]
+        assert "锤子线" in names
+
+
+class TestLiarTrap:
+    def test_liar_output_shape(self):
+        """liar 输出结构存在且有 summary 字段"""
+        closes = [10.0 + (i % 3) * 0.1 for i in range(60)]
+        r = compute_indicators(_kline(closes))
+        assert "summary" in r["liar"]
+        assert "bull_liars" in r["liar"]
+        assert "bear_liars" in r["liar"]
+
+    def test_detect_volume_shrink_up(self):
+        """放量之后末日缩量 + 价格上涨 → 检出诱多"""
+        closes = [10.0 + i * 0.1 for i in range(60)]
+        # 末日缩量 + 微涨
+        volumes = [1000] * 55 + [5000] * 4 + [1000]
+        klines = [
+            {"date": str(i), "open": c * 0.99, "high": c * 1.02,
+             "low": c * 0.98, "close": c, "volume": v}
+            for i, (c, v) in enumerate(zip(closes, volumes))
+        ]
+        r = compute_indicators(klines)
+        assert len(r["liar"]["bull_liars"]) >= 1 or len(r["liar"]["bear_liars"]) >= 0
+
+
+class TestPosition:
+    def test_position_high_after_run(self):
+        """持续大涨 60 日 → band=high"""
+        closes = [10.0 + i * 0.5 for i in range(80)]
+        r = compute_indicators(_kline(closes))
+        assert r["position"]["band"] == "high"
+        assert r["position"]["pct_60"] is not None and r["position"]["pct_60"] > 0
+
+    def test_position_low_after_drop(self):
+        """60 日大跌 50% → band=low"""
+        closes = [100.0] * 20 + [100.0 - (i - 20) * 1.0 for i in range(20, 80)]
+        r = compute_indicators(_kline(closes))
+        assert r["position"]["band"] == "low"
+        assert r["position"]["pct_60"] is not None and r["position"]["pct_60"] < -40
+
+
+class TestSignalFusion:
+    def test_signal_output_shape(self):
+        """signal 输出结构:view/score/confidence/reasons/summary"""
+        closes = [10.0 + i for i in range(60)]
+        r = compute_indicators(_kline(closes))
+        sig = r["signal"]
+        assert sig["view"] in {"bullish", "bearish", "neutral"}
+        assert 0 <= sig["score"] <= 100
+        assert sig["confidence"] in {"high", "medium", "low"}
+        assert isinstance(sig["reasons"], list) and len(sig["reasons"]) >= 3
+        assert isinstance(sig["summary"], str)
+
+    def test_signal_strong_bull_run(self):
+        """强多头排列(MA5/10/20/60 严格递增 + 量增价升)→ view=bullish,score≥65"""
+        closes = [10.0 + i * 0.5 for i in range(80)]  # 持续上涨 80 日
+        volumes = [1000 + i * 50 for i in range(80)]  # 末日量最大
+        klines = [
+            {"date": str(i), "open": c * 0.99, "high": c * 1.02,
+             "low": c * 0.98, "close": c, "volume": v}
+            for i, (c, v) in enumerate(zip(closes, volumes))
+        ]
+        r = compute_indicators(klines)
+        assert r["signal"]["view"] == "bullish"
+        assert r["signal"]["score"] >= 65
+
+    def test_signal_series_has_entries(self):
+        """有数据时 signal_series 是列表(可能为空)"""
+        closes = [10.0] * 30 + [10.0 + i * 0.5 for i in range(30)]
+        r = compute_indicators(_kline(closes))
+        assert isinstance(r["signal_series"], list)

@@ -156,8 +156,11 @@ def _summarize_klines(klines: list[dict[str, Any]], limit: int = 30) -> list[dic
 
 
 def _build_context(klines: list[dict[str, Any]]) -> dict:
-    """指标 + K线摘要 + 现价"""
+    """指标 + K线摘要 + 现价(供 LLM 解读的精简上下文)"""
     indicators = compute_indicators(klines)
+    macd = indicators["macd"]
+    kdj = indicators["kdj"]
+    boll = indicators["boll"]
     return {
         "latest_close": indicators["latest_close"],
         "ma": indicators["ma"],
@@ -165,6 +168,24 @@ def _build_context(klines: list[dict[str, Any]]) -> dict:
         "channel": indicators["channel"],
         "support_pressure": indicators["support_pressure"],
         "stabilize": indicators["stabilize"],
+        "macd": {
+            "dif": macd["dif"], "dea": macd["dea"], "hist": macd["hist"],
+            "cross": macd["cross"],
+        },
+        "kdj": {
+            "k": kdj["k"], "d": kdj["d"], "j": kdj["j"],
+            "zone": kdj["zone"], "cross": kdj.get("cross"),
+        },
+        "boll": {
+            "upper": boll["upper"], "mid": boll["mid"], "lower": boll["lower"],
+            "bandwidth": boll["bandwidth"], "squeeze": boll["squeeze"],
+            "position": boll["position"],
+        },
+        "volume_price": indicators["volume_price"],
+        "liar": indicators["liar"],
+        "position_eval": indicators["position"],
+        "patterns": [p["name"] for p in indicators["patterns"]],
+        "signal": indicators["signal"],
         "recent_klines": _summarize_klines(klines),
     }
 

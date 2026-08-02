@@ -5,7 +5,7 @@
  * 超 24h 自动作废,避免展示隔日过期指标误导。
  * IndexedDB 不可用(隐私模式等)时静默失败,不影响主流程。
  */
-import type { AnalysisResult } from '@/components/advice/AnalysisPanel';
+import type { AnalysisResult } from '@/lib/types';
 
 const DB_NAME = 'stock-tools';
 const STORE = 'analysis-cache';

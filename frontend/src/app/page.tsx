@@ -8,9 +8,9 @@ import clsx from 'clsx';
 
 import { apiGet } from '@/lib/api';
 import { getAnalysisCache, setAnalysisCache } from '@/lib/analysisCache';
-import type { Position, Quote, WatchlistItem } from '@/lib/types';
+import type { AnalysisResult, Position, Quote, WatchlistItem } from '@/lib/types';
 
-import { AnalysisPanel, type AnalysisResult } from '@/components/advice/AnalysisPanel';
+import { AnalysisPanel } from '@/components/advice/AnalysisPanel';
 import { CalculatorPanel } from '@/components/calculator/CalculatorPanel';
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { KLineChart, type KlinePeriod } from '@/components/charts/KLineChart';

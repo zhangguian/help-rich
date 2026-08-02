@@ -215,6 +215,165 @@ export interface CalculatorResponse {
   pnlGrid: PnlGridRow[];
 }
 
+/** K 线智能分析 v1 — 新增指标类型(backend/app/services/ta_service.py) */
+
+export interface MacdIndicator {
+  dif: number | null;
+  dea: number | null;
+  hist: number | null;
+  difSeries: number[];
+  deaSeries: number[];
+  histSeries: number[];
+  cross: 'golden' | 'dead' | null;
+}
+
+export interface KdjIndicator {
+  k: number | null;
+  d: number | null;
+  j: number | null;
+  kSeries: number[];
+  dSeries: number[];
+  jSeries: number[];
+  zone: 'overbought' | 'oversold' | 'normal' | null;
+  cross: 'golden' | 'dead' | null;
+}
+
+export interface BollIndicator {
+  mid: number | null;
+  upper: number | null;
+  lower: number | null;
+  midSeries: number[];
+  upperSeries: number[];
+  lowerSeries: number[];
+  bandwidth: number | null;
+  squeeze: boolean | null;
+  position: 'touching_upper' | 'touching_lower' | 'middle' | null;
+}
+
+export interface VolumePriceReason {
+  name: string;
+  ok: boolean;
+  note: string;
+}
+
+export interface VolumePriceIndicator {
+  label: string | null;
+  direction: 'healthy_up' | 'panic_sell' | 'liar_up_suspect' | 'natural_pullback' | null;
+  emoji: string | null;
+  health: number | null;
+  reasons: VolumePriceReason[];
+}
+
+export interface PatternMatch {
+  name: string;
+  type: 'bull' | 'bear' | 'neutral';
+  emoji: string;
+  dateIndex: number;
+}
+
+export interface LiarPattern {
+  name: string;
+  note: string;
+  severity: 'low' | 'medium' | 'high';
+}
+
+export interface LiarIndicator {
+  bullLiars: LiarPattern[];
+  bearLiars: LiarPattern[];
+  summary: string;
+}
+
+export interface PositionIndicator {
+  pct20: number | null;
+  pct60: number | null;
+  biasMa60: number | null;
+  rangePct: number | null;
+  band: 'high' | 'mid' | 'low';
+}
+
+export interface SignalReason {
+  module: string;
+  weight: number;
+  verdict: string;
+  delta: number;
+}
+
+export interface SignalFusion {
+  view: 'bullish' | 'bearish' | 'neutral';
+  viewLabel: string;
+  score: number;
+  confidence: 'high' | 'medium' | 'low';
+  reasons: SignalReason[];
+  summary: string;
+}
+
+export interface SignalMarker {
+  time: string;
+  dateIndex: number;
+  text: string;
+  position: 'aboveBar' | 'belowBar' | 'inBar';
+  color: string;
+}
+
+export interface TechnicalIndicators {
+  latestClose: number;
+  ma: { ma5: number | null; ma10: number | null; ma20: number | null; ma60: number | null };
+  maSeries: { ma5: number[]; ma10: number[]; ma20: number[]; ma60: number[] };
+  volume: { ratio: number | null; state: 'expand' | 'shrink' | 'normal' | null };
+  channel: {
+    state: 'up' | 'down' | 'sideways';
+    slope: number | null;
+    upper: number | null;
+    lower: number | null;
+    residStd: number | null;
+  };
+  supportPressure: { support: number[]; pressure: number[] };
+  stabilize: { state: boolean; price: number | null; reasons: { name: string; ok: boolean; note: string }[] };
+  macd: MacdIndicator;
+  kdj: KdjIndicator;
+  boll: BollIndicator;
+  volumePrice: VolumePriceIndicator;
+  patterns: PatternMatch[];
+  liar: LiarIndicator;
+  position: PositionIndicator;
+  signal: SignalFusion;
+  signalSeries: SignalMarker[];
+  dataQuality: { klineCount: number; degraded: string[] };
+}
+
+/** K 线 + 指标 端点响应(/api/kline/{code}/indicators) */
+export interface KlineIndicatorsResponse {
+  stockCode: string;
+  period: string;
+  count: number;
+  items: KlineItem[];
+  indicators: TechnicalIndicators;
+}
+
+export interface KlineItem {
+  date: string;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: number;
+}
+
+/** 单只股票 AI 分析结果(/api/stock/{code}/analysis) */
+export interface AnalysisResult {
+  stockCode: string;
+  indicators: TechnicalIndicators;
+  ai: {
+    view: 'bullish' | 'bearish' | 'neutral';
+    viewReason: string;
+    trend: string;
+    volumeNote: string;
+    keyLevels: { type: string; price: number; note: string }[];
+    advice: string;
+    riskWarning: string;
+  } | null;
+}
+
 /** 自选股(P2.2) */
 export interface WatchlistItem {
   stockCode: string;
