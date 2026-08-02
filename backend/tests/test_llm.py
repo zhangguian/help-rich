@@ -240,8 +240,9 @@ class TestMiniMaxClient:
 
         c = MiniMaxClient("sk-test")
         assert c.name == "minimax"
-        assert c.model_name == "abab6.5s-chat"
-        assert c.BASE_URL == "https://api.minimax.chat/v1/text/chatcompletion_v2"
+        assert c.model_name == "MiniMax-M2.5-highspeed"
+        assert c.BASE_URL == "https://api.minimaxi.com/v1/chat/completions"
+        assert c.VISION_MODEL == "MiniMax-M3"
 
     @pytest.mark.asyncio
     async def test_chat_success(self, monkeypatch):
@@ -255,13 +256,40 @@ class TestMiniMaxClient:
                 return {"choices": [{"message": {"content": " MiniMax 评语 "}}]}
 
         async def fake_post(self, url, headers=None, json=None):
-            assert url.endswith("chatcompletion_v2")
-            assert json["model"] == "abab6.5s-chat"
+            assert url.endswith("chat/completions")
+            assert json["model"] == "MiniMax-M2.5-highspeed"
+            assert json["reasoning_split"] is True
             return FakeResp()
 
         monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
         out = await MiniMaxClient("sk-test").chat("system", "user")
         assert out == "MiniMax 评语"
+
+    @pytest.mark.asyncio
+    async def test_chat_strips_think(self, monkeypatch):
+        """M2.x thinking 不可关闭:即使 response 带 <think> 块也要剥离(双保险)"""
+        from app.llm.minimax import MiniMaxClient, strip_think
+
+        assert strip_think("<think>\n推理过程\n</think>\n\nOK,可以买入。") == "OK,可以买入。"
+        assert strip_think("无思考块直接回答") == "无思考块直接回答"
+
+        class FakeResp:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {
+                    "choices": [
+                        {"message": {"content": "<think>思考中…</think>\n\n{\"view\": \"bullish\"}"}}
+                    ]
+                }
+
+        async def fake_post(self, url, headers=None, json=None):
+            return FakeResp()
+
+        monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
+        out = await MiniMaxClient("sk-test").chat("system", "user")
+        assert out == '{"view": "bullish"}'
 
     @pytest.mark.asyncio
     async def test_chat_insufficient_balance_raises(self, monkeypatch):

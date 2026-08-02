@@ -26,7 +26,7 @@ class TestProvidersEndpoint:
         async def fake_available():
             return [
                 {"name": "deepseek", "model": "deepseek-chat", "configured": True},
-                {"name": "minimax", "model": "abab6.5s-chat", "configured": False},
+                {"name": "minimax", "model": "MiniMax-M2.5-highspeed", "configured": False},
                 {"name": "doubao", "model": "doubao-pro-32k", "configured": False},
             ]
 

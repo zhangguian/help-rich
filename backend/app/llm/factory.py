@@ -17,7 +17,7 @@ class ProviderFactory:
     # model_name 必须显式存字符串,不能访问类 property(类层面访问得到的是 property 对象)
     _BUILDERS = {
         "deepseek": (DeepSeekClient, "deepseek-chat"),
-        "minimax": (MiniMaxClient, "abab6.5s-chat"),
+        "minimax": (MiniMaxClient, "MiniMax-M2.5-highspeed"),
         "doubao": (DoubaoClient, "doubao-pro-32k"),
     }
 

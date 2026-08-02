@@ -90,7 +90,7 @@ async def test_model_differs_per_provider(monkeypatch, ab_fixture):
 
     assert models == {
         "deepseek": "deepseek-chat",
-        "minimax": "abab6.5s-chat",
+        "minimax": "MiniMax-M2.5-highspeed",
         "doubao": "doubao-pro-32k",
     }
 

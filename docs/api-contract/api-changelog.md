@@ -28,6 +28,23 @@
 
 ## 历史记录
 
+### 2026-08-02 | v0.4.4 | MiniMax 迁移新平台 minimaxi.com(适配 Token Plan 订阅 Key)
+
+#### Changed(修改)
+- **根因**:用户订阅的是 Token Plan,但应用里配的是按量计费 API Key。**订阅 Key 与按量 API Key 不可互换**(官方文档),订阅额度消费必须用「订阅 Key」(账户管理 / Token Plan 页面获取)。旧 Key 在旧平台 api.minimax.chat / 新平台 api.minimaxi.com / 国际版 api.minimax.io 全部 1008 / 402 / 401
+- **`MiniMaxClient` 迁移**:
+  - 端点 `api.minimax.chat/v1/text/chatcompletion_v2` → `api.minimaxi.com/v1/chat/completions`(OpenAI 兼容,与 DeepSeek/豆包同构)
+  - 文本模型 `abab6.5s-chat` → `MiniMax-M2.5-highspeed`
+  - 视觉模型 `abab-v-chat` → `MiniMax-M3`(支持图片输入,截图识别保留)
+  - 请求体加 `reasoning_split: true`(M2.x thinking 不可关闭,思考进 `reasoning_content`,`content` 干净)
+  - 新增 `strip_think()` 剥除 `<think>…</think>` 块(双保险,防止未来 thinking 行为变化污染 AI 解读 JSON 解析)
+  - 错误处理保留 `base_resp` 检查(新平台实测仍返回该字段)
+- `factory.py` / 测试断言模型名同步更新
+
+#### Test
+- 新增 1 条(think 标签剥离纯函数 + chat 集成);断言更新(端点/模型/reasoning_split);总 331 全绿
+- 端到端实测:analysis 返回 bearish + 完整中文解读(引用真实 MA/斜率);chat 结合持仓成本返回 1392 字回答
+
 ### 2026-08-02 | v0.4.3 | analysis/chat 卡死修复:LLM 总时间预算 + MiniMax 余额不足识别
 
 #### Fixed(修复)

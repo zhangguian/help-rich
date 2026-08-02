@@ -184,7 +184,7 @@ class TestScoreAndNotify:
 
         score = asyncio.run(trade_score_repo.get_by_trade_id(t2.id))
         assert score.ai_provider == "minimax"
-        assert score.ai_model == "abab6.5s-chat"
+        assert score.ai_model == "MiniMax-M2.5-highspeed"
 
     def test_no_key_degrades(self, client, monkeypatch):
         """缺 Key:评分仍出,ai_status=no_key,推 trade.failed"""

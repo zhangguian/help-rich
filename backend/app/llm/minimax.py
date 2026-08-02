@@ -1,13 +1,13 @@
 """MiniMax 客户端(backend-arch §9.2 / P4.2b + 多模态 P8.x)
 
-自有 API(v1/text/chatcompletion_v2),消息体与 OpenAI 兼容。
-
-视觉模型:
-- abab-v-chat(默认视觉模型)
-- 多模态 messages:`content` 是数组,元素为 {type:text} 或 {type:image_url, image_url:{url:data:...}}
+v0.4.4 迁移至新平台 minimaxi.com(OpenAI 兼容端点),适配 Token Plan 订阅 Key:
+- 端点: https://api.minimaxi.com/v1/chat/completions
+- 文本模型: MiniMax-M2.5-highspeed(M2.x 思考不可关闭,`reasoning_split` 把思考分离到 reasoning_content)
+- 视觉模型: MiniMax-M3(支持图片输入)
 """
 import asyncio
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -16,17 +16,24 @@ from app.llm.base import BACKOFF_BASE, BaseLLM, LLMError
 
 logger = logging.getLogger(__name__)
 
+_THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def strip_think(text: str) -> str:
+    """剥除 content 中的 <think>…</think> 块(双保险:即使 reasoning_split 失效也不污染解析)"""
+    return _THINK_PATTERN.sub("", text).strip()
+
 
 class MiniMaxClient(BaseLLM):
-    """MiniMax abab6.5s/abab-v chat API 客户端"""
+    """MiniMax M2.5-highspeed / M3 chat API 客户端(新平台 minimaxi.com)"""
 
     name = "minimax"
-    _model = "abab6.5s-chat"
-    BASE_URL = "https://api.minimax.chat/v1/text/chatcompletion_v2"
+    _model = "MiniMax-M2.5-highspeed"
+    BASE_URL = "https://api.minimaxi.com/v1/chat/completions"
     provider_label = "MiniMax"
 
-    # 视觉模型(MiniMax 多模态)
-    VISION_MODEL = "abab-v-chat"
+    # 视觉模型(MiniMax-M3 多模态)
+    VISION_MODEL = "MiniMax-M3"
 
     def __init__(self, api_key: str):
         self._api_key = api_key
@@ -64,6 +71,7 @@ class MiniMaxClient(BaseLLM):
                                 {"role": "user", "content": user},
                             ],
                             "temperature": temperature,
+                            "reasoning_split": True,
                         },
                     )
                 except (httpx.TimeoutException, httpx.NetworkError) as e:
@@ -83,7 +91,8 @@ class MiniMaxClient(BaseLLM):
                     if not choices:
                         raise LLMError(f"{self.provider_label} 响应格式异常: choices 为空")
                     try:
-                        return choices[0]["message"]["content"].strip()
+                        content = choices[0]["message"]["content"]
+                        return strip_think(content or "").strip()
                     except (KeyError, IndexError, TypeError) as e:
                         raise LLMError(f"{self.provider_label} 响应格式异常: {e}") from e
 
@@ -140,6 +149,7 @@ class MiniMaxClient(BaseLLM):
                             "model": self.VISION_MODEL,
                             "messages": messages,
                             "temperature": temperature,
+                            "reasoning_split": True,
                         },
                     )
                 except (httpx.TimeoutException, httpx.NetworkError) as e:
@@ -159,7 +169,8 @@ class MiniMaxClient(BaseLLM):
                     if not choices:
                         raise LLMError(f"{self.provider_label} 视觉响应格式异常: choices 为空")
                     try:
-                        return choices[0]["message"]["content"].strip()
+                        content = choices[0]["message"]["content"]
+                        return strip_think(content or "").strip()
                     except (KeyError, IndexError, TypeError) as e:
                         raise LLMError(
                             f"{self.provider_label} 视觉响应格式异常: {e}"
