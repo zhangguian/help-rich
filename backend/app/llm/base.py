@@ -5,8 +5,10 @@
 - model_name:模型名(用于 A/B 标签)
 """
 import asyncio
+import json
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 
 import httpx
 
@@ -14,6 +16,41 @@ logger = logging.getLogger(__name__)
 
 # 指数退避基础秒数:重试 1/2/3 次分别等待 2s/4s/8s
 BACKOFF_BASE = 2.0
+
+
+class ThinkStripper:
+    """增量剥除 <think>…</think> 块(流式分片时标签可能跨 chunk)
+
+    reasoning_split 失效时的双保险;非流式场景直接用全局 strip_think。
+    """
+
+    _OPEN = "<think>"
+    _CLOSE = "</think>"
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._in_think = False
+
+    def feed(self, text: str) -> str:
+        """喂入新文本,返回可安全输出的内容(思考内容被丢弃)"""
+        self._buf += text
+        out = ""
+        while True:
+            if self._in_think:
+                idx = self._buf.find(self._CLOSE)
+                if idx == -1:
+                    return out  # 思考未结束,全部丢弃
+                self._in_think = False
+                self._buf = self._buf[idx + len(self._CLOSE) :]
+                continue
+            idx = self._buf.find(self._OPEN)
+            if idx == -1:
+                out += self._buf
+                self._buf = ""
+                return out
+            out += self._buf[:idx]
+            self._in_think = True
+            self._buf = self._buf[idx + len(self._OPEN) :]
 
 
 class BaseLLM(ABC):
@@ -36,6 +73,20 @@ class BaseLLM(ABC):
 
         Raises:
             LLMError: 重试耗尽仍失败
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def chat_stream(
+        self,
+        system: str,
+        user: str,
+        temperature: float = 0.3,
+    ) -> AsyncIterator[str]:
+        """流式对话:逐段产出回复文本增量(不含思考内容)
+
+        调用方消费完整后必须关闭(async for 正常结束即可)。
+        失败时抛出 LLMError(流式无重试:已输出内容无法回滚)。
         """
         raise NotImplementedError
 
@@ -140,6 +191,62 @@ class OpenAICompatClient(BaseLLM):
                 )
 
         raise LLMError(f"{self.provider_label} 重试 {max_retries} 次仍失败: {last_err}")
+
+    async def chat_stream(
+        self,
+        system: str,
+        user: str,
+        temperature: float = 0.3,
+    ) -> AsyncIterator[str]:
+        """OpenAI 兼容流式(SSE chunk 的 choices[0].delta.content)"""
+        # 非 2xx 的完整响应体先读到内存再判断,避免与流式读冲突
+        request = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": temperature,
+            "stream": True,
+        }
+        stripper = ThinkStripper()
+        async with httpx.AsyncClient(trust_env=False, timeout=60) as client:
+            async with client.stream(
+                "POST",
+                self.BASE_URL,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=request,
+            ) as resp:
+                if resp.status_code != 200:
+                    body = (await resp.aread()).decode("utf-8", errors="replace")
+                    raise LLMError(
+                        f"{self.provider_label} HTTP {resp.status_code}: {body[:200]}"
+                    )
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    try:
+                        delta = chunk["choices"][0]["delta"]
+                    except (KeyError, IndexError, TypeError):
+                        continue
+                    piece = delta.get("content") or ""
+                    if piece:
+                        text = stripper.feed(piece)
+                        if text:
+                            yield text
+        rest = stripper.feed("")
+        if rest:
+            yield rest
 
 
 class LLMError(Exception):

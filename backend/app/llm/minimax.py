@@ -6,13 +6,15 @@ v0.4.4 迁移至新平台 minimaxi.com(OpenAI 兼容端点),适配 Token Plan �
 - 视觉模型: MiniMax-M3(支持图片输入)
 """
 import asyncio
+import json
 import logging
 import re
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 
-from app.llm.base import BACKOFF_BASE, BaseLLM, LLMError
+from app.llm.base import BACKOFF_BASE, BaseLLM, LLMError, ThinkStripper
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +110,67 @@ class MiniMaxClient(BaseLLM):
                 )
 
         raise LLMError(f"{self.provider_label} 重试 {max_retries} 次仍失败: {last_err}")
+
+    async def chat_stream(
+        self,
+        system: str,
+        user: str,
+        temperature: float = 0.3,
+    ) -> AsyncIterator[str]:
+        """MiniMax 流式(reasoning_split 分离思考 + base_resp 错误检查)"""
+        stripper = ThinkStripper()
+        async with httpx.AsyncClient(trust_env=False, timeout=60) as client:
+            async with client.stream(
+                "POST",
+                self.BASE_URL,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self._model,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    "temperature": temperature,
+                    "reasoning_split": True,
+                    "stream": True,
+                },
+            ) as resp:
+                if resp.status_code != 200:
+                    body = (await resp.aread()).decode("utf-8", errors="replace")
+                    raise LLMError(
+                        f"{self.provider_label} HTTP {resp.status_code}: {body[:200]}"
+                    )
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    base = chunk.get("base_resp") or {}
+                    if base.get("status_code"):
+                        raise LLMError(
+                            f"{self.provider_label} 响应错误({base.get('status_code')}): "
+                            f"{base.get('status_msg') or '未知'}"
+                        )
+                    try:
+                        delta = chunk["choices"][0]["delta"]
+                    except (KeyError, IndexError, TypeError):
+                        continue
+                    piece = delta.get("content") or ""
+                    if piece:
+                        text = stripper.feed(piece)
+                        if text:
+                            yield text
+        rest = stripper.feed("")
+        if rest:
+            yield rest
 
     async def chat_with_image(
         self,

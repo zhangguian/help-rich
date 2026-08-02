@@ -4,6 +4,7 @@
  * 后端 Pydantic 用 snake_case,前端 TS 用 camelCase,转换在拦截器中自动完成。
  */
 import axios from 'axios';
+import type { AxiosRequestConfig } from 'axios';
 
 import { useUIStore } from '@/stores/useUIStore';
 
@@ -118,13 +119,16 @@ function snakeToCamel(obj: unknown): unknown {
  * 便捷方法
  * 注意:url 保留前导斜杠,axios 的 combineURLs 会正确拼接 baseURL 路径(/api)。
  * 例:apiGet('/positions') → http://127.0.0.1:8000/api/positions
+ * config 可覆盖默认 10s 超时,如 LLM 慢接口需 `{ timeout: 60000 }`
  */
-export const apiGet = <T>(url: string) => api.get<T>(url).then((r) => r.data);
-export const apiPost = <T>(url: string, body?: unknown) =>
-  api.post<T>(url, body).then((r) => r.data);
-export const apiPut = <T>(url: string, body?: unknown) =>
-  api.put<T>(url, body).then((r) => r.data);
-export const apiDelete = <T>(url: string) => api.delete<T>(url).then((r) => r.data);
+export const apiGet = <T>(url: string, config?: AxiosRequestConfig) =>
+  api.get<T>(url, config).then((r) => r.data);
+export const apiPost = <T>(url: string, body?: unknown, config?: AxiosRequestConfig) =>
+  api.post<T>(url, body, config).then((r) => r.data);
+export const apiPut = <T>(url: string, body?: unknown, config?: AxiosRequestConfig) =>
+  api.put<T>(url, body, config).then((r) => r.data);
+export const apiDelete = <T>(url: string, config?: AxiosRequestConfig) =>
+  api.delete<T>(url, config).then((r) => r.data);
 
 /** SSE 端点(原地址,EventSource 不支持自定义 header,需直接传 base) */
 export const sseUrl = (): string => {

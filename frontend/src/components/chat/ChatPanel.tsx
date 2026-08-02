@@ -4,26 +4,30 @@ import { useEffect, useRef, useState } from 'react';
 
 import { AnimatePresence, motion } from 'framer-motion';
 
-import { apiPost } from '@/lib/api';
+import { apiBaseUrl } from '@/lib/api';
 
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Button } from '@/components/ui/Button';
 
 interface Msg {
+  id: number;
   role: 'user' | 'ai';
   text: string;
+  streaming?: boolean;
 }
 
 /**
  * 右侧下栏 · AI 对话助手(roadmap 功能5)
  *
  * 结合行情 + 技术指标 + 持仓成本回答操作提问;单轮会话(切换股票清空)。
+ * 走 /chat/stream SSE 流式接口,打字机效果输出。
  */
 export function ChatPanel({ stockCode }: { stockCode: string | null }) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const idRef = useRef(0);
 
   useEffect(() => {
     setMessages([]);
@@ -33,24 +37,93 @@ export function ChatPanel({ stockCode }: { stockCode: string | null }) {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages, sending]);
 
+  /** 终结某条 AI 消息:text 覆盖或追加,streaming 置 false */
+  const finalize = (id: number, text: string, replace: boolean) => {
+    setMessages((m) =>
+      m.map((x) =>
+        x.id === id
+          ? { ...x, text: replace ? text : x.text + text, streaming: false }
+          : x,
+      ),
+    );
+  };
+
   const send = async () => {
     const q = input.trim();
     if (!q || !stockCode || sending) return;
     setInput('');
-    setMessages((m) => [...m, { role: 'user', text: q }]);
+    const msgId = ++idRef.current;
+    const userMsgId = ++idRef.current;
+    setMessages((m) => [
+      ...m,
+      { id: userMsgId, role: 'user', text: q },
+      { id: msgId, role: 'ai', text: '', streaming: true },
+    ]);
     setSending(true);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 90000);
     try {
-      const r = await apiPost<{ answer: string }>(
-        `/stock/${encodeURIComponent(stockCode)}/chat`,
-        { question: q },
+      const res = await fetch(
+        `${apiBaseUrl()}/stock/${encodeURIComponent(stockCode)}/chat/stream`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({ question: q }),
+        },
       );
-      setMessages((m) => [...m, { role: 'ai', text: r.answer }]);
+      if (!res.ok) {
+        let msg = `请求失败 (HTTP ${res.status})`;
+        try {
+          const data = await res.json();
+          const detail = data?.detail;
+          if (detail?.message) msg = detail.message;
+          else if (typeof detail === 'string') msg = detail;
+        } catch {
+          /* keep default */
+        }
+        finalize(msgId, msg, true);
+        return;
+      }
+      if (!res.body) throw new Error('empty body');
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let streamError: string | null = null;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() ?? '';
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (payload === '[DONE]') continue;
+          let evt: { text?: string; error?: string; done?: boolean };
+          try {
+            evt = JSON.parse(payload);
+          } catch {
+            continue;
+          }
+          if (typeof evt.error === 'string') streamError = evt.error;
+          else if (evt.done) streamError = null;
+          else if (typeof evt.text === 'string') {
+            const piece = evt.text;
+            setMessages((m) =>
+              m.map((x) => (x.id === msgId ? { ...x, text: x.text + piece } : x)),
+            );
+          }
+        }
+      }
+      finalize(msgId, streamError ?? '', streamError != null);
     } catch {
-      setMessages((m) => [
-        ...m,
-        { role: 'ai', text: 'AI 暂不可用(未配置 Key 或服务异常),请稍后重试。' },
-      ]);
+      finalize(msgId, 'AI 输出中断(网络异常),请重试。', true);
     } finally {
+      clearTimeout(timer);
       setSending(false);
     }
   };
@@ -77,9 +150,9 @@ export function ChatPanel({ stockCode }: { stockCode: string | null }) {
           </p>
         )}
         <AnimatePresence initial={false}>
-          {messages.map((m, i) => (
+          {messages.map((m) => (
             <motion.div
-              key={i}
+              key={m.id}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
@@ -100,6 +173,7 @@ export function ChatPanel({ stockCode }: { stockCode: string | null }) {
                 }`}
               >
                 {m.text}
+                {m.streaming && <span className="text-accent">▍</span>}
               </div>
             </motion.div>
           ))}
@@ -116,7 +190,7 @@ export function ChatPanel({ stockCode }: { stockCode: string | null }) {
           className="flex-1 px-3 py-2 text-sm rounded-xl bg-white/5 border border-white/10 focus:border-accent outline-none text-text-pri placeholder:text-text-ter disabled:opacity-40"
         />
         <Button onClick={send} disabled={!stockCode || sending || !input.trim()}>
-          发送
+          {sending ? '回答中…' : '发送'}
         </Button>
       </div>
     </GlassCard>

@@ -6,6 +6,7 @@ LLM 不可用 / 输出非法 → ai=None,由前端降级纯指标展示(页面�
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 from app.llm.factory import provider_factory
@@ -54,6 +55,12 @@ class StockAdviceUnavailable(Exception):
 async def _get_llm():
     active = await llm_settings_repo.get_active()
     return await provider_factory.get(active)
+
+
+async def check_llm_available() -> None:
+    """流式端点前置校验:LLM 未配置抛 StockAdviceUnavailable(响应开始前 503)"""
+    if await _get_llm() is None:
+        raise StockAdviceUnavailable("未配置 LLM Key,无法回答;可先查看技术指标")
 
 
 def _parse_llm_json(raw: str) -> dict:
@@ -150,16 +157,7 @@ async def ask_stock_question(
     if llm is None:
         raise StockAdviceUnavailable("未配置 LLM Key,无法回答;可先查看技术指标")
 
-    ctx = json.dumps(_build_context(klines), ensure_ascii=False)
-    cost_line = (
-        f"\n用户持仓成本: {position_cost} 元/股(成本是用户隐私,回答中不要复述精确数字,只用来说明盈亏方向)"
-        if position_cost is not None
-        else "\n用户暂无该股持仓"
-    )
-    prompt = (
-        f"该股技术指标与最近K线:\n{ctx}{cost_line}\n"
-        f"用户提问: {question}"
-    )
+    prompt = _build_question_prompt(question, klines, position_cost)
     try:
         raw = await asyncio.wait_for(
             llm.chat(QUESTION_SYSTEM, prompt, temperature=0.4),
@@ -170,3 +168,43 @@ async def ask_stock_question(
     except Exception as e:
         raise StockAdviceUnavailable(f"LLM 调用失败: {e}") from e
     return raw.strip()
+
+
+def _build_question_prompt(
+    question: str,
+    klines: list[dict[str, Any]],
+    position_cost: float | None,
+) -> str:
+    """操作问答的完整 user prompt(chat / chat/stream 共用)"""
+    ctx = json.dumps(_build_context(klines), ensure_ascii=False)
+    cost_line = (
+        f"\n用户持仓成本: {position_cost} 元/股(成本是用户隐私,回答中不要复述精确数字,只用来说明盈亏方向)"
+        if position_cost is not None
+        else "\n用户暂无该股持仓"
+    )
+    return (
+        f"该股技术指标与最近K线:\n{ctx}{cost_line}\n"
+        f"用户提问: {question}"
+    )
+
+
+async def ask_stock_question_stream(
+    stock_code: str,
+    question: str,
+    klines: list[dict[str, Any]],
+    position_cost: float | None = None,
+) -> AsyncIterator[str]:
+    """操作问答流式版:逐段产出回答增量(不含思考内容)
+
+    调用方需 async for 完整消费;LLM 未配置 / 调用失败抛 StockAdviceUnavailable。
+    """
+    llm = await _get_llm()
+    if llm is None:
+        raise StockAdviceUnavailable("未配置 LLM Key,无法回答;可先查看技术指标")
+
+    prompt = _build_question_prompt(question, klines, position_cost)
+    try:
+        async for piece in llm.chat_stream(QUESTION_SYSTEM, prompt, temperature=0.4):
+            yield piece
+    except Exception as e:
+        raise StockAdviceUnavailable(f"LLM 调用失败: {e}") from e

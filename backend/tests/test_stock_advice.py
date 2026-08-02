@@ -5,6 +5,7 @@
 """
 import asyncio
 import json
+import re
 
 import httpx
 import pytest
@@ -36,6 +37,23 @@ class FakeLLM:
 
     async def chat(self, system, user, temperature=0.3, max_retries=3):
         return self.reply
+
+    async def chat_stream(self, system, user, temperature=0.3):
+        for i in range(0, len(self.reply), 4):
+            yield self.reply[i : i + 4]
+
+
+class FailStreamLLM:
+    """流中途抛错(模拟 LLM 流式输出时服务端异常)"""
+
+    name = "failstream"
+
+    async def chat(self, system, user, temperature=0.3, max_retries=3):
+        return ""
+
+    async def chat_stream(self, system, user, temperature=0.3):
+        yield "前半段回答"
+        raise RuntimeError("流中断")
 
 
 class SlowLLM:
@@ -279,3 +297,41 @@ class TestStockAPI:
         _mock_llm(monkeypatch, None)
         r = client.post("/api/stock/600519.SH/chat", json={"question": "能买吗?"})
         assert r.status_code == 503
+
+    def test_chat_stream_ok(self, client, monkeypatch):
+        fake = make_fake_client_class([
+            httpx.Response(200, text=f"cb({json.dumps(_sina_rows())});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake)
+        _mock_llm(monkeypatch, FakeLLM("建议先观望。以上仅供参考。"))
+        r = client.post("/api/stock/600519.SH/chat/stream", json={"question": "能买吗?"})
+        assert r.status_code == 200
+        body = r.text
+        texts = re.findall(r'"text": "([^"]*)"', body)
+        assert "".join(texts) == "建议先观望。以上仅供参考。"
+        assert body.strip().endswith('data: {"done": true}')
+
+    def test_chat_stream_mid_error_sends_error_event(self, client, monkeypatch):
+        fake = make_fake_client_class([
+            httpx.Response(200, text=f"cb({json.dumps(_sina_rows())});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake)
+        _mock_llm(monkeypatch, FailStreamLLM())
+        r = client.post("/api/stock/600519.SH/chat/stream", json={"question": "能买吗?"})
+        assert r.status_code == 200
+        assert '"text": "前半段回答"' in r.text
+        assert '"error"' in r.text
+        assert 'data: {"done": true}' not in r.text
+
+    def test_chat_stream_no_llm_503(self, client, monkeypatch):
+        fake = make_fake_client_class([
+            httpx.Response(200, text=f"cb({json.dumps(_sina_rows())});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake)
+        _mock_llm(monkeypatch, None)
+        r = client.post("/api/stock/600519.SH/chat/stream", json={"question": "能买吗?"})
+        assert r.status_code == 503
+
+    def test_chat_stream_invalid_code_422(self, client):
+        r = client.post("/api/stock/abc/chat/stream", json={"question": "能买吗?"})
+        assert r.status_code == 422
