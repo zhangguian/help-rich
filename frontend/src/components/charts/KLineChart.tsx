@@ -231,7 +231,7 @@ export function KLineChart({
       } as TimeScaleOptions,
       rightPriceScale: {
         borderColor: 'rgba(255, 255, 255, 0.12)',
-        scaleMargins: { top: 0.08, bottom: 0.4 },
+        scaleMargins: { top: 0.06, bottom: 0.50 },
       },
       crosshair: { mode: 0 },
     });
@@ -247,16 +247,16 @@ export function KLineChart({
     });
 
     let volumeSeries: ISeriesApi<'Histogram'> | null = null;
-    if (showVolume) {
-      volumeSeries = chart.addHistogramSeries({
-        priceFormat: { type: 'volume' },
-        priceScaleId: 'volume',
-        color: 'rgba(255, 255, 255, 0.4)',
-      });
-      chart.priceScale('volume').applyOptions({
-        scaleMargins: { top: 0.78, bottom: 0.18 },
-      });
-    }
+    // 始终创建 volume series(即使 showVolume=false),这样图例点击可立即显隐
+    volumeSeries = chart.addHistogramSeries({
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume',
+      color: 'rgba(255, 255, 255, 0.4)',
+    });
+    chart.priceScale('volume').applyOptions({
+      scaleMargins: { top: 0.50, bottom: 0.38 },
+    });
+    seriesMapRef.current.volume.push(volumeSeries);
 
     // 全部指标组预创建(系列始终存在,显隐由 seriesMapRef 后续 applyOptions 控制)
     // MA 四线(主图)
@@ -311,7 +311,7 @@ export function KLineChart({
       lastValueVisible: true,
     });
     seriesMapRef.current.macd.push(macdHist, macdDif, macdDea);
-    chart.priceScale('macd').applyOptions({ scaleMargins: { top: 0.62, bottom: 0.08 } });
+    chart.priceScale('macd').applyOptions({ scaleMargins: { top: 0.62, bottom: 0.50 } });
 
     // KDJ:K/D/J(独立 priceScaleId)
     const kdjLineOpt: LineSeriesPartialOptions = {
@@ -325,7 +325,7 @@ export function KLineChart({
     const kdjD = chart.addLineSeries({ ...kdjLineOpt, color: COLOR.kdjD });
     const kdjJ = chart.addLineSeries({ ...kdjLineOpt, color: COLOR.kdjJ });
     seriesMapRef.current.kdj.push(kdjK, kdjD, kdjJ);
-    chart.priceScale('kdj').applyOptions({ scaleMargins: { top: 0.4, bottom: 0.32 } });
+    chart.priceScale('kdj').applyOptions({ scaleMargins: { top: 0.74, bottom: 0.62 } });
 
     // 按初始可见性统一应用(visibleGroups 来自 props overlay)
     (Object.keys(seriesMapRef.current) as OverlayGroup[]).forEach((g) => {
