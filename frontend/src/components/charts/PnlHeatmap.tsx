@@ -34,11 +34,11 @@ export function PnlHeatmap({ grid, currentPricePct = 0, recommendedRange }: PnlH
       <div className="text-xs text-text-sec mb-3 flex items-center gap-4">
         <span>±10% 盈亏热力图(21 档)</span>
         <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded-sm bg-down/30" style={{ background: 'rgba(22,163,74,0.3)' }} />
+          <span className="inline-block w-3 h-3 rounded-sm bg-up/30" style={{ background: 'rgba(244,63,94,0.3)' }} />
           盈利
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded-sm" style={{ background: 'rgba(220,38,38,0.3)' }} />
+          <span className="inline-block w-3 h-3 rounded-sm bg-down/30" style={{ background: 'rgba(74,222,128,0.3)' }} />
           亏损
         </span>
       </div>
@@ -77,15 +77,15 @@ export function PnlHeatmap({ grid, currentPricePct = 0, recommendedRange }: PnlH
                 )}
                 style={{
                   backgroundColor: isPos
-                    ? `rgba(22, 163, 74, ${0.1 + intensity * 0.5})`
-                    : `rgba(220, 38, 38, ${0.1 + intensity * 0.5})`,
+                    ? `rgba(244, 63, 94, ${0.1 + intensity * 0.5})`
+                    : `rgba(74, 222, 128, ${0.1 + intensity * 0.5})`,
                 }}
                 title={`${row.pct}%: 价格 ¥${row.price} → PnL ¥${row.pnl}`}
               >
                 <div className="text-[10px] text-text-ter font-mono">
                   {row.pct > 0 ? `+${row.pct}` : row.pct}
                 </div>
-                <div className={`text-[10px] font-mono ${isPos ? 'text-down' : 'text-up'}`}>
+                <div className={`text-[10px] font-mono ${isPos ? 'text-up' : 'text-down'}`}>
                   {Math.abs(pctNum) > 1000
                     ? `${(pctNum / 1000).toFixed(1)}k`
                     : pctNum.toFixed(0)}

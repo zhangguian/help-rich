@@ -42,10 +42,10 @@ export default function HoldingsHealthPage() {
 
   const riskCls =
     data?.riskLevel === '高'
-      ? 'text-down'
+      ? 'text-up'
       : data?.riskLevel === '中'
         ? 'text-warn'
-        : 'text-up';
+        : 'text-down';
 
   return (
     <main className="min-h-screen p-8 max-w-5xl mx-auto space-y-6">
