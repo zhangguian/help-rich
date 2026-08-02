@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import clsx from 'clsx';
 
@@ -23,27 +23,23 @@ import type { KlineIndicatorsResponse } from '@/lib/types';
 
 export type KlinePeriod = 'daily' | 'weekly' | 'monthly' | '60min';
 
-/** 主图叠加层开关(默认 MA 四线 + BOLL) */
+/** 指标组(整组开关) */
+export type OverlayGroup = 'ma' | 'boll' | 'macd' | 'kdj';
+
+/** 外部覆盖初始显隐(可选) */
 export interface ChartOverlay {
-  ma5?: boolean;
-  ma10?: boolean;
-  ma20?: boolean;
-  ma60?: boolean;
+  ma?: boolean;
   boll?: boolean;
   macd?: boolean;
   kdj?: boolean;
-  volume?: boolean;
 }
 
-const DEFAULT_OVERLAY: Required<ChartOverlay> = {
-  ma5: false,
-  ma10: false,
-  ma20: true,
-  ma60: true,
-  boll: true,
+/** 默认显示:MA 四线 + MACD;BOLL/KDJ 默认隐藏 */
+const DEFAULT_VISIBLE: Record<OverlayGroup, boolean> = {
+  ma: true,
+  boll: false,
   macd: true,
-  kdj: true,
-  volume: true,
+  kdj: false,
 };
 
 interface KlineItem {
@@ -78,15 +74,13 @@ interface LegendItem {
   key: string;
   label: string;
   color: string;
-  /** 同一指标内多个值(预留,本版本未用) */
-  values?: number[];
-  /** hover 时是否显示的 series(用于决定是否亮起) */
-  seriesRefs?: ISeriesApi<'Line'>[];
+  decimals: number;
 }
 
 interface LegendRow {
-  group: '主图 MA' | 'BOLL' | 'MACD' | 'KDJ';
-  items: { key: string; label: string; color: string; series: ISeriesApi<'Line'> | null }[];
+  group: OverlayGroup;
+  label: string;
+  items: LegendItem[];
 }
 
 /**
@@ -116,8 +110,18 @@ export function KLineChart({
   const chartRef = useRef<IChartApi | null>(null);
   // 图例:每条线在 hover 时间点的当前值(未 hover 时为 null)
   const [hoverValues, setHoverValues] = useState<Record<string, number | null>>({});
-
-  const ov: Required<ChartOverlay> = { ...DEFAULT_OVERLAY, ...overlay, volume: showVolume };
+  // 整组显隐(MA / BOLL / MACD / KDJ);volume 单独由 showVolume 控制
+  const [visibleGroups, setVisibleGroups] = useState<Record<OverlayGroup, boolean>>(() => ({
+    ...DEFAULT_VISIBLE,
+    ...(overlay ?? {}),
+  }));
+  // series 按组引用,用于外部 toggle 时直接 applyOptions 不重建图表
+  const seriesMapRef = useRef<Record<OverlayGroup, ISeriesApi<any>[]>>({
+    ma: [],
+    boll: [],
+    macd: [],
+    kdj: [],
+  });
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -154,7 +158,7 @@ export function KLineChart({
     });
 
     let volumeSeries: ISeriesApi<'Histogram'> | null = null;
-    if (ov.volume) {
+    if (showVolume) {
       volumeSeries = chart.addHistogramSeries({
         priceFormat: { type: 'volume' },
         priceScaleId: 'volume',
@@ -165,75 +169,82 @@ export function KLineChart({
       });
     }
 
-    // 收集所有 line series 用于图例 + 高亮控制
+    // 全部指标组预创建(系列始终存在,显隐由 seriesMapRef 后续 applyOptions 控制)
+    // MA 四线(主图)
     const maLines: Record<'ma5' | 'ma10' | 'ma20' | 'ma60', ISeriesApi<'Line'> | null> = {
       ma5: null,
       ma10: null,
       ma20: null,
       ma60: null,
     };
+    (['ma5', 'ma10', 'ma20', 'ma60'] as const).forEach((k) => {
+      const line = chart.addLineSeries({
+        color: COLOR[k],
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: true,
+        crosshairMarkerVisible: false,
+      });
+      maLines[k] = line;
+      seriesMapRef.current.ma.push(line);
+    });
 
     // BOLL 三轨(虚线)
-    let bollUp: ISeriesApi<'Line'> | null = null;
-    let bollMid: ISeriesApi<'Line'> | null = null;
-    let bollDn: ISeriesApi<'Line'> | null = null;
-    if (ov.boll) {
-      const lineOpts: LineSeriesPartialOptions = {
-        lineWidth: 1,
-        lineStyle: 2, // Dashed
-        color: COLOR.bollMid,
-        priceLineVisible: false,
-        lastValueVisible: true,
-        crosshairMarkerVisible: false,
-      };
-      bollUp = chart.addLineSeries({ ...lineOpts, color: COLOR.bollUp });
-      bollMid = chart.addLineSeries({ ...lineOpts, color: COLOR.bollMid });
-      bollDn = chart.addLineSeries({ ...lineOpts, color: COLOR.bollDn });
-    }
+    const bollLineOpts: LineSeriesPartialOptions = {
+      lineWidth: 1,
+      lineStyle: 2,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerVisible: false,
+    };
+    const bollUp = chart.addLineSeries({ ...bollLineOpts, color: COLOR.bollUp });
+    const bollMid = chart.addLineSeries({ ...bollLineOpts, color: COLOR.bollMid });
+    const bollDn = chart.addLineSeries({ ...bollLineOpts, color: COLOR.bollDn });
+    seriesMapRef.current.boll.push(bollUp, bollMid, bollDn);
 
     // MACD:hist + DIF + DEA(独立 priceScaleId)
-    let macdHist: ISeriesApi<'Histogram'> | null = null;
-    let macdDif: ISeriesApi<'Line'> | null = null;
-    let macdDea: ISeriesApi<'Line'> | null = null;
-    if (ov.macd) {
-      macdHist = chart.addHistogramSeries({
-        priceScaleId: 'macd',
-        color: COLOR.macdHistPos,
-      });
-      macdDif = chart.addLineSeries({
-        priceScaleId: 'macd',
-        color: COLOR.macdDif,
-        lineWidth: 1,
-        priceLineVisible: false,
-        lastValueVisible: true,
-      });
-      macdDea = chart.addLineSeries({
-        priceScaleId: 'macd',
-        color: COLOR.macdDea,
-        lineWidth: 1,
-        priceLineVisible: false,
-        lastValueVisible: true,
-      });
-      chart.priceScale('macd').applyOptions({ scaleMargins: { top: 0.62, bottom: 0.08 } });
-    }
+    const macdHist = chart.addHistogramSeries({
+      priceScaleId: 'macd',
+      color: COLOR.macdHistPos,
+    });
+    const macdDif = chart.addLineSeries({
+      priceScaleId: 'macd',
+      color: COLOR.macdDif,
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: true,
+    });
+    const macdDea = chart.addLineSeries({
+      priceScaleId: 'macd',
+      color: COLOR.macdDea,
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: true,
+    });
+    seriesMapRef.current.macd.push(macdHist, macdDif, macdDea);
+    chart.priceScale('macd').applyOptions({ scaleMargins: { top: 0.62, bottom: 0.08 } });
 
     // KDJ:K/D/J(独立 priceScaleId)
-    let kdjK: ISeriesApi<'Line'> | null = null;
-    let kdjD: ISeriesApi<'Line'> | null = null;
-    let kdjJ: ISeriesApi<'Line'> | null = null;
-    if (ov.kdj) {
-      const lineOpt: LineSeriesPartialOptions = {
-        priceScaleId: 'kdj',
-        lineWidth: 1,
-        priceLineVisible: false,
-        lastValueVisible: true,
-        crosshairMarkerVisible: false,
-      };
-      kdjK = chart.addLineSeries({ ...lineOpt, color: COLOR.kdjK });
-      kdjD = chart.addLineSeries({ ...lineOpt, color: COLOR.kdjD });
-      kdjJ = chart.addLineSeries({ ...lineOpt, color: COLOR.kdjJ });
-      chart.priceScale('kdj').applyOptions({ scaleMargins: { top: 0.4, bottom: 0.32 } });
-    }
+    const kdjLineOpt: LineSeriesPartialOptions = {
+      priceScaleId: 'kdj',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerVisible: false,
+    };
+    const kdjK = chart.addLineSeries({ ...kdjLineOpt, color: COLOR.kdjK });
+    const kdjD = chart.addLineSeries({ ...kdjLineOpt, color: COLOR.kdjD });
+    const kdjJ = chart.addLineSeries({ ...kdjLineOpt, color: COLOR.kdjJ });
+    seriesMapRef.current.kdj.push(kdjK, kdjD, kdjJ);
+    chart.priceScale('kdj').applyOptions({ scaleMargins: { top: 0.4, bottom: 0.32 } });
+
+    // 按初始可见性统一应用(visibleGroups 来自 props overlay)
+    (Object.keys(seriesMapRef.current) as OverlayGroup[]).forEach((g) => {
+      const v = visibleGroups[g];
+      seriesMapRef.current[g].forEach((s) => {
+        s.applyOptions({ visible: v });
+      });
+    });
 
     const onResize = () => {
       if (containerRef.current && chartRef.current) {
@@ -270,65 +281,43 @@ export function KLineChart({
           volumeSeries.setData(vol);
         }
 
-        // MA 序列对齐:ma_series 末尾 N 个对应 items 末尾 N 个
         const tail = items.length;
         const ind = d.indicators;
+
+        // MA 四线
         const maMap: Record<'ma5' | 'ma10' | 'ma20' | 'ma60', number[]> = {
           ma5: ind.maSeries.ma5,
           ma10: ind.maSeries.ma10,
           ma20: ind.maSeries.ma20,
           ma60: ind.maSeries.ma60,
         };
-        const maFlags = {
-          ma5: ov.ma5,
-          ma10: ov.ma10,
-          ma20: ov.ma20,
-          ma60: ov.ma60,
-        };
         (Object.keys(maMap) as Array<keyof typeof maMap>).forEach((k) => {
-          if (!maFlags[k]) return;
           const arr = maMap[k];
           const start = tail - arr.length;
           const data: LineData[] = arr.map((v, i) => ({
             time: items[start + i]?.date as Time,
             value: v,
           })).filter((p) => p.time);
-          const line = chart.addLineSeries({
-            color: COLOR[k],
-            lineWidth: 1,
-            priceLineVisible: false,
-            lastValueVisible: true,
-            crosshairMarkerVisible: false,
-          });
-          line.setData(data);
-          maLines[k] = line;
+          maLines[k]?.setData(data);
         });
 
-        // BOLL 序列对齐
-        if (ov.boll && bollUp && bollMid && bollDn) {
+        // BOLL
+        {
           const offset = tail - ind.boll.upperSeries.length;
-          bollUp.setData(
-            ind.boll.upperSeries.map((v, i) => ({
+          const mapArr = (
+            arr: number[],
+          ): LineData[] =>
+            arr.map((v, i) => ({
               time: items[offset + i]?.date as Time,
               value: v,
-            })).filter((p) => p.time),
-          );
-          bollMid.setData(
-            ind.boll.midSeries.map((v, i) => ({
-              time: items[offset + i]?.date as Time,
-              value: v,
-            })).filter((p) => p.time),
-          );
-          bollDn.setData(
-            ind.boll.lowerSeries.map((v, i) => ({
-              time: items[offset + i]?.date as Time,
-              value: v,
-            })).filter((p) => p.time),
-          );
+            })).filter((p) => p.time);
+          bollUp.setData(mapArr(ind.boll.upperSeries));
+          bollMid.setData(mapArr(ind.boll.midSeries));
+          bollDn.setData(mapArr(ind.boll.lowerSeries));
         }
 
         // MACD
-        if (ov.macd && macdHist && macdDif && macdDea) {
+        {
           const offset = tail - ind.macd.histSeries.length;
           macdHist.setData(
             ind.macd.histSeries.map((v, i) => ({
@@ -337,34 +326,33 @@ export function KLineChart({
               color: v >= 0 ? COLOR.macdHistPos : COLOR.macdHistNeg,
             })).filter((p) => p.time),
           );
-          macdDif.setData(
-            ind.macd.difSeries.map((v, i) => ({
+          const lineArr = (
+            arr: number[],
+          ): LineData[] =>
+            arr.map((v, i) => ({
               time: items[offset + i]?.date as Time,
               value: v,
-            })).filter((p) => p.time),
-          );
-          macdDea.setData(
-            ind.macd.deaSeries.map((v, i) => ({
-              time: items[offset + i]?.date as Time,
-              value: v,
-            })).filter((p) => p.time),
-          );
+            })).filter((p) => p.time);
+          macdDif.setData(lineArr(ind.macd.difSeries));
+          macdDea.setData(lineArr(ind.macd.deaSeries));
         }
 
         // KDJ
-        if (ov.kdj && kdjK && kdjD && kdjJ) {
+        {
           const offset = tail - ind.kdj.kSeries.length;
-          const map = (
+          const mapArr = (
             arr: number[],
           ): LineData[] =>
-            arr.map((v, i) => ({ time: items[offset + i]?.date as Time, value: v }))
-              .filter((p) => p.time);
-          kdjK.setData(map(ind.kdj.kSeries));
-          kdjD.setData(map(ind.kdj.dSeries));
-          kdjJ.setData(map(ind.kdj.jSeries));
+            arr.map((v, i) => ({
+              time: items[offset + i]?.date as Time,
+              value: v,
+            })).filter((p) => p.time);
+          kdjK.setData(mapArr(ind.kdj.kSeries));
+          kdjD.setData(mapArr(ind.kdj.dSeries));
+          kdjJ.setData(mapArr(ind.kdj.jSeries));
         }
 
-        // 信号标注(lightweight-charts v4 需要 shape 字段)
+        // 信号标注
         const markers: SeriesMarker<Time>[] = ind.signalSeries.map((m) => ({
           time: m.time as Time,
           position: m.position,
@@ -383,23 +371,20 @@ export function KLineChart({
         chart.timeScale().fitContent();
 
         // ---- Hover 同步(图例显示当前值,不改动 series 避免回调死循环) ----
-        // 收集「可读值」的 series 列表(主图 MA / BOLL / MACD / KDJ)
-        const tracked: { key: string; series: ISeriesApi<'Line'> }[] = (
-          [
-            { key: 'ma5', series: maLines.ma5 },
-            { key: 'ma10', series: maLines.ma10 },
-            { key: 'ma20', series: maLines.ma20 },
-            { key: 'ma60', series: maLines.ma60 },
-            { key: 'bollUp', series: bollUp },
-            { key: 'bollMid', series: bollMid },
-            { key: 'bollDn', series: bollDn },
-            { key: 'macdDif', series: macdDif },
-            { key: 'macdDea', series: macdDea },
-            { key: 'kdjK', series: kdjK },
-            { key: 'kdjD', series: kdjD },
-            { key: 'kdjJ', series: kdjJ },
-          ].filter((x): x is { key: string; series: ISeriesApi<'Line'> } => x.series !== null)
-        );
+        const tracked: { key: string; series: ISeriesApi<'Line'> }[] = [
+          { key: 'ma5', series: maLines.ma5 },
+          { key: 'ma10', series: maLines.ma10 },
+          { key: 'ma20', series: maLines.ma20 },
+          { key: 'ma60', series: maLines.ma60 },
+          { key: 'bollUp', series: bollUp },
+          { key: 'bollMid', series: bollMid },
+          { key: 'bollDn', series: bollDn },
+          { key: 'macdDif', series: macdDif },
+          { key: 'macdDea', series: macdDea },
+          { key: 'kdjK', series: kdjK },
+          { key: 'kdjD', series: kdjD },
+          { key: 'kdjJ', series: kdjJ },
+        ].filter((x): x is { key: string; series: ISeriesApi<'Line'> } => x.series !== null);
 
         const handleCrosshair = (param: MouseEventParams) => {
           if (!param.time) {
@@ -425,64 +410,63 @@ export function KLineChart({
 
     return () => {
       window.removeEventListener('resize', onResize);
-      // 取消 crosshair 订阅(若已注册)
       const cleanup = (chart as unknown as { __cleanupCrosshair?: () => void }).__cleanupCrosshair;
       if (cleanup) cleanup();
       chart.remove();
       chartRef.current = null;
-      bollUp = bollMid = bollDn = null;
-      macdHist = macdDif = macdDea = null;
-      kdjK = kdjD = kdjJ = null;
-      volumeSeries = null;
+      seriesMapRef.current = { ma: [], boll: [], macd: [], kdj: [] };
     };
-  }, [stockCode, period, height, ov.ma5, ov.ma10, ov.ma20, ov.ma60, ov.boll, ov.macd, ov.kdj, ov.volume, showVolume]);
+  }, [stockCode, period, height, showVolume]);
 
-  // ---- 图例行(hover 时显示当前值,非 hover 时静态展示颜色) ----
-  const legendRows = useMemo<LegendRow[]>(() => {
-    const rows: LegendRow[] = [];
-    if (ov.ma5 || ov.ma10 || ov.ma20 || ov.ma60) {
-      rows.push({
-        group: '主图 MA',
-        items: [
-          ov.ma5 && { key: 'ma5', label: 'MA5', color: COLOR.ma5, series: null },
-          ov.ma10 && { key: 'ma10', label: 'MA10', color: COLOR.ma10, series: null },
-          ov.ma20 && { key: 'ma20', label: 'MA20', color: COLOR.ma20, series: null },
-          ov.ma60 && { key: 'ma60', label: 'MA60', color: COLOR.ma60, series: null },
-        ].filter(Boolean) as LegendRow['items'],
-      });
-    }
-    if (ov.boll) {
-      rows.push({
-        group: 'BOLL',
-        items: [
-          { key: 'bollUp', label: '上轨', color: COLOR.bollUp, series: null },
-          { key: 'bollMid', label: '中轨', color: COLOR.bollMid, series: null },
-          { key: 'bollDn', label: '下轨', color: COLOR.bollDn, series: null },
-        ],
-      });
-    }
-    if (ov.macd) {
-      rows.push({
-        group: 'MACD',
-        items: [
-          { key: 'macdDif', label: 'DIF', color: COLOR.macdDif, series: null },
-          { key: 'macdDea', label: 'DEA', color: COLOR.macdDea, series: null },
-          { key: 'macdHist', label: 'HIST', color: COLOR.macdHistPos, series: null },
-        ],
-      });
-    }
-    if (ov.kdj) {
-      rows.push({
-        group: 'KDJ',
-        items: [
-          { key: 'kdjK', label: 'K', color: COLOR.kdjK, series: null },
-          { key: 'kdjD', label: 'D', color: COLOR.kdjD, series: null },
-          { key: 'kdjJ', label: 'J', color: COLOR.kdjJ, series: null },
-        ],
-      });
-    }
-    return rows;
-  }, [ov.ma5, ov.ma10, ov.ma20, ov.ma60, ov.boll, ov.macd, ov.kdj]);
+  // 切换整组显隐(同时驱动 React 状态与 lightweight-charts series)
+  const toggleGroup = (g: OverlayGroup) => {
+    const next = !visibleGroups[g];
+    setVisibleGroups((v) => ({ ...v, [g]: next }));
+    seriesMapRef.current[g].forEach((s) => {
+      s.applyOptions({ visible: next });
+    });
+  };
+
+  // ---- 图例行(整组开关:点击整行 → 切换该组显隐) ----
+  const legendRows: LegendRow[] = [
+    {
+      group: 'ma',
+      label: '主图 MA',
+      items: [
+        { key: 'ma5', label: 'MA5', color: COLOR.ma5, decimals: 2 },
+        { key: 'ma10', label: 'MA10', color: COLOR.ma10, decimals: 2 },
+        { key: 'ma20', label: 'MA20', color: COLOR.ma20, decimals: 2 },
+        { key: 'ma60', label: 'MA60', color: COLOR.ma60, decimals: 2 },
+      ],
+    },
+    {
+      group: 'boll',
+      label: 'BOLL',
+      items: [
+        { key: 'bollUp', label: '上轨', color: COLOR.bollUp, decimals: 2 },
+        { key: 'bollMid', label: '中轨', color: COLOR.bollMid, decimals: 2 },
+        { key: 'bollDn', label: '下轨', color: COLOR.bollDn, decimals: 2 },
+      ],
+    },
+    {
+      group: 'macd',
+      label: 'MACD',
+      items: [
+        { key: 'macdDif', label: 'DIF', color: COLOR.macdDif, decimals: 4 },
+        { key: 'macdDea', label: 'DEA', color: COLOR.macdDea, decimals: 4 },
+        { key: 'macdHist', label: 'HIST', color: COLOR.macdHistPos, decimals: 4 },
+      ],
+    },
+    {
+      group: 'kdj',
+      label: 'KDJ',
+      items: [
+        { key: 'kdjK', label: 'K', color: COLOR.kdjK, decimals: 2 },
+        { key: 'kdjD', label: 'D', color: COLOR.kdjD, decimals: 2 },
+        { key: 'kdjJ', label: 'J', color: COLOR.kdjJ, decimals: 2 },
+      ],
+    },
+  ];
 
   return (
     <div>
@@ -492,38 +476,56 @@ export function KLineChart({
         className="rounded-sm overflow-hidden"
       />
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
-        {legendRows.map((row) => (
-          <div key={row.group} className="flex items-center gap-2">
-            <span className="text-text-ter font-medium">{row.group}</span>
-            {row.items.map((it) => {
-              const v = hoverValues[it.key];
-              return (
-                <span
-                  key={it.key}
-                  className={clsx(
-                    'inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded transition-colors',
-                    v != null ? 'bg-white/10' : 'bg-transparent',
-                  )}
-                >
+        {legendRows.map((row) => {
+          const groupVisible = visibleGroups[row.group];
+          return (
+            <button
+              type="button"
+              key={row.group}
+              onClick={() => toggleGroup(row.group)}
+              className={clsx(
+                'flex items-center gap-2 px-1 py-0.5 rounded transition-colors cursor-pointer select-none',
+                'hover:bg-white/5',
+                !groupVisible && 'opacity-40',
+              )}
+              title={groupVisible ? `点击隐藏 ${row.label}` : `点击显示 ${row.label}`}
+            >
+              <span
+                className={clsx(
+                  'text-text-ter font-medium',
+                  !groupVisible && 'line-through',
+                )}
+              >
+                {row.label}
+              </span>
+              {row.items.map((it) => {
+                const v = hoverValues[it.key];
+                return (
                   <span
-                    className="inline-block w-3 h-0.5 rounded-sm"
-                    style={{ backgroundColor: it.color }}
-                  />
-                  <span className="text-text-pri">{it.label}</span>
-                  <span className="font-mono text-text-sec min-w-[3.5rem] text-right">
-                    {v != null
-                      ? it.key.startsWith('kdj')
-                        ? v.toFixed(2)
-                        : it.key === 'macdHist' || it.key === 'macdDif' || it.key === 'macdDea'
-                          ? v.toFixed(4)
-                          : v.toFixed(2)
-                      : '—'}
+                    key={it.key}
+                    className={clsx(
+                      'inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded transition-colors',
+                      v != null && groupVisible ? 'bg-white/10' : 'bg-transparent',
+                    )}
+                  >
+                    <span
+                      className="inline-block w-3 h-0.5 rounded-sm"
+                      style={{ backgroundColor: it.color }}
+                    />
+                    <span className="text-text-pri">{it.label}</span>
+                    <span className="font-mono text-text-sec min-w-[3.5rem] text-right">
+                      {!groupVisible
+                        ? '—'
+                        : v != null
+                          ? v.toFixed(it.decimals)
+                          : '—'}
+                    </span>
                   </span>
-                </span>
-              );
-            })}
-          </div>
-        ))}
+                );
+              })}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
