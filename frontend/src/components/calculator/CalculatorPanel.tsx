@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { Card } from '@/components/ui/Card';
 import { PnlHeatmap } from '@/components/charts/PnlHeatmap';
 import { decimalFormat } from '@/lib/decimalFormat';
 import { apiGet, apiPost } from '@/lib/api';
 import { normalizeCode } from '@/lib/stockCode';
+import clsx from 'clsx';
 import type {
   CalculatorBefore,
   CalculatorAfter,
@@ -19,36 +20,71 @@ import type {
  * 计算器主面板(ui-ux §4.2 + frontend-arch §10.2)
  *
  * 布局:左右分栏
- * - 左:当前持仓(实时拉 GET /positions)
+ * - 左:持仓列表(可点击选中填入输入框;失败可重试)
  * - 右:输入 + 实时计算
  * 输入变化 → 自动调 POST /calculator → 显示新成本 + 21 档
+ *
+ * initialCode:从工作台传入的默认股票代码,弹窗打开时自动选中
  */
-export function CalculatorPanel() {
+export function CalculatorPanel({
+  initialCode = null,
+}: {
+  initialCode?: string | null;
+}) {
   const [positions, setPositions] = useState<Position[]>([]);
-  const [stockCode, setStockCode] = useState('000001');
+  const [positionsError, setPositionsError] = useState<string | null>(null);
+  const [positionsLoading, setPositionsLoading] = useState(true);
+  const [stockCode, setStockCode] = useState(() => {
+    const c = initialCode ? normalizeCode(initialCode) : null;
+    return c ?? '000001.SZ';
+  });
   const [action, setAction] = useState<'buy' | 'sell'>('buy');
-  const [txShares, setTxShares] = useState(500);
+  const [txShares, setTxShares] = useState(200);
   const [txPrice, setTxPrice] = useState('11.000');
   const [result, setResult] = useState<CalculatorResponse | null>(null);
   const [calculating, setCalculating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 拉当前持仓(只一次)
-  useEffect(() => {
-    let cancelled = false;
-    apiGet<PositionListResponse>('/positions')
-      .then((r) => {
-        if (!cancelled) setPositions(r.items);
-      })
-      .catch(() => {
-        // 忽略,允许空持仓
-      });
-    return () => {
-      cancelled = true;
-    };
+  const loadPositions = useCallback(async () => {
+    setPositionsLoading(true);
+    setPositionsError(null);
+    try {
+      const r = await apiGet<PositionListResponse>('/positions');
+      setPositions(r.items);
+    } catch (e) {
+      const msg =
+        e instanceof Error && e.message
+          ? e.message
+          : '持仓加载失败';
+      setPositionsError(msg);
+      setPositions([]);
+    } finally {
+      setPositionsLoading(false);
+    }
   }, []);
 
-  const currentPosition = positions.find((p) => p.stockCode === normalizeCode(stockCode));
+  useEffect(() => {
+    loadPositions();
+  }, [loadPositions]);
+
+  useEffect(() => {
+    if (!initialCode) return;
+    const c = normalizeCode(initialCode);
+    if (c) setStockCode(c);
+  }, [initialCode]);
+
+  useEffect(() => {
+    const norm = normalizeCode(stockCode);
+    if (!norm) return;
+    const pos = positions.find((p) => p.stockCode === norm);
+    if (pos?.currentPrice != null) {
+      setTxPrice(pos.currentPrice);
+    }
+  }, [stockCode, positions]);
+
+  const currentPosition = positions.find(
+    (p) => p.stockCode === normalizeCode(stockCode),
+  );
 
   // 实时计算(输入即算,300ms debounce)
   useEffect(() => {
@@ -56,7 +92,6 @@ export function CalculatorPanel() {
       setResult(null);
       return;
     }
-    // 价格格式校验(允许数字 + 最多 3 位小数)
     if (!/^\d+(\.\d{1,3})?$/.test(txPrice)) {
       setResult(null);
       return;
@@ -89,109 +124,155 @@ export function CalculatorPanel() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      {/* 左:当前持仓 */}
+      {/* 左:持仓列表 */}
       <Card padding="md">
         <h3 className="text-sm font-medium text-text-sec mb-3">当前持仓</h3>
-        {currentPosition ? (
+        {positionsLoading ? (
+          <p className="text-text-ter text-sm">加载中...</p>
+        ) : positionsError ? (
           <div className="space-y-2">
-            <div className="flex justify-between">
-              <span className="text-text-ter text-sm">股票</span>
-              <span>
-                {currentPosition.stockName ?? currentPosition.stockCode}
-                <span className="text-text-ter text-xs ml-2 font-mono">
-                  {currentPosition.stockCode}
-                </span>
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-text-ter text-sm">持仓</span>
-              <span className="font-mono">
-                {currentPosition.shares.toLocaleString()} 股
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-text-ter text-sm">加权成本</span>
-              <span className="font-mono">¥{currentPosition.avgCost}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-text-ter text-sm">总成本</span>
-              <span className="font-mono">
-                ¥{decimalFormat(currentPosition.totalCost)}
-              </span>
-            </div>
+            <p className="text-down text-sm">⚠ {positionsError}</p>
+            <button
+              onClick={loadPositions}
+              className="text-xs px-3 py-1 rounded-sm bg-white/5 hover:bg-white/10 border border-white/10"
+            >
+              重试
+            </button>
           </div>
+        ) : positions.length === 0 ? (
+          <p className="text-text-ter text-sm">暂无持仓(空仓建仓)</p>
         ) : (
-          <p className="text-text-ter text-sm">无此股票持仓(空仓建仓)</p>
+          <ul className="space-y-1 max-h-64 overflow-y-auto pr-1">
+            {positions.map((p) => {
+              const selected = p.stockCode === normalizeCode(stockCode);
+              const floating = p.floatingPnl != null ? Number(p.floatingPnl) : null;
+              const floatingCls =
+                floating == null
+                  ? 'text-text-ter'
+                  : floating > 0
+                    ? 'text-up'
+                    : floating < 0
+                      ? 'text-down'
+                      : 'text-text-ter';
+              const cur = p.currentPrice != null ? Number(p.currentPrice) : null;
+              const prev = p.prevClose != null ? Number(p.prevClose) : null;
+              const priceCls =
+                cur != null && prev != null && cur !== prev
+                  ? cur > prev
+                    ? 'text-up'
+                    : 'text-down'
+                  : 'text-text-sec';
+              return (
+                <li key={p.stockCode}>
+                  <button
+                    type="button"
+                    onClick={() => setStockCode(p.stockCode)}
+                    className={clsx(
+                      'w-full text-left px-3 py-2 rounded-md transition-colors border',
+                      selected
+                        ? 'bg-accent-subtle border-accent/25'
+                        : 'border-transparent hover:bg-white/5',
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm truncate">
+                        {p.stockName ?? p.stockCode}
+                      </span>
+                      <span className="text-text-ter text-xs font-mono shrink-0">
+                        {p.stockCode}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 mt-1 text-xs">
+                      <span className="text-text-sec">
+                        {p.shares.toLocaleString()} 股 · 成本 ¥{p.avgCost} · 现价 ¥
+                        <span className={clsx('font-mono', priceCls)}>
+                          {p.currentPrice ?? '--'}
+                        </span>
+                      </span>
+                      {floating != null && (
+                        <span className={clsx('font-mono shrink-0', floatingCls)}>
+                          {floating >= 0 ? '+' : ''}¥{floating.toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </Card>
 
       {/* 右:输入 + 实时结果 */}
       <Card padding="md">
         <h3 className="text-sm font-medium text-text-sec mb-3">预交易</h3>
-        <div className="space-y-3">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={stockCode}
-              onChange={(e) => setStockCode(e.target.value)}
-              maxLength={12}
-              placeholder="600519 或 600519.SH"
-              className="flex-1 px-3 py-2 border border-border-strong rounded-sm font-mono"
-            />
-          </div>
-
-          <div className="flex gap-4 items-center">
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                checked={action === 'buy'}
-                onChange={() => setAction('buy')}
-              />
-              <span className="text-down">买入</span>
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                checked={action === 'sell'}
-                onChange={() => setAction('sell')}
-              />
-              <span className="text-up">卖出</span>
-            </label>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="block text-xs text-text-ter mb-1">股数</label>
-              <input
-                type="number"
-                value={txShares}
-                onChange={(e) => setTxShares(Number(e.target.value))}
-                min={1}
-                step={100}
-                className="w-full px-3 py-2 border border-border-strong rounded-sm font-mono"
-              />
+        {positions.length === 0 ? (
+          <p className="text-text-ter text-sm">暂无持仓,无法选择股票</p>
+        ) : (
+          <>
+            <div className="text-xs text-text-sec mb-3">
+              当前:
+              <span className="ml-2 text-text-pri">
+                {currentPosition?.stockName ?? stockCode}
+              </span>
+              <span className="ml-2 font-mono text-text-ter">{stockCode}</span>
             </div>
-            <div>
-              <label className="block text-xs text-text-ter mb-1">价格</label>
-              <input
-                type="text"
-                value={txPrice}
-                onChange={(e) => setTxPrice(e.target.value)}
-                placeholder="11.000"
-                className="w-full px-3 py-2 border border-border-strong rounded-sm font-mono"
-              />
+
+            <div className="space-y-3">
+              <div className="flex gap-4 items-center">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    checked={action === 'buy'}
+                    onChange={() => setAction('buy')}
+                  />
+                  <span className="text-down">买入</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    checked={action === 'sell'}
+                    onChange={() => setAction('sell')}
+                  />
+                  <span className="text-up">卖出</span>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-text-ter mb-1.5">股数</label>
+                  <input
+                    type="number"
+                    value={txShares}
+                    onChange={(e) => setTxShares(Number(e.target.value))}
+                    min={1}
+                    step={100}
+                    className="w-full px-3 py-2 border border-border-def rounded-md font-mono bg-bg-surface text-text-pri focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-text-ter/60"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-text-ter mb-1.5">成本价</label>
+                  <input
+                    type="text"
+                    value={txPrice}
+                    onChange={(e) => setTxPrice(e.target.value)}
+                    placeholder="11.000"
+                    className="w-full px-3 py-2 border border-border-def rounded-md font-mono bg-bg-surface text-text-pri focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/30 transition-colors placeholder:text-text-ter/60"
+                  />
+                </div>
+              </div>
+
+              <div className="text-xs text-text-ter">
+                交易额 ¥{decimalFormat((txShares * Number(txPrice || 0)).toFixed(2))}
+              </div>
             </div>
-          </div>
 
-          <div className="text-xs text-text-ter">
-            交易额 ¥{decimalFormat((txShares * Number(txPrice || 0)).toFixed(2))}
-          </div>
-        </div>
-
-        {error && (
-          <div className="mt-3 p-2 bg-up-bg text-up rounded-sm text-xs">
-            {error}
-          </div>
+            {error && (
+              <div className="mt-3 p-2 bg-up-bg text-up rounded-sm text-xs">
+                {error}
+              </div>
+            )}
+          </>
         )}
       </Card>
 

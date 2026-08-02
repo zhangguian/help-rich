@@ -374,7 +374,7 @@ export default function Workbench() {
         title="🧮 成本计算器"
         size="xl"
       >
-        <CalculatorPanel />
+        <CalculatorPanel initialCode={activeCode} />
       </LiquidModal>
 
       <LiquidModal
