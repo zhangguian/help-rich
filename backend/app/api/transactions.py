@@ -12,6 +12,7 @@ from app.models.schemas import (
     TransactionOut,
     TransactionUpdate,
     WatchlistAdd,
+    WatchlistFavoriteUpdate,
     WatchlistListOut,
     WatchlistOut,
 )
@@ -221,4 +222,20 @@ async def remove_from_watchlist(code: str) -> None:
         raise HTTPException(
             status_code=404,
             detail={"code": "WL_NOT_FOUND", "message": f"自选股 {code} 不存在"},
+        )
+
+
+@router.patch("/watchlist/{code}", status_code=status.HTTP_204_NO_CONTENT)
+async def update_watchlist_favorite(
+    code: str, payload: WatchlistFavoriteUpdate
+) -> None:
+    """切换特别关注标记(v0.5)"""
+    from app.core.stock_code import normalize_code
+
+    normalized = normalize_code(code) or code
+    ok = await watchlist_repo.set_favorite(normalized, payload.is_favorite)
+    if not ok:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "WL_NOT_FOUND", "message": f"自选股 {normalized} 不存在"},
         )

@@ -103,6 +103,7 @@ class Watchlist(Base):
     source: Mapped[str] = mapped_column(String, default="manual")  # manual / diagnosis
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)  # 特别关注星标(v0.5)
 
     def __repr__(self) -> str:
         return f"<Watchlist {self.stock_code}>"

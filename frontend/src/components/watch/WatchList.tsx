@@ -5,9 +5,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import clsx from 'clsx';
-import { ChevronDown } from 'reicon-react';
+import { ChevronDown, Star } from 'reicon-react';
 
-import { apiDelete, apiPost } from '@/lib/api';
+import { apiDelete, apiPatch, apiPost } from '@/lib/api';
 import { useUIStore } from '@/stores/useUIStore';
 import type { Quote } from '@/lib/types';
 
@@ -20,6 +20,7 @@ export interface WatchItem {
   name: string | null;
   inPosition: boolean;
   quote: Quote | null;
+  isFavorite: boolean;  // v0.5 特别关注
 }
 
 /**
@@ -31,11 +32,13 @@ export interface WatchItem {
 export function WatchList({
   items,
   activeCode,
+  favoriteOnly,
   onSelect,
   onChanged,
 }: {
   items: WatchItem[];
   activeCode: string | null;
+  favoriteOnly: boolean;
   onSelect: (code: string) => void;
   onChanged: () => void;
 }) {
@@ -130,6 +133,15 @@ export function WatchList({
     setContextMenu({ x: e.clientX, y: e.clientY, item });
   };
 
+  const toggleFavorite = async (code: string, next: boolean) => {
+    try {
+      await apiPatch(`/watchlist/${encodeURIComponent(code)}`, { isFavorite: next });
+      onChanged();
+    } catch {
+      /* toast 已由拦截器处理 */
+    }
+  };
+
   const submitRemove = async () => {
     if (!removeTarget) return;
     const code = removeTarget.code;
@@ -209,7 +221,7 @@ export function WatchList({
       <ul className="flex-1 overflow-y-auto space-y-1 min-h-0 pr-1">
         {items.length === 0 && (
           <li className="text-text-ter text-sm text-center py-8">
-            暂无自选股,点击下方添加
+            {favoriteOnly ? '暂无特别关注股票，点击自选股票旁的 ⭐ 加入' : '暂无自选股，点击下方添加'}
           </li>
         )}
         {sortedItems.map((it) => {
@@ -246,6 +258,26 @@ export function WatchList({
                         持仓
                       </span>
                     )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void toggleFavorite(it.code, !it.isFavorite);
+                      }}
+                      className="inline-flex items-center shrink-0"
+                      title={it.isFavorite ? '取消特别关注' : '加入特别关注'}
+                    >
+                      <Star
+                        size={13}
+                        weight={it.isFavorite ? 'Filled' : 'Outline'}
+                        className={clsx(
+                          'transition-colors',
+                          it.isFavorite
+                            ? 'text-yellow-400'
+                            : 'text-text-ter/40 hover:text-yellow-400',
+                        )}
+                      />
+                    </button>
                   </div>
                   <div className="text-xs text-text-ter font-mono">{it.code}</div>
                 </div>

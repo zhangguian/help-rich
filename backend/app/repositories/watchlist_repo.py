@@ -55,6 +55,18 @@ class WatchlistRepository:
             await session.commit()
             return True
 
+    async def set_favorite(self, stock_code: str, is_favorite: bool) -> bool:
+        """切换特别关注标记(v0.5)。返回是否实际修改"""
+        async with async_session() as session:
+            row = await self._get_by_code(session, stock_code)
+            if row is None:
+                return False
+            if row.is_favorite == is_favorite:
+                return True
+            row.is_favorite = is_favorite
+            await session.commit()
+            return True
+
     async def contains(self, stock_code: str) -> bool:
         async with async_session() as session:
             return (await self._get_by_code(session, stock_code)) is not None

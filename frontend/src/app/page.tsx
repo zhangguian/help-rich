@@ -27,10 +27,11 @@ import { GlassCard } from '@/components/ui/GlassCard';
 import { LiquidModal } from '@/components/ui/LiquidModal';
 import { WatchList, type WatchItem } from '@/components/watch/WatchList';
 
-type TabKey = 'watch' | 'position' | 'market' | 'sector' | 'news' | 'settings';
+type TabKey = 'watch' | 'favorite' | 'position' | 'market' | 'sector' | 'news' | 'settings';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'watch', label: '自选' },
+  { key: 'favorite', label: '⭐ 关注' },
   { key: 'position', label: '持仓' },
   { key: 'market', label: '大盘' },
   { key: 'sector', label: '板块资金' },
@@ -110,6 +111,7 @@ export default function Workbench() {
           name: it.stockName ?? posName.get(it.stockCode) ?? null,
           inPosition: posName.has(it.stockCode),
           quote: null,
+          isFavorite: it.isFavorite,
         });
       }
       for (const pos of p.items) {
@@ -119,6 +121,7 @@ export default function Workbench() {
             name: pos.stockName,
             inPosition: true,
             quote: null,
+            isFavorite: false,
           });
         }
       }
@@ -200,12 +203,16 @@ export default function Workbench() {
   }, [activeCode]);
 
   const visibleItems = useMemo(() => {
+    if (tab === 'favorite') {
+      return watchAll.filter((it) => it.isFavorite);
+    }
     if (tab === 'position') {
       return positions.map((p) => ({
         code: p.stockCode,
         name: p.stockName,
         inPosition: true,
         quote: quotesMap[p.stockCode] ?? null,
+        isFavorite: false,
       }));
     }
     return watchAll;
@@ -293,6 +300,7 @@ export default function Workbench() {
             <WatchList
               items={visibleItems}
               activeCode={activeCode}
+              favoriteOnly={tab === 'favorite'}
               onSelect={selectStock}
               onChanged={fetchBase}
             />

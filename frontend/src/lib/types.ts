@@ -559,6 +559,7 @@ export interface WatchlistItem {
   source: string;
   note: string | null;
   addedAt: string;
+  isFavorite: boolean;  // v0.5 特别关注
 }
 
 export interface WatchlistListResponse {

@@ -125,6 +125,8 @@ export const apiGet = <T>(url: string, config?: AxiosRequestConfig) =>
   api.get<T>(url, config).then((r) => r.data);
 export const apiPost = <T>(url: string, body?: unknown, config?: AxiosRequestConfig) =>
   api.post<T>(url, body, config).then((r) => r.data);
+export const apiPatch = <T>(url: string, body?: unknown, config?: AxiosRequestConfig) =>
+  api.patch<T>(url, body, config).then((r) => r.data);
 export const apiPut = <T>(url: string, body?: unknown, config?: AxiosRequestConfig) =>
   api.put<T>(url, body, config).then((r) => r.data);
 export const apiDelete = <T>(url: string, config?: AxiosRequestConfig) =>

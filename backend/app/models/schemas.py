@@ -196,9 +196,15 @@ class WatchlistOut(BaseModel):
     source: str
     note: Optional[str] = None
     added_at: datetime
+    is_favorite: bool = False  # v0.5 特别关注
 
     class Config:
         from_attributes = True
+
+
+class WatchlistFavoriteUpdate(BaseModel):
+    """PATCH /api/watchlist/{code} body(v0.5 特别关注)"""
+    is_favorite: bool
 
 
 class WatchlistListOut(BaseModel):
