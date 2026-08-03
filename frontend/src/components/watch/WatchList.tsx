@@ -1,10 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
+import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
+import clsx from 'clsx';
+import { ChevronDown } from 'reicon-react';
 
-import { apiPost } from '@/lib/api';
+import { apiDelete, apiPost } from '@/lib/api';
 import { useUIStore } from '@/stores/useUIStore';
 import type { Quote } from '@/lib/types';
 
@@ -40,6 +43,37 @@ export function WatchList({
   const [showAdd, setShowAdd] = useState(false);
   const [clearTarget, setClearTarget] = useState<WatchItem | null>(null);
   const [addForm, setAddForm] = useState({ stockCode: '', stockName: '' });
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: WatchItem } | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<WatchItem | null>(null);
+  // portal 挂载标记:只在客户端渲染 portal,避免 SSR/CSR hydration mismatch
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  // 排序:3 状态循环 默认 → 降序 → 升序;持久化到 localStorage
+  type SortDir = 'default' | 'desc' | 'asc';
+  const [sortDir, setSortDir] = useState<SortDir>('default');
+  useEffect(() => {
+    const v = localStorage.getItem('watchlist-sort');
+    if (v === 'desc' || v === 'asc' || v === 'default') setSortDir(v);
+  }, []);
+  useEffect(() => {
+    if (sortDir === 'default') localStorage.removeItem('watchlist-sort');
+    else localStorage.setItem('watchlist-sort', sortDir);
+  }, [sortDir]);
+  // 没 quote 的 items 排最后
+  const sortedItems = useMemo(() => {
+    if (sortDir === 'default') return items;
+    const arr = [...items];
+    arr.sort((a, b) => {
+      const ac = a.quote?.changePct ?? null;
+      const bc = b.quote?.changePct ?? null;
+      if (ac == null && bc == null) return 0;
+      if (ac == null) return 1;
+      if (bc == null) return -1;
+      return sortDir === 'desc' ? bc - ac : ac - bc;
+    });
+    return arr;
+  }, [items, sortDir]);
 
   const pctClass = (v: number | null | undefined) => {
     if (v == null) return 'text-text-ter';
@@ -68,7 +102,14 @@ export function WatchList({
 
   const submitClear = async () => {
     if (!clearTarget) return;
-    const price = clearTarget.quote?.currentPrice ?? undefined;
+    const price = clearTarget.quote?.currentPrice;
+    if (!price || Number(price) <= 0) {
+      showToast({
+        type: 'warning',
+        message: '未获取到当前行情，无法清仓，请稍后再试',
+      });
+      return;
+    }
     try {
       const r = await apiPost<{ realizedPnl: string }>(`/positions/${clearTarget.code}/clear`, {
         price,
@@ -84,6 +125,56 @@ export function WatchList({
     }
   };
 
+  const onContextMenu = (e: React.MouseEvent, item: WatchItem) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, item });
+  };
+
+  const submitRemove = async () => {
+    if (!removeTarget) return;
+    const code = removeTarget.code;
+    const inPosition = removeTarget.inPosition;
+    try {
+      if (inPosition) {
+        await apiDelete(`/positions/${encodeURIComponent(code)}`);
+      } else {
+        await apiDelete(`/watchlist/${encodeURIComponent(code)}`);
+      }
+      showToast({
+        type: 'success',
+        message: inPosition ? `已删除 ${code} 持仓及流水` : `已从自选移除 ${code}`,
+      });
+      setRemoveTarget(null);
+      onChanged();
+    } catch {
+      /* toast 已由拦截器处理 */
+    }
+  };
+
+  // 菜单打开时:点击外部 / Esc / 滚动 关闭
+  useEffect(() => {
+    if (!contextMenu) return;
+    const onDocDown = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest('[data-watchlist-ctxmenu]')) {
+        setContextMenu(null);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setContextMenu(null);
+    };
+    const onScroll = () => setContextMenu(null);
+    document.addEventListener('mousedown', onDocDown);
+    document.addEventListener('contextmenu', onDocDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', onDocDown);
+      document.removeEventListener('contextmenu', onDocDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [contextMenu]);
+
   return (
     <GlassCard
       variant="active"
@@ -92,7 +183,27 @@ export function WatchList({
     >
       <div className="flex items-center justify-between px-2 pt-1">
         <span className="text-sm font-semibold text-text-pri">盯盘</span>
-        <span className="text-xs text-text-ter">{items.length} 只</span>
+        <button
+          type="button"
+          onClick={() =>
+            setSortDir((d) =>
+              d === 'default' ? 'desc' : d === 'desc' ? 'asc' : 'default',
+            )
+          }
+          className="flex items-center gap-1 text-xs text-text-ter hover:text-text-pri"
+          title="按涨幅排序(默认 / 降序 / 升序)"
+        >
+          <span>{items.length} 只</span>
+          <ChevronDown
+            size={12}
+            strokeWidth={1.5}
+            className={clsx(
+              'transition-transform',
+              sortDir === 'asc' && 'rotate-180',
+              sortDir === 'default' && 'opacity-40',
+            )}
+          />
+        </button>
       </div>
 
       <ul className="flex-1 overflow-y-auto space-y-1 min-h-0 pr-1">
@@ -101,7 +212,7 @@ export function WatchList({
             暂无自选股,点击下方添加
           </li>
         )}
-        {items.map((it) => {
+        {sortedItems.map((it) => {
           const isActive = it.code === activeCode;
           return (
             <motion.li
@@ -109,19 +220,20 @@ export function WatchList({
               layout
               whileHover={{ scale: 1.01 }}
               whileTap={{ scale: 0.99 }}
+              onContextMenu={(e) => onContextMenu(e, it)}
               className="relative"
             >
-              {isActive && (
+              {/* {isActive && (
                 <motion.span
                   layoutId="watch-active-bar"
                   className="absolute left-0 top-1 bottom-1 w-0.5 rounded bg-accent"
                   transition={{ type: 'spring', stiffness: 400, damping: 32 }}
                 />
-              )}
+              )} */}
               <button
                 onClick={() => onSelect(it.code)}
                 className={`w-full flex items-center justify-between gap-2 rounded-xl px-3 py-2 text-left transition-colors ${
-                  isActive ? 'bg-accent-subtle' : 'hover:bg-white/5'
+                  isActive ? 'liquid-glass-active' : ''
                 }`}
               >
                 <div className="min-w-0">
@@ -156,7 +268,7 @@ export function WatchList({
                     e.stopPropagation();
                     setClearTarget(it);
                   }}
-                  className="absolute left-0 top-0  text-text-ter hover:text-down text-xs px-1"
+                  className="absolute left-0 top-0  text-down text-xs px-1"
                   title="一键清仓"
                 >
                   🛑
@@ -168,8 +280,8 @@ export function WatchList({
       </ul>
 
       <div className="pt-1 border-t border-white/5">
-        <Button variant="secondary" className="w-full" onClick={() => setShowAdd(true)}>
-          ➕ 添加自选
+        <Button variant="secondary" className="w-full liquid-glass rounded-xl" onClick={() => setShowAdd(true)}>
+          添加自选
         </Button>
       </div>
 
@@ -179,10 +291,10 @@ export function WatchList({
         title="添加自选"
         footer={
           <>
-            <Button variant="secondary" onClick={() => setShowAdd(false)}>
+            <Button variant="secondary" onClick={() => setShowAdd(false)} className=" rounded-xl">
               取消
             </Button>
-            <Button onClick={submitAdd}>添加</Button>
+            <Button onClick={submitAdd} className="liquid-glass rounded-xl">添加</Button>
           </>
         }
       >
@@ -222,6 +334,65 @@ export function WatchList({
           </span>
           生成卖出流水并结算实际盈亏。确认?
         </p>
+      </LiquidModal>
+
+      {/* 右键菜单:portal 到 body 避开 GlassCard.backdrop-filter 创建的 containing block,
+          否则 fixed 定位会相对 GlassCard 偏移 */}
+      {contextMenu && mounted && createPortal(
+        <div
+          data-watchlist-ctxmenu
+          className="fixed z-50 min-w-[10rem] rounded-xl bg-bg-base border border-white/15 shadow-lg p-1"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setRemoveTarget(contextMenu.item);
+              setContextMenu(null);
+            }}
+            className="w-full text-left px-3 py-1.5 rounded-lg text-xs text-text-sec hover:bg-white/10 hover:text-text-pri transition-colors"
+          >
+            删除自选
+          </button>
+          {contextMenu.item.inPosition && (
+            <button
+              type="button"
+              onClick={() => {
+                setClearTarget(contextMenu.item);
+                setContextMenu(null);
+              }}
+              className="w-full text-left px-3 py-1.5 rounded-lg text-xs text-text-sec hover:bg-white/10 hover:text-text-pri transition-colors"
+            >
+              一键清仓
+            </button>
+          )}
+        </div>,
+        document.body,
+      )}
+
+      {/* 删除确认 */}
+      <LiquidModal
+        open={removeTarget !== null}
+        onClose={() => setRemoveTarget(null)}
+        title={`删除 ${removeTarget?.name ?? removeTarget?.code ?? ''}`}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRemoveTarget(null)}>
+              取消
+            </Button>
+            <Button onClick={submitRemove}>确认删除</Button>
+          </>
+        }
+      >
+        <div className="text-sm text-text-sec space-y-2">
+          <p>
+            将删除「{removeTarget?.code}」
+            {removeTarget?.inPosition ? '持仓及其关联流水' : '自选'}。
+          </p>
+          {removeTarget?.inPosition && (
+            <p className="text-text-ter text-xs">此操作不可撤销，请确认。</p>
+          )}
+        </div>
       </LiquidModal>
     </GlassCard>
   );

@@ -16,7 +16,7 @@ const paddingClasses = {
 const variantClasses = {
   default: 'liquid-glass',
   hover: 'liquid-glass-hover',
-  active: 'liquid-glass-active',
+  active: 'liquid-glass',
 };
 
 /**
