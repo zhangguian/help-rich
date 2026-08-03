@@ -139,10 +139,14 @@ export function WatchList({
                 </div>
                 <div className="text-right shrink-0">
                   <div className="text-sm font-mono text-text-pri">
-                    {it.quote ? it.quote.currentPrice : '--'}
+                    {!it.quote ? '--' : Number(it.quote.currentPrice) === 0 ? '停牌' : it.quote.currentPrice}
                   </div>
                   <div className={`text-xs font-mono ${pctClass(it.quote?.changePct)}`}>
-                    {it.quote ? `${it.quote.changePct > 0 ? '+' : ''}${it.quote.changePct.toFixed(2)}%` : '--'}
+                    {!it.quote
+                      ? '--'
+                      : Number(it.quote.currentPrice) === 0
+                        ? '停牌'
+                        : `${it.quote.changePct > 0 ? '+' : ''}${it.quote.changePct.toFixed(2)}%`}
                   </div>
                 </div>
               </button>

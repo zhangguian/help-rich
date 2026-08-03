@@ -9,6 +9,7 @@ import { TermHint } from '@/components/ui/TermHint';
 import type {
   AnalysisResult,
   SignalFusion,
+  SignalWinrate,
   LiarIndicator,
   PatternMatch,
   VolumePriceIndicator,
@@ -76,6 +77,7 @@ export function AnalysisPanel({
       {ind && (
         <SignalPanel
           signal={ind.signal}
+          winrate={analysis?.signalWinrate}
           volumePrice={ind.volumePrice}
           liar={ind.liar}
           position={ind.position}
@@ -148,15 +150,27 @@ export function AnalysisPanel({
               </p>
             </motion.div>
           ) : started ? (
-            <motion.p
+            <motion.div
               key="noai"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="text-sm text-text-ter"
+              className="space-y-2"
             >
-              AI 暂不可用(未配置 Key 或服务异常),以下为纯技术指标。
-            </motion.p>
+              <p className="text-sm text-text-ter">
+                {analysis?.aiError === 'timeout'
+                  ? 'AI 解读超时降级'
+                  : analysis?.aiError === 'unconfigured'
+                    ? '未配置 LLM Key'
+                    : analysis?.aiError === 'failed'
+                      ? 'AI 服务调用失败'
+                      : 'AI 暂不可用'}
+                ,以下为纯技术指标。
+              </p>
+              <Button variant="ghost" size="sm" onClick={onRefresh} disabled={loading}>
+                🔄 重试
+              </Button>
+            </motion.div>
           ) : (
             <motion.p
               key="idle"
@@ -331,14 +345,48 @@ export function AnalysisPanel({
 // 机械信号卡(确定性引擎 · 顶部置顶)
 // ============================================================
 
+/** M1.3 信号历史胜率回检:历史同向信号出现 N 次,5/20 日后上涨概率 */
+function SignalWinrateBlock({ winrate }: { winrate: SignalWinrate }) {
+  const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
+  const tone = (v: number) => (v >= 0.6 ? 'text-up' : v <= 0.4 ? 'text-down' : 'text-text-sec');
+  if (winrate.insufficient) {
+    return (
+      <div className="rounded-lg bg-white/5 px-3 py-2 text-xs text-text-ter">
+        {winrate.signalLabel}信号出现过 {winrate.count} 次,样本太少,暂不统计胜率
+        (至少 3 次才有参考价值)
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg bg-white/5 px-3 py-2 space-y-1">
+      <div className="text-xs text-text-ter">
+        历史回测:近 120 个交易日内,「{winrate.signalLabel}」信号共出现 {winrate.sample5} 次
+      </div>
+      <div className="flex items-center gap-3 text-xs">
+        <span className="text-text-ter">5日后上涨率</span>
+        <span className={clsx('font-semibold font-mono', tone(winrate.up5))}>
+          {pct(winrate.up5)}
+        </span>
+        <span className="text-text-ter">20日后上涨率</span>
+        <span className={clsx('font-semibold font-mono', tone(winrate.up20))}>
+          {pct(winrate.up20)}
+        </span>
+      </div>
+      <p className="text-[11px] text-text-ter">仅为历史统计,不构成收益承诺;样本越少参考意义越弱</p>
+    </div>
+  );
+}
+
 function SignalPanel({
   signal,
+  winrate,
   volumePrice,
   liar,
   position,
   patterns,
 }: {
   signal: SignalFusion | undefined;
+  winrate: SignalWinrate | undefined;
   volumePrice: VolumePriceIndicator;
   liar: LiarIndicator;
   position: PositionIndicator;
@@ -378,6 +426,9 @@ function SignalPanel({
       </div>
 
       <p className="text-xs text-text-sec leading-relaxed">{signal.summary}</p>
+
+      {/* M1.3 信号历史胜率回检 */}
+      {winrate && <SignalWinrateBlock winrate={winrate} />}
 
       {/* reasons */}
       <div className="space-y-1">
@@ -686,6 +737,25 @@ function PositionCard({ position }: { position: PositionIndicator | undefined })
       : position.band === 'low'
         ? { label: '低位(关注)', cls: 'text-accent' }
         : { label: '中位', cls: 'text-text-sec' };
+  // v0.5 M1.2:近120日分位风险带(P80/P20)+ 白话提示
+  const riskMeta =
+    position.riskBand === 'high'
+      ? {
+          label: '高位风险区',
+          cls: 'text-warn border-warn/30 bg-warn/10',
+          hint: '当前处于近 120 日高位区间,追涨风险偏高,注意止盈/减仓',
+        }
+      : position.riskBand === 'low'
+        ? {
+            label: '低位机会区',
+            cls: 'text-accent border-accent/30 bg-accent/10',
+            hint: '当前处于近 120 日低位区间,注意是否趋势下行,不宜盲目抄底',
+          }
+        : {
+            label: '中位观察区',
+            cls: 'text-text-sec border-white/20 bg-white/5',
+            hint: '当前处于近 120 日中位区间,结合量价与信号再做判断',
+          };
   return (
     <div>
       <div className="flex items-center justify-between text-sm">
@@ -703,6 +773,30 @@ function PositionCard({ position }: { position: PositionIndicator | undefined })
         <p className="text-xs text-text-ter mt-1">
           近 250 日高低分位 {position.rangePct.toFixed(0)}%
         </p>
+      )}
+
+      {/* v0.5 M1.2 买卖位置参考卡(P80/P20 风险带 + 参考支撑 + 止损) */}
+      {position.riskBand && (
+        <div className="mt-2 border-t border-white/10 pt-2">
+          <div className="flex items-center gap-2">
+            <span
+              className={clsx(
+                'inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-semibold',
+                riskMeta.cls,
+              )}
+            >
+              {riskMeta.label}
+            </span>
+            <span className="text-xs text-text-ter">
+              P20 {position.p20?.toFixed(2) ?? '--'} · P80 {position.p80?.toFixed(2) ?? '--'}
+            </span>
+          </div>
+          <p className="text-xs text-text-ter mt-1.5">{riskMeta.hint}</p>
+          <div className="grid grid-cols-2 gap-1.5 mt-1.5">
+            <Mini label="参考支撑" value={position.supportPrice ?? null} />
+            <Mini label="建议止损" value={position.stopLossPrice ?? null} />
+          </div>
+        </div>
       )}
     </div>
   );

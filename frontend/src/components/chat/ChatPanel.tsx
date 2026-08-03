@@ -5,6 +5,12 @@ import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 
 import { apiBaseUrl } from '@/lib/api';
+import {
+  clearChatHistory,
+  getChatHistory,
+  setChatHistory,
+  type ChatHistoryItem,
+} from '@/lib/chatHistory';
 
 import { GlassCard } from '@/components/ui/GlassCard';
 import { Button } from '@/components/ui/Button';
@@ -16,12 +22,17 @@ interface Msg {
   streaming?: boolean;
 }
 
+/** 与后端 stock_advice_service.MAX_HISTORY_TURNS 保持一致 */
+const MAX_HISTORY_TURNS = 6;
+
 /**
  * 右侧下栏 · AI 对话助手(roadmap 功能5)
  *
- * 结合行情 + 技术指标 + 持仓成本回答操作提问;单轮会话(切换股票清空)。
- * 走 /chat/stream SSE 流式接口,打字机效果输出。
- * 作用域隔离:AI 只讨论当前股票(及所属题材),问其他股票会被拒绝。
+ * 切换股票:从 IndexedDB 缓存按 stockCode 读出历史问答回显,继续提问时把
+ * 最近 6 轮随 request 一起发后端,后端走 LLM 原生 messages 数组实现真多轮上下文。
+ *
+ * UI 提示:首次加载到历史消息时,列表顶部出现「以下为上次对话缓存」小提示,
+ * 用户点 × 关闭;开始新一轮提问时也自动关闭。
  */
 export function ChatPanel({
   stockCode,
@@ -33,16 +44,98 @@ export function ChatPanel({
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
-  const listRef = useRef<HTMLDivElement | null>(null);
+  // 历史回显提示:仅当本次 stockCode 切换是从 IDB 加载到非空历史时显示
+  const [showHistoryHint, setShowHistoryHint] = useState(false);
+  const [hintDismissed, setHintDismissed] = useState(false);
+const listRef = useRef<HTMLDivElement | null>(null);
   const idRef = useRef(0);
+  // 同步最新 messages,供 switch effect 在清空前 flush 旧股票 IDB
+  const messagesRef = useRef<Msg[]>([]);
+  // 记录上次 effect 处理的 stockCode,用于切换时识别 oldCode 写 IDB
+  const lastStockCodeRef = useRef<string | null>(null);
 
+  // 跟踪 messages 给 messagesRef(switch flush 时拿到最新值,避免依赖 React 闭包)
   useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  // 切换股票 → 立即清空 UI(同步 schedule),然后异步 flush 旧 + 读新
+  useEffect(() => {
+    const myCode = stockCode;
+    const oldCode = lastStockCodeRef.current;
+    lastStockCodeRef.current = myCode;
+
+    // 同步清空 UI(在 effect body 顶部,不等 IDB 操作):避免「等 IDB 写入完成才清空」
+    // 导致切换瞬间还显示上一个股票的内容
     setMessages([]);
+    idRef.current = 0;
+    setShowHistoryHint(false);
+    setHintDismissed(false);
+    if (!myCode) return;
+
+    // AbortController:effect cleanup(切股票 / 组件卸载)时取消过期 IDB 操作的后续装载
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        // 切走前:flush 旧股票已完成的问答到 IDB,关掉「切走 = 丢失」窗口
+        if (oldCode && oldCode !== myCode) {
+          const finalized = messagesRef.current.filter((m) => !m.streaming);
+          if (finalized.length > 0) {
+            const items: ChatHistoryItem[] = finalized.map((m) => ({
+              role: m.role,
+              text: m.text,
+            }));
+            await setChatHistory(oldCode, items);
+          }
+        }
+        if (controller.signal.aborted) return;
+
+        // 读新股票 IDB(独立 store with keyPath:'code',自动按 stockCode 隔离)
+        const items = await getChatHistory(myCode);
+        if (controller.signal.aborted) return;
+
+        const loadedBase: Msg[] = items.map((it) => ({
+          id: 0, // 占位,下面重新编号
+          role: it.role,
+          text: it.text,
+        }));
+        // 历史总是排在前;若用户在 IDB 异步读回前已抢先发了消息,保留新消息并重排 ID
+        setMessages((prev) => {
+          const all = [...loadedBase, ...prev];
+          const renumbered = all.map((m, i) => ({ ...m, id: i + 1 }));
+          idRef.current = renumbered.length;
+          if (loadedBase.length > 0 && prev.length === 0) setShowHistoryHint(true);
+          return renumbered;
+        });
+      } catch (e) {
+        console.warn('[chat] switch effect error', e);
+      }
+    })();
+
+    return () => controller.abort();
   }, [stockCode]);
 
+  // 自动滚到底部
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages, sending]);
+
+  // 持久化 messages 到 IDB(去掉 streaming 临时态);300ms 防抖合并流式高频更新
+  // 空 messages 不主动写(避免 IDB 异步慢时把新股票已有记录删掉);清空走 handleClear
+  useEffect(() => {
+    if (!stockCode) return;
+    const timer = setTimeout(() => {
+      const finalized = messages.filter((m) => !m.streaming);
+      if (finalized.length === 0) return;
+      const items: ChatHistoryItem[] = finalized.map((m) => ({
+        role: m.role,
+        text: m.text,
+      }));
+      void setChatHistory(stockCode, items);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [messages, stockCode]);
 
   /** 终结某条 AI 消息:text 覆盖或追加,streaming 置 false */
   const finalize = (id: number, text: string, replace: boolean) => {
@@ -55,10 +148,22 @@ export function ChatPanel({
     );
   };
 
+  /** 取最近 N 轮已完成问答(不含当前发送中的)用于 body.history 字段
+   * 用 messagesRef 而不是 messages state:state closure 可能在异步回调里过期;
+   * ref 在每次 messages 变化后被 effect 同步,event handler 调用时一定是最新值。 */
+  const buildHistory = (): ChatHistoryItem[] => {
+    const finalized = messagesRef.current.filter((m) => !m.streaming);
+    const slice = finalized.slice(-MAX_HISTORY_TURNS * 2);
+    return slice.map((m) => ({ role: m.role, text: m.text }));
+  };
+
   const send = async () => {
     const q = input.trim();
     if (!q || !stockCode || sending) return;
     setInput('');
+    // 进入新一轮对话,关闭历史提示
+    setShowHistoryHint(false);
+    setHintDismissed(true);
     const msgId = ++idRef.current;
     const userMsgId = ++idRef.current;
     setMessages((m) => [
@@ -68,6 +173,7 @@ export function ChatPanel({
     ]);
     setSending(true);
 
+    const history = buildHistory();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 90000);
     try {
@@ -77,7 +183,7 @@ export function ChatPanel({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
-          body: JSON.stringify({ question: q, stockName }),
+          body: JSON.stringify({ question: q, stockName, history }),
         },
       );
       if (!res.ok) {
@@ -135,18 +241,42 @@ export function ChatPanel({
     }
   };
 
+  const handleClear = () => {
+    if (!stockCode) return;
+    setMessages([]);
+    void clearChatHistory(stockCode);
+    setShowHistoryHint(false);
+    setHintDismissed(false);
+  };
+
+  const dismissHint = () => setHintDismissed(true);
+
+  const hintVisible = showHistoryHint && !hintDismissed && messages.length > 0;
+
   return (
     <GlassCard
       variant="active"
       padding="sm"
       className="h-full flex flex-col overflow-hidden gap-2 min-h-0"
     >
-      <div className="px-2 pt-1 flex items-center gap-2">
-        <span className="text-sm font-semibold text-text-pri">
-          AI 问一问{stockName && stockCode ? ` · ${stockName}` : ''}
-        </span>
-        {sending && (
-          <span className="inline-block w-2 h-2 rounded-full bg-accent animate-pulse" />
+      <div className="px-2 pt-1 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm font-semibold text-text-pri truncate">
+            AI 问一问{stockName && stockCode ? ` · ${stockName}` : ''}
+          </span>
+          {sending && (
+            <span className="inline-block w-2 h-2 rounded-full bg-accent animate-pulse" />
+          )}
+        </div>
+        {messages.length > 0 && (
+          <button
+            type="button"
+            onClick={handleClear}
+            title="清空本轮对话(也会清除浏览器缓存的历史)"
+            className="shrink-0 text-xs text-text-ter hover:text-text-pri px-1.5 py-0.5 rounded hover:bg-white/5"
+          >
+            🗑 清空
+          </button>
         )}
       </div>
 
@@ -157,6 +287,19 @@ export function ChatPanel({
               ? '例如:我 60 块的成本,现在该止损吗?'
               : '选择左侧股票后可提问,如「现在能买吗」'}
           </p>
+        )}
+        {hintVisible && (
+          <div className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 text-[11px] text-text-ter">
+            <span>以下为上次对话缓存 · 共 {messages.length} 条</span>
+            <button
+              type="button"
+              onClick={dismissHint}
+              title="知道了"
+              className="hover:text-text-pri w-4 h-4 leading-none"
+            >
+              ×
+            </button>
+          </div>
         )}
         <AnimatePresence initial={false}>
           {messages.map((m) => (

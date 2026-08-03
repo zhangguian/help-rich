@@ -22,6 +22,7 @@ from app.services.stock_advice_service import (
     find_sector_context,
     get_stock_analysis,
 )
+from app.services.industry_service import resolve_industry
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,8 @@ router = APIRouter(prefix="/stock", tags=["stock"])
 class ChatRequest(BaseModel):
     question: str
     stock_name: str | None = None
+    # 多轮上下文(前端从 IndexedDB 缓存):[{role: user|ai, text}]
+    history: list[dict[str, str]] | None = None
 
 
 def _is_valid_code(code: str) -> bool:
@@ -84,6 +87,13 @@ async def analysis(code: str) -> dict:
     return await get_stock_analysis(code, klines)
 
 
+@router.get("/{code}/industry")
+async def industry(code: str) -> dict:
+    """M2.1 行业归属(三级兜底:离线表→新浪排行→降级提示)"""
+    await _check_code(code)
+    return await resolve_industry(code)
+
+
 @router.post("/{code}/chat")
 async def chat(code: str, payload: ChatRequest) -> dict:
     """操作问答:结合行情 + 指标 + 持仓成本"""
@@ -103,6 +113,7 @@ async def chat(code: str, payload: ChatRequest) -> dict:
             position_cost=cost,
             stock_name=payload.stock_name,
             sector=sector,
+            history=payload.history,
         )
     except StockAdviceUnavailable as e:
         raise HTTPException(
@@ -144,6 +155,7 @@ async def chat_stream(code: str, payload: ChatRequest) -> StreamingResponse:
                 position_cost=cost,
                 stock_name=payload.stock_name,
                 sector=sector,
+                history=payload.history,
             ):
                 yield f"data: {json.dumps({'text': piece}, ensure_ascii=False)}\n\n"
         except StockAdviceUnavailable as e:

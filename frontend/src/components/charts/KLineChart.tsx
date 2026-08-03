@@ -22,7 +22,7 @@ import { apiGet } from '@/lib/api';
 import { TermHint } from '@/components/ui/TermHint';
 import type { KlineIndicatorsResponse } from '@/lib/types';
 
-export type KlinePeriod = 'daily' | 'weekly' | 'monthly' | '60min';
+export type KlinePeriod = 'daily' | 'weekly' | 'monthly' | '60min' | 'intraday';
 
 /** 指标组(整组开关) — 含画线组与图例展示组 */
 export type OverlayGroup =
@@ -214,6 +214,7 @@ export function KLineChart({
   useEffect(() => {
     if (!containerRef.current) return;
     setLoadError(null);
+    let disposed = false;
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth,
       height,
@@ -337,9 +338,13 @@ export function KLineChart({
 
     const onResize = () => {
       if (containerRef.current && chartRef.current) {
-        chartRef.current.applyOptions({
-          width: containerRef.current.clientWidth,
-        });
+        try {
+          chartRef.current.applyOptions({
+            width: containerRef.current.clientWidth,
+          });
+        } catch {
+          /* chart disposed */
+        }
       }
     };
     window.addEventListener('resize', onResize);
@@ -348,9 +353,16 @@ export function KLineChart({
       `/kline/${encodeURIComponent(stockCode)}/indicators?period=${period}&limit=120`,
     )
       .then((d) => {
+        if (disposed) return;
         setLoadError(null);
         setIndicators(d.indicators);
-        const items = d.items;
+        // 数据源(DB+新浪聚合)偶尔含同日重复(落库未做唯一约束),
+        // 按 date 升序去重,避免 lightweight-charts `data must be asc ordered` assertion
+        const seen = new Set<string>();
+        const items = d.items
+          .slice()
+          .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+          .filter((it) => (seen.has(it.date) ? false : (seen.add(it.date), true)));
         const candle: CandlestickData[] = items.map((it) => ({
           time: it.date as Time,
           open: Number(it.open),
@@ -508,6 +520,7 @@ export function KLineChart({
       });
 
     return () => {
+      disposed = true;
       window.removeEventListener('resize', onResize);
       const cleanup = (chart as unknown as { __cleanupCrosshair?: () => void }).__cleanupCrosshair;
       if (cleanup) cleanup();

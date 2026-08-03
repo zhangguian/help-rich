@@ -17,6 +17,7 @@ from app.api.holdings_health import router as holdings_health_router
 from app.api.kline import router as kline_router
 from app.api.llm_keys import router as llm_keys_router
 from app.api.market import router as market_router
+from app.api.market import sector_router
 from app.api.positions import router as positions_router
 from app.api.provider_stats import router as provider_stats_router
 from app.api.quotes import router as quotes_router
@@ -113,6 +114,7 @@ app.include_router(holdings_health_router, prefix="/api")
 app.include_router(kline_router, prefix="/api")
 app.include_router(llm_keys_router, prefix="/api")
 app.include_router(market_router, prefix="/api")
+app.include_router(sector_router, prefix="/api")
 app.include_router(stop_losses_router, prefix="/api")
 app.include_router(transactions_router, prefix="/api")
 app.include_router(positions_router, prefix="/api")

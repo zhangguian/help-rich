@@ -945,11 +945,12 @@ def _liar_trap(
 def _position(
     closes: list[float], highs: list[float], lows: list[float], ma60: float | None,
 ) -> dict[str, Any]:
-    """位置评估(PE 分位降级,文档 §9.6 落地映射)
+    """位置评估(PE 分位降级,文档 §9.6 落地映射 + v1.5 买卖位置参考卡)
 
     - 近 20 日涨幅、60 日涨幅
     - 价格距 MA60 偏离百分比
     - 近 250 日高低分位
+    - v0.5 M1.2:近 120 日收盘价 P20/P80 风险带 + 参考支撑 + 建议止损
     """
     last = closes[-1]
     pct_20 = (last - closes[-20]) / closes[-20] * 100 if len(closes) >= 21 else None
@@ -969,12 +970,40 @@ def _position(
     elif pct_60 is not None and pct_60 < -40:
         band = "low"
 
+    # ---- v0.5 M1.2 买卖位置参考卡(v0.5-roadmap §4 M1.2) ----
+    # 风险带:近 120 日收盘价分位(P20 / P80)
+    closes120 = closes[-120:] if len(closes) >= 120 else closes
+    band_risk = "mid"
+    p20 = p80 = None
+    if closes120:
+        sorted_c = sorted(closes120)
+        n = len(sorted_c)
+        p20 = sorted_c[max(0, int(n * 0.20) - 1)]
+        p80 = sorted_c[max(0, int(n * 0.80) - 1)]
+        if last >= p80:
+            band_risk = "high"
+        elif last < p20:
+            band_risk = "low"
+        else:
+            band_risk = "mid"
+    # 参考支撑 = 近 20 日最低收盘价 × 0.98(留 2% 缓冲)
+    support_price = None
+    if len(closes) >= 10:
+        support_price = round(min(closes[-20:]) * 0.98, 3)
+    # 建议止损 = 参考支撑 × 0.97
+    stop_loss_price = round(support_price * 0.97, 3) if support_price is not None else None
+
     return {
         "pct_20": round(pct_20, 2) if pct_20 is not None else None,
         "pct_60": round(pct_60, 2) if pct_60 is not None else None,
         "bias_ma60": round(bias_ma60, 2) if bias_ma60 is not None else None,
         "range_pct": round(range_pct, 2) if range_pct is not None else None,
         "band": band,
+        "risk_band": band_risk,
+        "p20": round(p20, 3) if p20 is not None else None,
+        "p80": round(p80, 3) if p80 is not None else None,
+        "support_price": support_price,
+        "stop_loss_price": stop_loss_price,
     }
 
 

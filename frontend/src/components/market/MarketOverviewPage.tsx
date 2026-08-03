@@ -8,6 +8,7 @@ import { TermHint } from '@/components/ui/TermHint';
 import { apiGet } from '@/lib/api';
 import { decimalFormat } from '@/lib/decimalFormat';
 import type {
+  AmountTrendResponse,
   MainFundFlowResponse,
   MarketIndexSparks,
   MarketOverview,
@@ -26,7 +27,7 @@ import type {
  * - 60s 自动刷新 + 手动 ↻
  * - 单端点失败 → 该子模块降级,其它正常
  */
-const REFRESH_INTERVAL_MS = 60_000;
+const REFRESH_INTERVAL_MS = 15_000;
 const STALE_AFTER_MS = 90_000;
 const SPARK_W = 90;
 const SPARK_H = 32;
@@ -36,6 +37,7 @@ export function MarketOverviewPage() {
   const [sparks, setSparks] = useState<MarketIndexSparks | null>(null);
   const [sentiment, setSentiment] = useState<MarketSentiment | null>(null);
   const [mainFlow, setMainFlow] = useState<MainFundFlowResponse | null>(null);
+  const [amountTrend, setAmountTrend] = useState<AmountTrendResponse | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -46,18 +48,20 @@ export function MarketOverviewPage() {
     setLoading(true);
     setError(null);
     try {
-      const [ov, sp, se, mf] = await Promise.all([
+      const [ov, sp, se, mf, at] = await Promise.all([
         apiGet<MarketOverview>('/market/overview').catch(() => null),
         apiGet<MarketIndexSparks>('/market/index-sparks?count=60').catch(() => null),
         apiGet<MarketSentiment>('/market/sentiment').catch(() => null),
         apiGet<MainFundFlowResponse>('/market/main-fund-flow?limit=10').catch(() => null),
+        apiGet<AmountTrendResponse>('/market/amount-trend?days=5').catch(() => null),
       ]);
       setOverview(ov);
       setSparks(sp);
       setSentiment(se);
       setMainFlow(mf);
+      setAmountTrend(at);
       setLastFetchAt(Date.now());
-      if (!ov && !sp && !se && !mf) {
+      if (!ov && !sp && !se && !mf && !at) {
         setError('大盘数据源暂不可用');
       }
     } catch (e) {
@@ -112,7 +116,7 @@ export function MarketOverviewPage() {
             {stale && !loading && (
               <span className="w-1.5 h-1.5 rounded-full bg-warn" title="数据可能过期" />
             )}
-            <span>60s 自动刷新</span>
+            <RefreshCountdown lastFetchAt={lastFetchAt} intervalMs={REFRESH_INTERVAL_MS} loading={loading} />
             <button
               type="button"
               onClick={fetchAll}
@@ -140,10 +144,7 @@ export function MarketOverviewPage() {
             data={mainFlow}
             loading={loading && !mainFlow}
           />
-          <PlaceholderPanel
-            label="板块热力图"
-            note="复用 SectorBoard(fenlei=0 / sort=netamount)"
-          />
+          <AmountTrendPanel data={amountTrend} loading={loading && !amountTrend} />
         </div>
       </section>
     </div>
@@ -252,12 +253,13 @@ function Sparkline({
 
 const BUCKET_ORDER: { key: keyof MarketSentiment['buckets']; label: string }[] = [
   { key: 'limitUp', label: '涨停' },
-  { key: 'up5_10', label: '5%~+1%' },
-  { key: 'up1_5', label: '+1%~0%' },
+  { key: 'up5_10', label: '+5~+10%' },
+  { key: 'up1_5', label: '+1~+5%' },
   { key: 'up0_1', label: '平盘' },
-  { key: 'down0_1', label: '0%~-1%' },
-  { key: 'down1_5', label: '-1%~-5%' },
-  { key: 'down5_10', label: '-5%~跌停' },
+  { key: 'down0_1', label: '0~-1%' },
+  { key: 'down1_5', label: '-1~-5%' },
+  { key: 'down5_10', label: '-5~-10%' },
+  { key: 'limitDown', label: '跌停' },
 ];
 
 function SentimentPanel({
@@ -323,6 +325,21 @@ function SentimentPanel({
                 />
               </div>
               <span className="text-down font-mono shrink-0">{sentiment.downTotal}只</span>
+            </div>
+            {/* M2.5:涨停/跌停家数(小白第一眼) */}
+            <div className="flex items-center justify-around text-xs border-t border-white/5 pt-2">
+              <span className="inline-flex items-center gap-1">
+                <span className="text-up font-semibold">涨停</span>
+                <span className="font-mono text-text-pri">
+                  {sentiment.limitUp ?? sentiment.buckets.limitUp}
+                </span>
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="text-down font-semibold">跌停</span>
+                <span className="font-mono text-text-pri">
+                  {sentiment.limitDown ?? sentiment.buckets.limitDown}
+                </span>
+              </span>
             </div>
           </div>
         </>
@@ -442,17 +459,98 @@ function MainFundFlowChart({ items }: { items: { code: string; name: string; net
   );
 }
 
-// ============ 占位 ============
+// ============ 刷新倒计时 ============
 
-function PlaceholderPanel({ label, note }: { label: string; note: string }) {
+function RefreshCountdown({
+  lastFetchAt,
+  intervalMs,
+  loading,
+}: {
+  lastFetchAt: number;
+  intervalMs: number;
+  loading: boolean;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, []);
+  if (!lastFetchAt) return <span>{Math.round(intervalMs / 1000)}s 自动刷新</span>;
+  const remainingMs = Math.max(0, lastFetchAt + intervalMs - now);
+  const seconds = Math.ceil(remainingMs / 1000);
+  const urgent = seconds <= 5;
   return (
-    <div className="bg-bg-subtle rounded-xl p-4 flex flex-col gap-2 min-h-[12rem]">
-      <div className="text-xs text-text-ter uppercase tracking-wide font-medium">{label}</div>
-      <div className="flex-1 flex items-center justify-center text-center">
-        <div className="space-y-1">
-          <div className="text-xs text-text-ter">{note}</div>
-          <div className="text-[10px] text-text-ter">后续接入(SectorBoard 已存在)</div>
-        </div>
+    <span
+      className={clsx(
+        'tabular-nums',
+        loading ? 'text-accent' : urgent ? 'text-warn font-semibold' : 'text-text-ter',
+      )}
+      title="距离下次自动刷新的剩余秒数(点击 ↻ 立即刷新)"
+    >
+      {loading ? '刷新中…' : `下次刷新 ${seconds}s`}
+    </span>
+  );
+}
+
+// ============ M2.5 两市量能趋势 ============
+
+function AmountTrendPanel({
+  data,
+  loading,
+}: {
+  data: AmountTrendResponse | null;
+  loading: boolean;
+}) {
+  return (
+    <div className="bg-bg-subtle rounded-xl p-4 space-y-3">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-text-ter uppercase tracking-wide font-medium inline-flex items-center">
+          两市量能趋势<TermHint term="amount_trend" />
+        </span>
+        {data?.items.length && (
+          <span className="text-text-ter">沪深 {data.days} 日</span>
+        )}
+      </div>
+      {loading || !data ? (
+        <SkeletonBars />
+      ) : data.items.length === 0 ? (
+        <div className="text-xs text-text-ter py-6 text-center">暂无数据</div>
+      ) : (
+        <>
+          <AmountTrendChart items={data.items} />
+          <p className="text-[10px] text-text-ter">上证指数成交量近似(亿手),反映资金活跃度趋势</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AmountTrendChart({ items }: { items: { date: string; volumeYi: number }[] }) {
+  const max = Math.max(...items.map((i) => i.volumeYi), 1);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-end gap-2">
+        {items.map((it) => (
+          <div
+            key={it.date}
+            className="flex-1 flex flex-col items-center gap-1"
+            title={`${it.date}\n${it.volumeYi.toFixed(0)} 亿手`}
+          >
+            <div className="w-full flex items-end justify-center h-16">
+              <div
+                className="w-3/4 rounded-sm bg-accent/70"
+                style={{ height: `${Math.max((it.volumeYi / max) * 100, 6)}%` }}
+              />
+            </div>
+            <span className="text-[9px] text-text-ter font-mono">
+              {it.date.slice(5)}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-between text-[9px] text-text-ter font-mono pt-1">
+        <span>0</span>
+        <span>{max.toFixed(0)}亿手</span>
       </div>
     </div>
   );

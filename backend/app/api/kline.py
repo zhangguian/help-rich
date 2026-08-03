@@ -8,7 +8,8 @@
 from fastapi import APIRouter, HTTPException
 
 from app.core.stock_code import normalize_code
-from app.services.kline_service import KLineSourceUnavailable, fetch_klines
+from app.services.kline_service import KLineSourceUnavailable, fetch_intraday, fetch_klines
+from app.services.overview_service import get_overview
 from app.services.ta_service import TaError, compute_indicators
 
 router = APIRouter(prefix="/kline", tags=["kline"])
@@ -65,6 +66,52 @@ async def get_kline_indicators(
         "items": items,
         "indicators": indicators,
     }
+
+
+@router.get("/{stock_code}/overview")
+async def get_overview_endpoint(stock_code: str) -> dict:
+    """M2.3 三线叠加:个股 + 大盘(000001.SH) + 行业(归一化日K)
+
+    行业未命中 / 拉取失败 → sector=[] 与 sector_unavailable=true(空态,
+    不影响前两条)。个股 K 线失败 → 502。
+    """
+    normalized = normalize_code(stock_code)
+    if normalized is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "INVALID_STOCK_CODE", "message": "代码格式应为 6 位数字或带市场后缀"},
+        )
+    try:
+        data = await get_overview(normalized)
+    except KLineSourceUnavailable as e:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "DATA_SOURCE_UNAVAILABLE", "message": str(e)},
+        ) from e
+    return data
+
+
+@router.get("/{stock_code}/intraday")
+async def get_intraday(stock_code: str) -> dict:
+    """当日分时数据(分钟线聚合:价格 + 均价线 + 成交量)
+
+    - 数据源失败 → 502
+    - 未开盘/无分钟数据 → items 为空(不报错)
+    """
+    normalized = normalize_code(stock_code)
+    if normalized is None:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "INVALID_STOCK_CODE", "message": "代码格式应为 6 位数字或带市场后缀"},
+        )
+    try:
+        data = await fetch_intraday(normalized)
+    except KLineSourceUnavailable as e:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "DATA_SOURCE_UNAVAILABLE", "message": str(e)},
+        ) from e
+    return data
 
 
 @router.get("/{stock_code}")

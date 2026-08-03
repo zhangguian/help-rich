@@ -36,15 +36,38 @@ class FakeLLM:
         self.reply = reply
         self.last_system = None
         self.last_prompt = None
+        self.last_messages: list[dict] | None = None
+
+    def _record(self, system: str, messages: list[dict]) -> None:
+        self.last_system = system
+        self.last_messages = messages
+        # 兼容老测试:last_prompt 取最后一条 user content
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                self.last_prompt = m.get("content")
+                return
+        self.last_prompt = None
 
     async def chat(self, system, user, temperature=0.3, max_retries=3):
-        self.last_system = system
-        self.last_prompt = user
+        return await self.chat_with_messages(
+            system, [{"role": "user", "content": user}], temperature, max_retries
+        )
+
+    async def chat_with_messages(self, system, messages, temperature=0.3, max_retries=3):
+        self._record(system, messages)
         return self.reply
 
     async def chat_stream(self, system, user, temperature=0.3):
-        self.last_system = system
-        self.last_prompt = user
+        async for piece in self.chat_stream_with_messages(
+            system, [{"role": "user", "content": user}], temperature
+        ):
+            yield piece
+
+    def chat_stream_with_messages(self, system, messages, temperature=0.3):
+        self._record(system, messages)
+        return self._stream_chunks()
+
+    async def _stream_chunks(self):
         for i in range(0, len(self.reply), 4):
             yield self.reply[i : i + 4]
 
@@ -57,9 +80,18 @@ class FailStreamLLM:
     async def chat(self, system, user, temperature=0.3, max_retries=3):
         return ""
 
+    async def chat_with_messages(self, system, messages, temperature=0.3, max_retries=3):
+        return ""
+
     async def chat_stream(self, system, user, temperature=0.3):
         yield "前半段回答"
         raise RuntimeError("流中断")
+
+    def chat_stream_with_messages(self, system, messages, temperature=0.3):
+        async def _gen():
+            yield "前半段回答"
+            raise RuntimeError("流中断")
+        return _gen()
 
 
 class SlowLLM:
@@ -249,6 +281,153 @@ class TestChatService:
                     "600519.SH", "能买吗?", _kline([100] * 40), position_cost=None
                 )
             )
+
+    def test_history_passed_as_messages(self, monkeypatch):
+        """history 走 LLM 原生 messages 数组(ai→assistant),不拼字符串"""
+        llm = FakeLLM("OK")
+        _mock_llm(monkeypatch, llm)
+        history = [
+            {"role": "user", "text": "我成本 120,要止损吗?"},
+            {"role": "ai", "text": "建议关注 117 支撑位。"},
+        ]
+        asyncio.run(
+            stock_advice_service.ask_stock_question(
+                "600519.SH",
+                "那 117 破位该怎么办?",
+                _kline([100] * 40),
+                position_cost=120.0,
+                history=history,
+            )
+        )
+        assert llm.last_messages is not None
+        # history 两条 + 当前 user 一条 = 3
+        assert len(llm.last_messages) == 3
+        assert llm.last_messages[0] == {"role": "user", "content": "我成本 120,要止损吗?"}
+        assert llm.last_messages[1] == {"role": "assistant", "content": "建议关注 117 支撑位。"}
+        assert llm.last_messages[2]["role"] == "user"
+        # 当前 user 仍含 K线 + 持仓成本 + 当前问题
+        assert "用户持仓成本" in llm.last_messages[2]["content"]
+        assert "117 破位该怎么办?" in llm.last_messages[2]["content"]
+
+    def test_history_truncated_to_max_turns(self, monkeypatch):
+        """history 超 6 轮(12 条)时只保留最近 6 轮"""
+        llm = FakeLLM("OK")
+        _mock_llm(monkeypatch, llm)
+        history = []
+        for i in range(20):
+            history.append({"role": "user", "text": f"问{i}"})
+            history.append({"role": "ai", "text": f"答{i}"})
+        asyncio.run(
+            stock_advice_service.ask_stock_question(
+                "600519.SH",
+                "现在能买吗",
+                _kline([100] * 40),
+                position_cost=None,
+                history=history,
+            )
+        )
+        # 截到 6 轮 = 12 条 + 当前 user = 13;20 轮保留最后 6 轮(turn 15..20 → iter 14..19)
+        assert llm.last_messages is not None
+        assert len(llm.last_messages) == 13
+        assert llm.last_messages[0]["content"] == "问14"
+        assert llm.last_messages[-1]["content"] != ""
+        assert "现在能买吗" in llm.last_messages[-1]["content"]
+
+    def test_history_empty_or_none(self, monkeypatch):
+        """history 为空/None 时,单条 user message(回归)"""
+        llm = FakeLLM("OK")
+        _mock_llm(monkeypatch, llm)
+        for h in (None, [], [{"role": "user", "text": ""}], [{"role": "bogus", "text": "x"}]):
+            llm.last_messages = None
+            asyncio.run(
+                stock_advice_service.ask_stock_question(
+                    "600519.SH", "能买吗", _kline([100] * 40), history=h
+                )
+            )
+            assert llm.last_messages is not None
+            assert len(llm.last_messages) == 1
+            assert llm.last_messages[0]["role"] == "user"
+
+def test_history_stream_passes_messages(monkeypatch):
+    """流式版同样走 messages 数组(history 注入 LLM)"""
+    llm = FakeLLM("流式OK")
+    _mock_llm(monkeypatch, llm)
+    history = [{"role": "user", "text": "Q1"}, {"role": "ai", "text": "A1"}]
+    async def _run():
+        chunks = []
+        async for piece in stock_advice_service.ask_stock_question_stream(
+            "600519.SH", "Q2", _kline([100] * 40), history=history
+        ):
+            chunks.append(piece)
+        return "".join(chunks)
+
+    result = asyncio.run(_run())
+    assert result == "流式OK"
+    assert llm.last_messages is not None
+    assert len(llm.last_messages) == 3
+    assert llm.last_messages[1] == {"role": "assistant", "content": "A1"}
+
+
+class TestParseLlmJson:
+    """_parse_llm_json 鲁棒性:容忍 markdown 包裹 + 前置/后置自然语言 + 多个 JSON 块"""
+
+    def test_pure_json(self):
+        d = stock_advice_service._parse_llm_json('{"view": "bullish", "score": 80}')
+        assert d == {"view": "bullish", "score": 80}
+
+    def test_markdown_fenced(self):
+        raw = "```json\n{\"view\": \"bearish\"}\n```"
+        d = stock_advice_service._parse_llm_json(raw)
+        assert d == {"view": "bearish"}
+
+    def test_markdown_no_lang(self):
+        raw = "```\n{\"view\": \"neutral\"}\n```"
+        d = stock_advice_service._parse_llm_json(raw)
+        assert d == {"view": "neutral"}
+
+    def test_natural_language_prefix(self):
+        """LLM 经常在 JSON 前面加"好的,以下是分析:"等自然语言"""
+        raw = '好的,以下是分析:\n{"view": "bullish", "advice": "持有"}'
+        d = stock_advice_service._parse_llm_json(raw)
+        assert d == {"view": "bullish", "advice": "持有"}
+
+    def test_natural_language_suffix(self):
+        raw = '{"view": "bullish"}\n希望对您有帮助'
+        d = stock_advice_service._parse_llm_json(raw)
+        assert d == {"view": "bullish"}
+
+    def test_multiple_json_blocks_picks_first(self):
+        raw = '{"view": "bullish"}\n{"view": "bearish"}'
+        d = stock_advice_service._parse_llm_json(raw)
+        assert d == {"view": "bullish"}
+
+    def test_nested_braces_inside_string(self):
+        """字符串内的花括号不计入深度(防 LLM 输出 {"a": "b{c}d"} 时误截断)"""
+        raw = '{"view": "text with {curly} inside", "ok": true}'
+        d = stock_advice_service._parse_llm_json(raw)
+        assert d["view"] == "text with {curly} inside"
+        assert d["ok"] is True
+
+    def test_escaped_quote_in_string(self):
+        raw = '{"view": "he said \\"hi\\"", "ok": true}'
+        d = stock_advice_service._parse_llm_json(raw)
+        assert d["view"] == 'he said "hi"'
+
+    def test_no_json_raises(self):
+        with pytest.raises(ValueError, match="无 JSON 对象"):
+            stock_advice_service._parse_llm_json("这是纯文本,没有 JSON")
+
+    def test_bracket_unclosed_raises(self):
+        with pytest.raises(ValueError, match="未闭合"):
+            stock_advice_service._parse_llm_json('{"view": "bullish"')
+
+    def test_array_not_object_rejected(self):
+        """纯数组(无对象)被拒;数组中含对象时提取首个对象"""
+        with pytest.raises(ValueError, match="无 JSON 对象"):
+            stock_advice_service._parse_llm_json('[1, 2, 3]')
+        # 数组包对象:提取首个对象 OK
+        d = stock_advice_service._parse_llm_json('[{"view": "x"}, {"view": "y"}]')
+        assert d == {"view": "x"}
 
 
 def make_fake_client_class(responses: list[httpx.Response]) -> type:
@@ -444,3 +623,49 @@ class TestStockAPI:
         assert "只允许讨论" in llm.last_system
         assert "「" not in llm.last_system
         assert "题材资金动向" not in llm.last_prompt
+
+    def test_chat_with_history_injected(self, client, monkeypatch):
+        """POST /chat 带 history → LLM 收到多轮 messages,ai→assistant 转换"""
+        fake = make_fake_client_class([
+            httpx.Response(200, text=f"cb({json.dumps(_sina_rows())});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake)
+        llm = FakeLLM("OK")
+        _mock_llm(monkeypatch, llm)
+        r = client.post(
+            "/api/stock/600519.SH/chat",
+            json={
+                "question": "现在能加仓吗?",
+                "history": [
+                    {"role": "user", "text": "我成本 120"},
+                    {"role": "ai", "text": "目前被套,建议观望"},
+                ],
+            },
+        )
+        assert r.status_code == 200
+        assert llm.last_messages is not None
+        assert len(llm.last_messages) == 3
+        assert llm.last_messages[0]["role"] == "user"
+        assert llm.last_messages[1] == {"role": "assistant", "content": "目前被套,建议观望"}
+        assert llm.last_messages[2]["role"] == "user"
+        assert "现在能加仓吗?" in llm.last_messages[2]["content"]
+
+    def test_chat_stream_with_history_injected(self, client, monkeypatch):
+        """POST /chat/stream 带 history → 流式 messages 注入"""
+        fake = make_fake_client_class([
+            httpx.Response(200, text=f"cb({json.dumps(_sina_rows())});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake)
+        llm = FakeLLM("流式OK")
+        _mock_llm(monkeypatch, llm)
+        r = client.post(
+            "/api/stock/600519.SH/chat/stream",
+            json={
+                "question": "Q2",
+                "history": [{"role": "user", "text": "Q1"}, {"role": "ai", "text": "A1"}],
+            },
+        )
+        assert r.status_code == 200
+        assert '"text": "流式OK"' in r.text
+        assert llm.last_messages is not None
+        assert llm.last_messages[1] == {"role": "assistant", "content": "A1"}

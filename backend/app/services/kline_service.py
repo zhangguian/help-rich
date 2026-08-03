@@ -37,14 +37,32 @@ def _to_sina_scale(period: str) -> int:
     }.get(period, 240)
 
 
+def _dedupe_asc(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按 date 升序去重:避免 DB 重复行 / 新浪偶发同日多值污染客户端
+
+    首个出现的胜出(后到的同名丢弃),保证行情/指标序列稳定。
+    """
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for r in sorted(rows, key=lambda x: x["date"]):
+        d = r["date"]
+        if d in seen:
+            continue
+        seen.add(d)
+        out.append(r)
+    return out
+
+
 async def _fetch_sina_kline(
-    stock_code: str, period: str, count: int
+    stock_code: str, period: str, count: int, keep_time: bool = False
 ) -> list[dict[str, Any]]:
     """guide §3.2 新浪 K 线(JSONP,需剥壳)
 
     返回:[
-      {date, open, high, low, close, volume, turnover?}
+      {date, open, high, low, close, volume, amount}
     ] 升序
+    keep_time=True:日/时上保留完整秒级时间戳(如 "2026-07-30 14:57:00"),
+    供分时图使用;否则分钟级降级为仅日期。
     """
     import time
     import random
@@ -90,8 +108,8 @@ async def _fetch_sina_kline(
         day = r.get("day") or r.get("datalabel") or r.get("date")
         if not day:
             continue
-        # 分钟级 day 是 "2026-08-01 09:30" 格式
-        if " " in day:
+        # 分钟级 day 是 "2026-07-30 09:30:00"-格式
+        if not keep_time and " " in day:
             day = day.split(" ")[0]
         out.append({
             "date": day,
@@ -100,8 +118,79 @@ async def _fetch_sina_kline(
             "low": r.get("low", "0"),
             "close": r.get("close", "0"),
             "volume": int(r.get("volume", 0) or 0),
+            "amount": r.get("amount", "0"),
         })
     return out
+
+
+async def fetch_intraday(stock_code: str) -> dict[str, Any]:
+    """当日分时数据(新浪 scale=1 分钟线聚合)
+
+    分时接口返回分钟级原始 OHLCV,本函数聚合成分时点:
+      - time: "HH:MM"
+      - price: 该分钟收盘价(近似最新价)
+      - avg_price: 自开盘累计成交额 / 累计成交量(均价线)
+      - volume: 该分钟成交量
+      - prev_close: 昨收(分时图黄色虚线基准)
+
+    当日未开盘/停牌 → ? 返回空 items + prev_close=None;数据源异常抛 KLineSourceUnavailable。
+    """
+    # 1. 昨收:拉日K,最后一日不是分时当日→取最后一根;否则取前一根(盘中可能含当日)
+    #    日K接口兜底,失败不阻断分时(prev_close=None 前端降级)
+    prev_close: str | None = None
+    try:
+        daily = await _fetch_sina_kline(stock_code, "daily", 5)
+    except KLineSourceUnavailable:
+        daily = []
+
+    # 2. 分时分钟线(保留 HH:MM:SS)
+    try:
+        rows = await _fetch_sina_kline(stock_code, "1min", 260, keep_time=True)
+    except KLineSourceUnavailable:
+        rows = []
+    if not rows:
+        # 数据源失败但可能只是分钟接口限流,抛异常由 API 统一 502
+        raise KLineSourceUnavailable(f"新浪分时返回空数据: {stock_code}")
+
+    # 3. 取最后一个交易日(rows 升序,末尾即最新)
+    last_day = rows[-1]["date"].split(" ")[0]
+    # 过滤出当天的分钟
+    mins = [r for r in rows if r["date"].startswith(last_day + " ")]
+
+    # 昨收:取最后一个不属于分时当日的日线 close(盘中日线可能已含今日)
+    if daily:
+        for d in reversed(daily):
+            if not d["date"].startswith(last_day):
+                prev_close = d["close"]
+                break
+
+    items: list[dict[str, Any]] = []
+    cum_vol = 0
+    cum_amt = 0.0
+    for r in mins:
+        try:
+            vol = int(r["volume"])
+            amt = float(r["amount"] or 0)
+        except (ValueError, TypeError):
+            vol, amt = 0, 0.0
+        cum_vol += vol
+        cum_amt += amt
+        avg_price = round(cum_amt / cum_vol, 3) if cum_vol else None
+        price = float(r["close"])
+        items.append({
+            "time": r["date"].split(" ")[1][:5],
+            "price": price,
+            "avg_price": avg_price,
+            "volume": vol,
+        })
+
+    return {
+        "stock_code": stock_code,
+        "date": last_day,
+        "prev_close": prev_close,
+        "count": len(items),
+        "items": items,
+    }
 
 
 async def fetch_klines(
@@ -130,7 +219,7 @@ async def fetch_klines(
 
     if len(cached) >= count:
         logger.debug("K 线缓存命中: %s %s (%d 根)", stock_code, period, len(cached))
-        return [
+        rows = [
             {
                 "date": r.trade_date.isoformat(),
                 "open": r.open_price,
@@ -141,11 +230,13 @@ async def fetch_klines(
             }
             for r in reversed(cached)
         ]
+        return _dedupe_asc(rows)
 
     # 2. 真实接口(失败抛 KLineSourceUnavailable,无 mock)
     rows = await _fetch_sina_kline(stock_code, period, count)
     if not rows:
         raise KLineSourceUnavailable(f"新浪 K 线返回空数据: {stock_code}")
+    rows = _dedupe_asc(rows)
 
     # 3. 落库
     async with async_session() as session:
@@ -176,4 +267,4 @@ async def fetch_klines(
     return rows
 
 
-__all__ = ["fetch_klines", "KLineSourceUnavailable"]
+__all__ = ["fetch_klines", "fetch_intraday", "KLineSourceUnavailable"]

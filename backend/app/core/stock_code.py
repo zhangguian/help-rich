@@ -2,10 +2,11 @@
 
 统一内部格式:600519.SH / 000001.SZ / 830799.BJ(见 data-source-guide §1.1)
 市场推断规则:
+  5xxxxx → SH(沪市 ETF:51/56/58 系列)
   6xxxxx → SH(沪市主板)
   9xxxxx → SH(B 股)
   0xxxxx → SZ(深市主板)
-  1xxxxx → SZ(深市基金/债券,少量)
+  1xxxxx → SZ(深市 ETF/基金/债券:15/16 系列)
   2xxxxx → SZ(B 股)
   3xxxxx → SZ(创业板)
   4xxxxx → BJ(北交所)
@@ -17,6 +18,7 @@ VALID_MARKETS = {"SH", "SZ", "BJ"}
 
 # 前缀 → 市场
 _MARKET_BY_PREFIX: list[tuple[str, str]] = [
+    ("5", "SH"),
     ("6", "SH"),
     ("9", "SH"),
     ("0", "SZ"),

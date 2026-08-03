@@ -77,6 +77,20 @@ class BaseLLM(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def chat_with_messages(
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.3,
+        max_retries: int = 3,
+    ) -> str:
+        """多轮对话:system 单独传入,messages 是 [{role,content}] 列表(不含 system)
+
+        用于股票问答多轮上下文(切换股票缓存的历史问答随 messages 注入)。
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def chat_stream(
         self,
         system: str,
@@ -88,6 +102,16 @@ class BaseLLM(ABC):
         调用方消费完整后必须关闭(async for 正常结束即可)。
         失败时抛出 LLMError(流式无重试:已输出内容无法回滚)。
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    def chat_stream_with_messages(
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.3,
+    ) -> AsyncIterator[str]:
+        """多轮流式版:system 单独传入,messages 是 [{role,content}] 列表(不含 system)"""
         raise NotImplementedError
 
     @property
@@ -145,8 +169,20 @@ class OpenAICompatClient(BaseLLM):
         temperature: float = 0.3,
         max_retries: int = 3,
     ) -> str:
+        return await self.chat_with_messages(
+            system, [{"role": "user", "content": user}], temperature, max_retries
+        )
+
+    async def chat_with_messages(
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.3,
+        max_retries: int = 3,
+    ) -> str:
         last_err: Exception | None = None
         # trust_env=False:避免系统代理干扰(公司网络下 TSL 断连,ADR-0005 同因)
+        payload_messages = [{"role": "system", "content": system}, *messages]
         async with httpx.AsyncClient(trust_env=False, timeout=30) as client:
             for attempt in range(max_retries):
                 try:
@@ -158,10 +194,7 @@ class OpenAICompatClient(BaseLLM):
                         },
                         json={
                             "model": self._model,
-                            "messages": [
-                                {"role": "system", "content": system},
-                                {"role": "user", "content": user},
-                            ],
+                            "messages": payload_messages,
                             "temperature": temperature,
                         },
                     )
@@ -198,14 +231,30 @@ class OpenAICompatClient(BaseLLM):
         user: str,
         temperature: float = 0.3,
     ) -> AsyncIterator[str]:
+        async for piece in self.chat_stream_with_messages(
+            system, [{"role": "user", "content": user}], temperature
+        ):
+            yield piece
+
+    def chat_stream_with_messages(
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.3,
+    ) -> AsyncIterator[str]:
         """OpenAI 兼容流式(SSE chunk 的 choices[0].delta.content)"""
+        return self._chat_stream_with_messages_impl(system, messages, temperature)
+
+    async def _chat_stream_with_messages_impl(
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+    ) -> AsyncIterator[str]:
         # 非 2xx 的完整响应体先读到内存再判断,避免与流式读冲突
         request = {
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": [{"role": "system", "content": system}, *messages],
             "temperature": temperature,
             "stream": True,
         }

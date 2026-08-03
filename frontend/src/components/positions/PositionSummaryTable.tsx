@@ -98,13 +98,21 @@ export function PositionSummaryTable({
                       ),
                     )}
                   >
-                    {cur != null ? `¥${decimalFormat(p.currentPrice!)}` : '--'}
-                  </td>
-                  <td className={clsx('py-2 px-2 text-right', pctClass(changePct))}>
-                    {changePct != null
+{cur === 0 ? (
+                    <span className="text-text-ter">停牌</span>
+                  ) : cur != null ? (
+                    `¥${decimalFormat(p.currentPrice!)}`
+                  ) : (
+                    '--'
+                  )}
+                </td>
+                <td className={clsx('py-2 px-2 text-right', pctClass(changePct))}>
+                  {cur === 0
+                    ? '停牌'
+                    : changePct != null
                       ? `${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%`
                       : '--'}
-                  </td>
+                </td>
                   <td className="py-2 px-2 text-right text-text-pri">
                     {p.shares.toLocaleString()}
                   </td>

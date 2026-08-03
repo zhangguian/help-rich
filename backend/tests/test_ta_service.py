@@ -402,6 +402,36 @@ class TestPosition:
         assert r["position"]["band"] == "low"
         assert r["position"]["pct_60"] is not None and r["position"]["pct_60"] < -40
 
+    # ---- v0.5 M1.2 买卖位置参考卡 ----
+    def test_risk_band_high_at_p80(self):
+        """收盘价站上近120日 P80 → risk_band=high"""
+        closes = [10.0] * 100 + [30.0 + i * 0.1 for i in range(20)]
+        r = compute_indicators(_kline(closes))
+        assert r["position"]["risk_band"] == "high"
+        assert r["position"]["p80"] is not None
+
+    def test_risk_band_low_below_p20(self):
+        """现价跌破近120日 P20 → risk_band=low"""
+        closes = [100.0] * 100 + [20.0 - i * 0.1 for i in range(20)]
+        r = compute_indicators(_kline(closes))
+        assert r["position"]["risk_band"] == "low"
+        assert r["position"]["p20"] is not None
+
+    def test_risk_band_mid(self):
+        """中等位置 → risk_band=mid"""
+        closes = [10.0 + (i % 5) for i in range(100)] + [11.0] * 20
+        r = compute_indicators(_kline(closes))
+        assert r["position"]["risk_band"] == "mid"
+
+    def test_support_and_stop_loss(self):
+        """支撑=近20日最低收盘×0.98;止损=支撑×0.97"""
+        closes = [100.0 + (i % 5) for i in range(40)]
+        r = compute_indicators(_kline(closes))
+        pos = r["position"]
+        min20 = min(closes[-20:])
+        assert pos["support_price"] == round(min20 * 0.98, 3)
+        assert pos["stop_loss_price"] == round(round(min20 * 0.98, 3) * 0.97, 3)
+
 
 class TestSignalFusion:
     def test_signal_output_shape(self):

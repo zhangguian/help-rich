@@ -18,6 +18,7 @@ from app.services.kline_service import (
     KLineSourceUnavailable,
     _to_sina_scale,
     _to_sina_symbol,
+    fetch_intraday,
     fetch_klines,
 )
 from sqlalchemy import delete
@@ -137,6 +138,64 @@ class TestFetchKlines:
             asyncio.run(fetch_klines("600519.SH", "daily", 30))
 
 
+class TestIntraday:
+    def test_keep_time_parsing(self, monkeypatch):
+        """keep_time=True 时分钟级保留 HH:MM:SS 秒级时间戳"""
+        rows = [
+            {"day": "2026-07-31 09:30:00", "open": "1500", "high": "1502", "low": "1499", "close": "1501", "volume": "100", "amount": "150100"},
+            {"day": "2026-07-31 09:31:00", "open": "1501", "high": "1503", "low": "1500", "close": "1502", "volume": "200", "amount": "300300"},
+        ]
+        fake_class, _ = make_fake_client_class([
+            httpx.Response(200, text=f"callback_x({json.dumps(rows, ensure_ascii=False)});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake_class)
+        out = asyncio.run(kline_service._fetch_sina_kline("600519.SH", "1min", 60, keep_time=True))
+        assert out[0]["date"] == "2026-07-31 09:30:00"
+        assert out[0]["amount"] == "150100"
+
+    def test_keep_time_false_strips_to_date(self, monkeypatch):
+        """默认 keep_time=False 保持旧行为(分钟级降到日期)"""
+        rows = [{"day": "2026-07-31 09:30:00", "open": "1", "high": "1", "low": "1", "close": "1", "volume": "1"}]
+        fake_class, _ = make_fake_client_class([
+            httpx.Response(200, text=f"callback_x({json.dumps(rows, ensure_ascii=False)});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake_class)
+        out = asyncio.run(kline_service._fetch_sina_kline("600519.SH", "1min", 60))
+        assert out[0]["date"] == "2026-07-31"
+
+    def test_fetch_intraday_aggregates(self, monkeypatch):
+        """min K线 → 聚合分时点:均价 = 累计额/累计量,仅保留最新交易日"""
+        minutes = [
+            {"day": "2026-07-29 14:59:00", "open": "1498.0", "high": "1499.0", "low": "1496.0", "close": "1497.0", "volume": "500", "amount": "748500"},
+            {"day": "2026-07-30 09:30:00", "open": "1500.000", "high": "1501.0", "low": "1499.0", "close": "1500.5", "volume": "1000", "amount": "1500500"},
+            {"day": "2026-07-30 09:31:00", "open": "1500.5", "high": "1502.0", "low": "1498.0", "close": "1501.0", "volume": "1000", "amount": "1501500"},
+        ]
+        daily = [
+            {"day": "2026-07-29", "open": "1500", "high": "1530", "low": "1495", "close": "1497", "volume": "28000"},
+            {"day": "2026-07-30", "open": "1500", "high": "1530", "low": "1495", "close": "1560", "volume": "30000"},
+        ]
+        fake_class, _ = make_fake_client_class([
+            httpx.Response(200, text=f"callback_x({json.dumps(daily, ensure_ascii=False)});"),
+            httpx.Response(200, text=f"callback_x({json.dumps(minutes, ensure_ascii=False)});"),
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake_class)
+        out = asyncio.run(fetch_intraday("600519.SH"))
+        assert out["date"] == "2026-07-30"
+        assert out["count"] == 2
+        assert out["prev_close"] == "1497"  # 昨日(2026-07-29)收盘
+        # 09:30 均价 = 1500500/1000 = 1500.500;09:31 均价 = (1500500+1501500)/2000
+        assert out["items"][0]["time"] == "09:30"
+        assert out["items"][0]["avg_price"] == 1500.5
+        assert abs(out["items"][1]["avg_price"] - 1501.0) < 1e-3
+        assert out["items"][1]["volume"] == 1000
+
+    def test_fetch_intraday_no_minutes_raises(self, monkeypatch):
+        fake_class, _ = make_fake_client_class([httpx.Response(200, text="[]")])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake_class)
+        with pytest.raises(KLineSourceUnavailable):
+            asyncio.run(fetch_intraday("600519.SH"))
+
+
 class TestKlineAPI:
     def test_get_kline(self, client, monkeypatch):
         rows = [{"day": "2026-07-31", "open": "1500", "high": "1530", "low": "1495", "close": "1520", "volume": "100"}]
@@ -162,3 +221,32 @@ class TestKlineAPI:
     def test_invalid_limit(self, client):
         r = client.get("/api/kline/600519.SH?limit=999")
         assert r.status_code == 400
+
+    def test_intraday_api(self, client, monkeypatch):
+        minutes = [
+            {"day": "2026-07-31 09:30:00", "open": "1500", "high": "1502", "low": "1499", "close": "1501", "volume": "100", "amount": "150100"},
+            {"day": "2026-07-31 09:31:00", "open": "1501", "high": "1503", "low": "1500", "close": "1502", "volume": "200", "amount": "300300"},
+        ]
+        daily = [
+            {"day": "2026-07-30", "open": "1490", "high": "1500", "low": "1488", "close": "1495", "volume": "1000"},
+            {"day": "2026-07-31", "open": "1495", "high": "1503", "low": "1490", "close": "1502", "volume": "1000"},
+        ]
+        fake_class, _ = make_fake_client_class([
+            httpx.Response(200, text=f"callback_x({json.dumps(daily, ensure_ascii=False)});"),
+            httpx.Response(200, text=f"callback_x({json.dumps(minutes, ensure_ascii=False)});"),
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake_class)
+        r = client.get("/api/kline/600519.SH/intraday")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["date"] == "2026-07-31"
+        assert body["prev_close"] == "1495"
+        assert body["count"] == 2
+        assert body["items"][0]["time"] == "09:30"
+
+    def test_intraday_api_source_unavailable_502(self, client, monkeypatch):
+        fake_class, _ = make_fake_client_class([httpx.Response(200, text="[]")])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake_class)
+        r = client.get("/api/kline/600519.SH/intraday")
+        assert r.status_code == 502
+        assert r.json()["detail"]["code"] == "DATA_SOURCE_UNAVAILABLE"

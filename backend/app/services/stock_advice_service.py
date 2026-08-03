@@ -12,13 +12,17 @@ from typing import Any
 from app.llm.factory import provider_factory
 from app.repositories.llm_settings_repo import llm_settings_repo
 from app.services.sector_fund_flow_service import get_sector_fund_flow
+from app.services.signal_winrate import compute_signal_winrate
 from app.services.ta_service import compute_indicators
 
 logger = logging.getLogger(__name__)
 
 # LLM 调用总时间预算(秒):超过直接降级/503,保证接口快速返回,不被慢模型拖死
-LLM_ANALYSIS_BUDGET = 25.0
-LLM_QUESTION_BUDGET = 40.0
+# 分析端实测 23-25s 接近原 25s 上限,常因慢模型降级为 ai=null;50s 留足够 buffer
+LLM_ANALYSIS_BUDGET = 50.0
+LLM_QUESTION_BUDGET = 55.0
+# 多轮对话上下文窗口:超过此轮数的旧问答会被丢弃,防止 LLM context 撑爆
+MAX_HISTORY_TURNS = 6
 
 ANALYSIS_SYSTEM = """你是股票技术分析助理,面向完全不懂 K 线的小白股民。
 硬性规则:
@@ -117,15 +121,55 @@ async def check_llm_available() -> None:
 
 
 def _parse_llm_json(raw: str) -> dict:
-    """解析 LLM 返回 JSON(容忍 markdown 代码块包裹)"""
+    """解析 LLM 返回 JSON(容忍 markdown 代码块 + 前置/后置自然语言 + 多个 JSON 块)
+
+    提取首个完整 {...} 子串再 json.loads,避免 LLM 在 JSON 前后加 "以下是分析:" /
+    "好的" 等自然语言前缀导致 Strict mode 失败。
+    """
     text = raw.strip()
+    # 优先尝试整体解析(纯 JSON 或 markdown 代码块)
     if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
+        fenced = text.strip("`").strip()
+        if fenced.lower().startswith("json"):
+            fenced = fenced[4:].strip()
+        try:
+            data = json.loads(fenced)
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+    # 退路:用花括号配对提取首个完整 JSON 对象
+    start = text.find("{")
+    if start == -1:
+        raise ValueError(f"LLM 返回无 JSON 对象: {raw[:80]!r}")
+    depth = 0
+    in_str = False
+    escape = False
+    end = -1
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end == -1:
+        raise ValueError(f"LLM JSON 花括号未闭合: {raw[:80]!r}")
     try:
-        data = json.loads(text)
+        data = json.loads(text[start:end])
     except json.JSONDecodeError as e:
         raise ValueError(f"LLM 返回非法 JSON: {e}") from e
     if not isinstance(data, dict):
@@ -193,16 +237,22 @@ def _build_context(klines: list[dict[str, Any]]) -> dict:
 async def get_stock_analysis(
     stock_code: str, klines: list[dict[str, Any]]
 ) -> dict:
-    """指标 + AI 解读;LLM 失败 → ai=None(纯指标降级)"""
+    """指标 + AI 解读;LLM 失败 → ai=None(纯指标降级)
+
+    ai_error: 字符串描述降级原因(unconfigured / timeout / failed);None 表示 AI 成功
+    """
     indicators = compute_indicators(klines)
     result: dict[str, Any] = {
         "stock_code": stock_code,
         "indicators": indicators,
+        "signal_winrate": compute_signal_winrate(klines),
         "ai": None,
+        "ai_error": None,
     }
 
     llm = await _get_llm()
     if llm is None:
+        result["ai_error"] = "unconfigured"
         return result
 
     ctx = json.dumps(_build_context(klines), ensure_ascii=False)
@@ -215,8 +265,10 @@ async def get_stock_analysis(
         result["ai"] = _validate_analysis(parsed)
     except asyncio.TimeoutError:
         logger.warning("个股分析 LLM 超时(>%ss),降级纯指标: %s", LLM_ANALYSIS_BUDGET, stock_code)
+        result["ai_error"] = "timeout"
     except Exception as e:
         logger.warning("个股分析 LLM 失败,降级纯指标(%s): %s", stock_code, e)
+        result["ai_error"] = "failed"
     return result
 
 
@@ -227,8 +279,13 @@ async def ask_stock_question(
     position_cost: float | None = None,
     stock_name: str | None = None,
     sector: dict[str, Any] | None = None,
+    history: list[dict[str, str]] | None = None,
 ) -> str:
-    """操作问答:结合行情 + 指标 + 持仓成本,返回白话回复文本"""
+    """操作问答:结合行情 + 指标 + 持仓成本,返回白话回复文本
+
+    history(可选):前端从 IndexedDB 缓存的多轮问答 [{role:user|ai,text}]
+    走 LLM 原生 messages 数组(不拼字符串),让模型真的能接上下文。
+    """
     llm = await _get_llm()
     if llm is None:
         raise StockAdviceUnavailable("未配置 LLM Key,无法回答;可先查看技术指标")
@@ -237,9 +294,14 @@ async def ask_stock_question(
     prompt = _build_question_prompt(
         question, klines, position_cost, sector, stock_code, stock_name
     )
+    messages = _to_llm_messages(history) + [{"role": "user", "content": prompt}]
+    logger.info(
+        "chat %s q=%r history_turns=%d messages=%d",
+        stock_code, question[:40], len(history) if history else 0, len(messages),
+    )
     try:
         raw = await asyncio.wait_for(
-            llm.chat(system, prompt, temperature=0.4),
+            llm.chat_with_messages(system, messages, temperature=0.4),
             timeout=LLM_QUESTION_BUDGET,
         )
     except asyncio.TimeoutError as e:
@@ -247,6 +309,31 @@ async def ask_stock_question(
     except Exception as e:
         raise StockAdviceUnavailable(f"LLM 调用失败: {e}") from e
     return raw.strip()
+
+
+def _to_llm_messages(history: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    """前端 history → LLM 原生 messages:role 映射 + 截断到 MAX_HISTORY_TURNS 轮
+
+    ai→assistant;丢弃空文本;成对的 user/assistant 保留;按对话顺序。
+    只返回除当前 user 外的过往问答,本轮 user 由调用方追加。
+    """
+    if not history:
+        return []
+    msgs: list[dict[str, str]] = []
+    for h in history:
+        role = h.get("role")
+        text = (h.get("text") or "").strip()
+        if not text:
+            continue
+        if role == "user":
+            msgs.append({"role": "user", "content": text})
+        elif role == "ai":
+            msgs.append({"role": "assistant", "content": text})
+    # 截到最近 N 轮(1 轮 = 1 user + 1 assistant),保留完整配对
+    max_msgs = MAX_HISTORY_TURNS * 2
+    if len(msgs) > max_msgs:
+        msgs = msgs[-max_msgs:]
+    return msgs
 
 
 def _build_question_prompt(
@@ -257,7 +344,10 @@ def _build_question_prompt(
     stock_code: str | None = None,
     stock_name: str | None = None,
 ) -> str:
-    """操作问答的完整 user prompt(chat / chat/stream 共用)
+    """操作问答的当前 user prompt(chat / chat/stream 共用)
+
+    行情 K线 / 成本 / 题材资金数据只注入当前问题这一条 user message;
+    过往问答通过 messages 数组的多轮 role 传给 LLM,避免重复塞历史。
 
     stock_code / stock_name:显式声明当前股票,防止模型把纯数字行情块与
     系统提示词中的作用域股票脱钩(曾出现"没发现要查什么股票")。
@@ -294,6 +384,7 @@ async def ask_stock_question_stream(
     position_cost: float | None = None,
     stock_name: str | None = None,
     sector: dict[str, Any] | None = None,
+    history: list[dict[str, str]] | None = None,
 ) -> AsyncIterator[str]:
     """操作问答流式版:逐段产出回答增量(不含思考内容)
 
@@ -307,8 +398,9 @@ async def ask_stock_question_stream(
     prompt = _build_question_prompt(
         question, klines, position_cost, sector, stock_code, stock_name
     )
+    messages = _to_llm_messages(history) + [{"role": "user", "content": prompt}]
     try:
-        async for piece in llm.chat_stream(system, prompt, temperature=0.4):
+        async for piece in llm.chat_stream_with_messages(system, messages, temperature=0.4):
             yield piece
     except Exception as e:
         raise StockAdviceUnavailable(f"LLM 调用失败: {e}") from e

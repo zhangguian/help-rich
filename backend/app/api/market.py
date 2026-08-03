@@ -13,7 +13,9 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.services.event_bus import event_bus
+from app.services.kline_service import KLineSourceUnavailable
 from app.services.market_overview_service import (
+    fetch_amount_trend,
     fetch_main_fund_flow,
     fetch_market_sentiment,
     fetch_market_sparklines,
@@ -21,6 +23,7 @@ from app.services.market_overview_service import (
 )
 from app.services.news_service import get_sina_news
 from app.services.sector_fund_flow_service import FENLEI_MAP, get_sector_fund_flow
+from app.services.sector_kline_service import get_sector_kline
 
 router = APIRouter(tags=["market"])
 
@@ -197,6 +200,20 @@ async def market_sentiment_endpoint() -> dict:
         ) from e
 
 
+@router.get("/market/amount-trend")
+async def market_amount_trend_endpoint(days: int = 5) -> dict:
+    """两市量能 N 日趋势(M2.5)
+
+    上证指数日K volume 近似,不伪造成交额。失败 → items 空(200)。
+    """
+    if days < 2 or days > 30:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_DAYS", "message": "days 应在 2~30"},
+        )
+    return await fetch_amount_trend(days=days)
+
+
 @router.get("/market/main-fund-flow")
 async def market_main_fund_flow_endpoint(limit: int = 10) -> dict:
     """A 股个股主力净流入榜(roadmap §3.9 主力净流入)
@@ -218,4 +235,37 @@ async def market_main_fund_flow_endpoint(limit: int = 10) -> dict:
     return {"limit": limit, "items": items}
 
 
-__all__ = ["router"]
+# ==================== M2.2 板块K线(行业成分合成) ====================
+
+sector_router = APIRouter(prefix="/sector", tags=["sector"])
+
+
+@sector_router.get("/{industry}/kline")
+async def sector_kline_endpoint(industry: str, period: str = "daily", limit: int = 60) -> dict:
+    """板块K线(按行业成分等权合成,M2.2)
+
+    - 行业来自离线表(baostock 证监会行业名,如 "C15酒、饮料和精制茶制造业")
+    - 成分股复用 KlineCache / 新浪直连;30min 内存缓存
+    - 无成分 / 拉取全失败 → 503;部分成分失败自动跳过
+    """
+    if period not in {"daily", "weekly", "monthly"}:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "UNSUPPORTED_PERIOD", "message": f"板块K线暂支持 daily/weekly/monthly,不是 {period}"},
+        )
+    if limit < 10 or limit > 500:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_LIMIT", "message": "limit 应在 10~500"},
+        )
+    try:
+        data = await get_sector_kline(industry, period=period, count=limit)
+    except KLineSourceUnavailable as e:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "DATA_SOURCE_UNAVAILABLE", "message": str(e)},
+        ) from e
+    return data
+
+
+__all__ = ["router", "sector_router"]

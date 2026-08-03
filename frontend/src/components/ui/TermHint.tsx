@@ -18,7 +18,7 @@ import { GLOSSARY } from '@/lib/glossary';
 export function TermHint({ term, className }: { term: string; className?: string }) {
   const entry = GLOSSARY[term];
   const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const triggerRef = useRef<HTMLSpanElement | null>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
   if (!entry) return null;
@@ -58,12 +58,20 @@ export function TermHint({ term, className }: { term: string; className?: string
 
   return (
     <>
-      <button
+      <span
         ref={triggerRef}
-        type="button"
+        role="button"
+        tabIndex={0}
         onClick={(e) => {
           e.stopPropagation();
           setOpen((v) => !v);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen((v) => !v);
+          }
         }}
         aria-label={`术语解释:${term}`}
         className={
@@ -75,7 +83,7 @@ export function TermHint({ term, className }: { term: string; className?: string
         }
       >
         ?
-      </button>
+      </span>
 
       {typeof document !== 'undefined' &&
         open &&

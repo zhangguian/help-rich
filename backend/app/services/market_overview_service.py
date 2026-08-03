@@ -260,7 +260,38 @@ async def fetch_market_sentiment() -> dict[str, Any]:
         "flat_total": flat_total,
         "buckets": buckets,
         "amount_yi": round(total_amount, 2),
+        # M2.5:涨停/跌停家数单列(小白第一眼)
+        "limit_up": buckets["limit_up"],
+        "limit_down": buckets["limit_down"],
     }
+
+
+# ============ M2.5 两市成交额 N 日趋势 ============
+
+
+async def fetch_amount_trend(days: int = 5) -> dict[str, Any]:
+    """两市量能 N 日趋势(上证指数日K volume,单位:亿手→成交额约估)
+
+    新浪指数日K 无 amount(amount=0),用 volume(成交量,单位股)趋势近似
+    资金活跃度。"成交额"仅供参考,前端以「两市量能」命名,不造假成金额。
+    """
+    try:
+        rows = await _fetch_sina_kline("000001.SH", period="daily", count=days)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("两市量能趋势拉取失败: %s", e)
+        return {"days": 0, "items": []}
+
+    items = []
+    for r in rows:
+        raw = str(r.get("date") or "")[:10]
+        if not raw:
+            continue
+        try:
+            vol_yi = float(r.get("volume") or 0) / 1e8  # 手 → 亿手
+        except (TypeError, ValueError):
+            continue
+        items.append({"date": raw, "volume_yi": round(vol_yi, 2)})
+    return {"days": len(items), "items": items}
 
 
 # ============ 扩展:A 股个股主力净流入榜 ============
@@ -312,5 +343,6 @@ __all__ = [
     "fetch_market_sparklines",
     "fetch_market_sentiment",
     "fetch_main_fund_flow",
+    "fetch_amount_trend",
     "reset_market_overview_service",
 ]

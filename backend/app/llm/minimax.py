@@ -55,8 +55,20 @@ class MiniMaxClient(BaseLLM):
         temperature: float = 0.3,
         max_retries: int = 3,
     ) -> str:
-        """纯文本 chat(走当前 _model)"""
+        return await self.chat_with_messages(
+            system, [{"role": "user", "content": user}], temperature, max_retries
+        )
+
+    async def chat_with_messages(
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.3,
+        max_retries: int = 3,
+    ) -> str:
+        """纯文本 chat(走当前 _model,支持多轮 messages)"""
         last_err: Exception | None = None
+        payload_messages = [{"role": "system", "content": system}, *messages]
         async with httpx.AsyncClient(trust_env=False, timeout=30) as client:
             for attempt in range(max_retries):
                 try:
@@ -68,10 +80,7 @@ class MiniMaxClient(BaseLLM):
                         },
                         json={
                             "model": self._model,
-                            "messages": [
-                                {"role": "system", "content": system},
-                                {"role": "user", "content": user},
-                            ],
+                            "messages": payload_messages,
                             "temperature": temperature,
                             "reasoning_split": True,
                         },
@@ -111,13 +120,31 @@ class MiniMaxClient(BaseLLM):
 
         raise LLMError(f"{self.provider_label} 重试 {max_retries} 次仍失败: {last_err}")
 
-    async def chat_stream(
+    def chat_stream(
         self,
         system: str,
         user: str,
         temperature: float = 0.3,
     ) -> AsyncIterator[str]:
-        """MiniMax 流式(reasoning_split 分离思考 + base_resp 错误检查)"""
+        return self.chat_stream_with_messages(
+            system, [{"role": "user", "content": user}], temperature
+        )
+
+    def chat_stream_with_messages(
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.3,
+    ) -> AsyncIterator[str]:
+        """MiniMax 流式(reasoning_split 分离思考 + base_resp 错误检查,支持多轮 messages)"""
+        return self._chat_stream_with_messages_impl(system, messages, temperature)
+
+    async def _chat_stream_with_messages_impl(
+        self,
+        system: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+    ) -> AsyncIterator[str]:
         stripper = ThinkStripper()
         async with httpx.AsyncClient(trust_env=False, timeout=60) as client:
             async with client.stream(
@@ -129,10 +156,7 @@ class MiniMaxClient(BaseLLM):
                 },
                 json={
                     "model": self._model,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
+                    "messages": [{"role": "system", "content": system}, *messages],
                     "temperature": temperature,
                     "reasoning_split": True,
                     "stream": True,

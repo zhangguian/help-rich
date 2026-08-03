@@ -12,8 +12,10 @@ import type { AnalysisResult, Position, Quote, WatchlistItem } from '@/lib/types
 import { AnalysisPanel } from '@/components/advice/AnalysisPanel';
 import { CalculatorPanel } from '@/components/calculator/CalculatorPanel';
 import { ChatPanel } from '@/components/chat/ChatPanel';
+import { CompareChart } from '@/components/charts/CompareChart';
 import { KLineChart, type KlinePeriod } from '@/components/charts/KLineChart';
 import { HoldingsHealthPanel } from '@/components/holdings-health/HoldingsHealthPanel';
+import { IntradayChart } from '@/components/charts/IntradayChart';
 import { MarketOverviewPage } from '@/components/market/MarketOverviewPage';
 import { NewsFeed } from '@/components/news/NewsFeed';
 import { PositionStatsCards } from '@/components/positions/PositionStatsCards';
@@ -37,6 +39,7 @@ const TABS: { key: TabKey; label: string }[] = [
 ];
 
 const PERIODS: { key: KlinePeriod; label: string }[] = [
+  { key: 'intraday', label: '分时' },
   { key: 'daily', label: '日K' },
   { key: 'weekly', label: '周K' },
   { key: 'monthly', label: '月K' },
@@ -114,7 +117,7 @@ export default function Workbench() {
 
   useEffect(() => {
     fetchBase();
-    const timer = setInterval(fetchBase, 30000);
+    const timer = setInterval(fetchBase, 15000);
     return () => clearInterval(timer);
   }, [fetchBase]);
 
@@ -291,11 +294,17 @@ export default function Workbench() {
                       </div>
                       <div className="text-right shrink-0">
                         <div className="text-xl font-mono font-semibold text-text-pri">
-                          {selectedQuote?.currentPrice ?? '--'}
+                          {selectedQuote
+                            ? Number(selectedQuote.currentPrice) === 0
+                              ? '停牌'
+                              : selectedQuote.currentPrice
+                            : '--'}
                         </div>
                         <div className={`text-sm font-mono ${pctClass(selectedQuote?.changePct)}`}>
                           {selectedQuote
-                            ? `${selectedQuote.changePct > 0 ? '+' : ''}${selectedQuote.changePct.toFixed(2)}%`
+                            ? Number(selectedQuote.currentPrice) === 0
+                              ? '停牌'
+                              : `${selectedQuote.changePct > 0 ? '+' : ''}${selectedQuote.changePct.toFixed(2)}%`
                             : '行情加载中'}
                         </div>
                         <div className="flex justify-end gap-2 mt-2">
@@ -374,8 +383,19 @@ export default function Workbench() {
                   {tab === 'position' && positionView === 'table' ? (
                     <PositionSummaryTable positions={positions} onSelect={selectStock} />
                   ) : activeCode ? (
-                    <div className="flex-1 min-h-0">
-                      <KLineChart stockCode={activeCode} period={period} showVolume height={420} />
+                    <div className="flex-1 min-h-0 overflow-y-auto">
+                      {period === 'intraday' ? (
+                        <IntradayChart stockCode={activeCode} height={420} />
+                      ) : (
+                        <>
+                          {period === 'daily' && (
+                            <div className="mb-2">
+                              <CompareChart stockCode={activeCode} />
+                            </div>
+                          )}
+                          <KLineChart stockCode={activeCode} period={period} showVolume height={420} />
+                        </>
+                      )}
                     </div>
                   ) : (
                     <div className="flex-1 min-h-0 liquid-glass rounded-2xl flex items-center justify-center">
@@ -419,7 +439,7 @@ export default function Workbench() {
         open={showHealth}
         onClose={() => setShowHealth(false)}
         title="🩺 持仓分析"
-        size="lg"
+        size="xl"
       >
         <HoldingsHealthPanel />
       </LiquidModal>

@@ -236,7 +236,20 @@ export interface MarketSentiment {
     down5_10: number;
     limitDown: number;
   };
-  amountYi: number;
+amountYi: number;
+  /** M2.5:涨停/跌停家数单列 */
+  limitUp?: number;
+  limitDown?: number;
+}
+
+/** M2.5 两市量能 N 日趋势(/api/market/amount-trend) */
+export interface AmountTrendItem {
+  date: string;
+  volumeYi: number;
+}
+export interface AmountTrendResponse {
+  days: number;
+  items: AmountTrendItem[];
 }
 
 /** A 股个股主力净流入榜(roadmap §3.9 大盘 Tab,降级估算) */
@@ -423,6 +436,14 @@ export interface PositionIndicator {
   biasMa60: number | null;
   rangePct: number | null;
   band: 'high' | 'mid' | 'low';
+  /** v0.5 M1.2:近120日 P20/P80 分位风险带 */
+  riskBand?: 'high' | 'mid' | 'low';
+  p20?: number | null;
+  p80?: number | null;
+  /** 参考支撑 = 近20日最低收盘 × 0.98 */
+  supportPrice?: number | null;
+  /** 建议止损 = 参考支撑 × 0.97 */
+  stopLossPrice?: number | null;
 }
 
 export interface SignalReason {
@@ -447,6 +468,18 @@ export interface SignalMarker {
   text: string;
   position: 'aboveBar' | 'belowBar' | 'inBar';
   color: string;
+}
+
+/** M1.3 信号历史胜率回检(/api/stock/{code}/analysis 顶层 signalWinrate) */
+export interface SignalWinrate {
+  signal: 'bullish' | 'bearish' | 'neutral';
+  signalLabel: string;
+  count: number;
+  up5: number;
+  up20: number;
+  sample5: number;
+  sample20: number;
+  insufficient: boolean;
 }
 
 export interface TechnicalIndicators {
@@ -504,6 +537,8 @@ export interface KlineItem {
 export interface AnalysisResult {
   stockCode: string;
   indicators: TechnicalIndicators;
+  signalWinrate?: SignalWinrate;
+  /** 后端 LLM 解读;null 时 ai_error 描述降级原因 */
   ai: {
     view: 'bullish' | 'bearish' | 'neutral';
     viewReason: string;
@@ -513,6 +548,8 @@ export interface AnalysisResult {
     advice: string;
     riskWarning: string;
   } | null;
+  /** ai=null 时的原因:'unconfigured' | 'timeout' | 'failed' | null(ai 成功) */
+  aiError?: 'unconfigured' | 'timeout' | 'failed' | null;
 }
 
 /** 自选股(P2.2) */

@@ -259,6 +259,42 @@ async def test_fetch_market_sentiment_invalid_pct_skipped():
 
     assert out["up_total"] == 1
     assert out["buckets"]["up_1_5"] == 1
+    # M2.5:涨停/跌停家数单列
+    assert out["limit_up"] == 0
+    assert out["limit_down"] == 0
+
+
+# ============ M2.5 两市量能趋势 ============
+
+
+async def test_fetch_amount_trend_ok():
+    """指数日K volume → 量能趋势(亿手)"""
+    rows = [
+        {"date": "2026-07-29", "volume": "57122639100"},
+        {"date": "2026-07-30", "volume": "59229892300"},
+    ]
+    with patch(
+        "app.services.market_overview_service._fetch_sina_kline",
+        AsyncMock(return_value=rows),
+    ):
+        out = await market_overview_service.fetch_amount_trend(days=5)
+
+    assert out["days"] == 2
+    assert out["items"][0] == {"date": "2026-07-29", "volume_yi": 571.23}
+    assert out["items"][-1]["date"] == "2026-07-30"
+
+
+async def test_fetch_amount_trend_fail_empty():
+    """拉取失败 → items 空(不抛错)"""
+    async def boom(*a, **kw):
+        raise RuntimeError("network down")
+
+    with patch(
+        "app.services.market_overview_service._fetch_sina_kline", boom,
+    ):
+        out = await market_overview_service.fetch_amount_trend(days=5)
+
+    assert out == {"days": 0, "items": []}
 
 
 # ============ main fund flow ============
