@@ -38,21 +38,24 @@ function buildQuickPrompts(ctx: QuickPromptContext): string[] {
   if (avgCost != null && currentPrice != null && avgCost > 0) {
     const pnlPct = ((currentPrice / avgCost) - 1) * 100;
     if (pnlPct >= 0) {
-      out.push(`成本 ${avgCost.toFixed(2)} 元,浮盈 ${pnlPct.toFixed(1)}%,该止盈吗?`);
+      out.push(`盈利 ${pnlPct.toFixed(1)}%,该止盈吗?`);
+      out.push(`盈利 ${pnlPct.toFixed(1)}%,还能加仓吗?`);
     } else {
-      out.push(`成本 ${avgCost.toFixed(2)} 元,浮亏 ${(-pnlPct).toFixed(1)}%,还能补仓吗?`);
+      out.push(`亏损 ${(-pnlPct).toFixed(1)}%,该止损吗?`);
+      out.push(`亏损 ${(-pnlPct).toFixed(1)}%,还能补仓吗?`);
     }
-    out.push(`我 ${avgCost.toFixed(2)} 元的成本,该止损吗?`);
   } else {
-    out.push('现在能买入吗?');
+    out.push('现在能买吗?');
+    out.push('新手适合买吗?');
+    out.push('风险大吗?');
   }
   if (changePct != null && changePct > 0.5) {
     out.push('今天为什么涨这么多?');
   } else if (changePct != null && changePct < -0.5) {
-    out.push('今天为什么跌?还能拿吗?');
+    out.push('今天为什么跌?');
   }
-  out.push('下周走势怎么看?');
-  return out.slice(0, 5);
+  out.push('下周会怎么走?');
+  return out;
 }
 
 /**
@@ -73,16 +76,22 @@ export function ChatPanel({
   avgCost,
   currentPrice,
   changePct,
+  height,
+  onHeightChange,
 }: {
   stockCode: string | null;
   stockName: string | null;
   avgCost: number | null;
   currentPrice: number | null;
   changePct: number | null;
+  height: number | null;
+  onHeightChange: (h: number) => void;
 }) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  // "更多"快捷词悬浮框开关
+  const [popoverOpen, setPopoverOpen] = useState(false);
   // 历史回显提示:仅当本次 stockCode 切换是从 IDB 加载到非空历史时显示
   const [showHistoryHint, setShowHistoryHint] = useState(false);
   const [hintDismissed, setHintDismissed] = useState(false);
@@ -90,6 +99,8 @@ const listRef = useRef<HTMLDivElement | null>(null);
   const idRef = useRef(0);
   // 同步最新 messages,供 switch effect 在清空前 flush 旧股票 IDB
   const messagesRef = useRef<Msg[]>([]);
+  // 浮框容器 ref:用于点击外部关闭
+  const popoverRef = useRef<HTMLDivElement | null>(null);
   // 记录上次 effect 处理的 stockCode,用于切换时识别 oldCode 写 IDB
   const lastStockCodeRef = useRef<string | null>(null);
 
@@ -116,6 +127,7 @@ const listRef = useRef<HTMLDivElement | null>(null);
     idRef.current = 0;
     setShowHistoryHint(false);
     setHintDismissed(false);
+    setPopoverOpen(false);
     if (!myCode) return;
 
     // AbortController:effect cleanup(切股票 / 组件卸载)时取消过期 IDB 操作的后续装载
@@ -165,6 +177,18 @@ const listRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages, sending]);
+
+  // 浮框打开时:点击容器外部关闭
+  useEffect(() => {
+    if (!popoverOpen) return;
+    const onDocDown = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setPopoverOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocDown);
+    return () => document.removeEventListener('mousedown', onDocDown);
+  }, [popoverOpen]);
 
   // 持久化 messages 到 IDB(去掉 streaming 临时态);300ms 防抖合并流式高频更新
   // 空 messages 不主动写(避免 IDB 异步慢时把新股票已有记录删掉);清空走 handleClear
@@ -294,6 +318,27 @@ const listRef = useRef<HTMLDivElement | null>(null);
     setHintDismissed(false);
   };
 
+  // 顶部拖拽条:按住上下拖动调整卡片高度
+  // 边界:180 ≤ h ≤ viewport.height - 250(留顶部 + AnalysisPanel 最低限)
+  const onHandleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = height ?? 400;
+    const MIN = 180;
+    const MAX = typeof window !== 'undefined' ? window.innerHeight - 250 : 800;
+    const onMove = (ev: MouseEvent) => {
+      const dy = startY - ev.clientY; // 向上拖 = 高度增加
+      const newH = Math.max(MIN, Math.min(MAX, startHeight + dy));
+      onHeightChange(newH);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
   const dismissHint = () => setHintDismissed(true);
 
   const hintVisible = showHistoryHint && !hintDismissed && messages.length > 0;
@@ -303,7 +348,15 @@ const listRef = useRef<HTMLDivElement | null>(null);
       variant="active"
       padding="sm"
       className="h-full flex flex-col overflow-hidden gap-2 min-h-0"
+      style={height ? { height: `${height}px` } : undefined}
     >
+      <div
+        className="h-2.5 -mt-1 flex items-center justify-center cursor-row-resize group select-none shrink-0"
+        onMouseDown={onHandleMouseDown}
+        title="拖拽调整高度"
+      >
+        <span className="w-12 h-[3px] rounded-full bg-white/15 group-hover:bg-white/40 transition-colors" />
+      </div>
       <div className="px-2 pt-1 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm font-semibold text-text-pri truncate">
@@ -378,17 +431,44 @@ const listRef = useRef<HTMLDivElement | null>(null);
       </div>
 
       {stockCode && !sending && quickPrompts.length > 0 && (
-        <div className="flex gap-1.5 flex-wrap px-1 pt-1 border-t border-white/5">
-          {quickPrompts.map((p) => (
+        <div
+          ref={popoverRef}
+          className="relative flex items-center gap-2 px-1 pt-1 border-t border-white/5"
+        >
+          <button
+            type="button"
+            onClick={() => send(quickPrompts[0])}
+            className="px-3 py-1 rounded-full border border-white/10 hover:border-accent/50 text-xs text-text-sec hover:text-text-pri transition-colors"
+          >
+            {quickPrompts[0]}
+          </button>
+          {quickPrompts.length > 1 && (
             <button
-              key={p}
               type="button"
-              onClick={() => send(p)}
-              className="px-3 py-1 rounded-full border border-white/10 hover:border-accent/50 text-xs text-text-sec hover:text-text-pri transition-colors"
+              title="查看更多快捷提问"
+              onClick={() => setPopoverOpen((v) => !v)}
+              className="ml-auto px-2.5 py-1 rounded-full border border-white/10 hover:border-accent/50 text-xs text-text-sec hover:text-text-pri transition-colors"
             >
-              {p}
+              更多
             </button>
-          ))}
+          )}
+          {popoverOpen && quickPrompts.length > 1 && (
+            <div className="absolute left-0 right-0 bottom-full mb-1 z-20 rounded-xl bg-bg-base border border-white/15 shadow-lg p-1.5 flex flex-col gap-1 max-h-80 overflow-y-auto">
+              {quickPrompts.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => {
+                    send(p);
+                    setPopoverOpen(false);
+                  }}
+                  className="text-left px-3 py-1.5 rounded-lg text-xs text-text-sec hover:bg-white/10 hover:text-text-pri transition-colors whitespace-nowrap"
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

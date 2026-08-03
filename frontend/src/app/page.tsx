@@ -80,6 +80,19 @@ export default function Workbench() {
     if (autoRefresh) localStorage.setItem('auto-refresh-enabled', '1');
     else localStorage.removeItem('auto-refresh-enabled');
   }, [autoRefresh]);
+  // ChatPanel 高度(用户拖拽条控制);null = 用 flex 默认;持久化到 localStorage
+  const [chatHeight, setChatHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const v = localStorage.getItem('chat-panel-height');
+    if (v) setChatHeight(parseInt(v, 10));
+  }, []);
+  useEffect(() => {
+    if (chatHeight != null) {
+      localStorage.setItem('chat-panel-height', String(chatHeight));
+    } else {
+      localStorage.removeItem('chat-panel-height');
+    }
+  }, [chatHeight]);
 
   const fetchBase = useCallback(async () => {
     try {
@@ -463,7 +476,7 @@ export default function Workbench() {
         {/* 右侧:上操作提示 / 下 AI 对话 — 大盘 / 设置 Tab 时收起 */}
         {tab !== 'market' && tab !== 'settings' && (
           <aside className="w-[22rem] shrink-0 flex flex-col gap-3 min-h-0">
-            <div className="flex-[3] min-h-0 overflow-y-auto pr-1">
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
               <AnalysisPanel
                 analysis={analysis}
                 started={analysisStarted}
@@ -471,13 +484,15 @@ export default function Workbench() {
                 onRefresh={refreshAnalysis}
               />
             </div>
-            <div className="flex-[2] min-h-0">
+            <div className="flex-none min-h-0">
               <ChatPanel
                 stockCode={activeCode}
                 stockName={selectedQuote?.name ?? null}
                 avgCost={activePosition ? Number(activePosition.avgCost) : null}
                 currentPrice={selectedQuote ? Number(selectedQuote.currentPrice) : null}
                 changePct={selectedQuote?.changePct != null ? Number(selectedQuote.changePct) : null}
+                height={chatHeight}
+                onHeightChange={setChatHeight}
               />
             </div>
           </aside>
