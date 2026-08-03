@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { AnimatePresence, motion } from 'framer-motion';
 
@@ -25,6 +25,36 @@ interface Msg {
 /** 与后端 stock_advice_service.MAX_HISTORY_TURNS 保持一致 */
 const MAX_HISTORY_TURNS = 6;
 
+interface QuickPromptContext {
+  avgCost: number | null;
+  currentPrice: number | null;
+  changePct: number | null;
+}
+
+/** 根据当前股票上下文(持仓成本/当前价/涨跌) 生成 3-5 个小白友好的快捷提问 */
+function buildQuickPrompts(ctx: QuickPromptContext): string[] {
+  const out: string[] = [];
+  const { avgCost, currentPrice, changePct } = ctx;
+  if (avgCost != null && currentPrice != null && avgCost > 0) {
+    const pnlPct = ((currentPrice / avgCost) - 1) * 100;
+    if (pnlPct >= 0) {
+      out.push(`成本 ${avgCost.toFixed(2)} 元,浮盈 ${pnlPct.toFixed(1)}%,该止盈吗?`);
+    } else {
+      out.push(`成本 ${avgCost.toFixed(2)} 元,浮亏 ${(-pnlPct).toFixed(1)}%,还能补仓吗?`);
+    }
+    out.push(`我 ${avgCost.toFixed(2)} 元的成本,该止损吗?`);
+  } else {
+    out.push('现在能买入吗?');
+  }
+  if (changePct != null && changePct > 0.5) {
+    out.push('今天为什么涨这么多?');
+  } else if (changePct != null && changePct < -0.5) {
+    out.push('今天为什么跌?还能拿吗?');
+  }
+  out.push('下周走势怎么看?');
+  return out.slice(0, 5);
+}
+
 /**
  * 右侧下栏 · AI 对话助手(roadmap 功能5)
  *
@@ -33,13 +63,22 @@ const MAX_HISTORY_TURNS = 6;
  *
  * UI 提示:首次加载到历史消息时,列表顶部出现「以下为上次对话缓存」小提示,
  * 用户点 × 关闭;开始新一轮提问时也自动关闭。
+ *
+ * 快捷提问词(chips):输入框上方一行 chip,点击即发送;根据是否持仓 + 当日涨跌
+ * 动态生成 3-5 条小白友好的提问,降低初次使用门槛。
  */
 export function ChatPanel({
   stockCode,
   stockName,
+  avgCost,
+  currentPrice,
+  changePct,
 }: {
   stockCode: string | null;
   stockName: string | null;
+  avgCost: number | null;
+  currentPrice: number | null;
+  changePct: number | null;
 }) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
@@ -53,6 +92,12 @@ const listRef = useRef<HTMLDivElement | null>(null);
   const messagesRef = useRef<Msg[]>([]);
   // 记录上次 effect 处理的 stockCode,用于切换时识别 oldCode 写 IDB
   const lastStockCodeRef = useRef<string | null>(null);
+
+  // 快捷提问词:依据上下文(持仓成本/当前价/涨跌)动态生成 3-5 条
+  const quickPrompts = useMemo(
+    () => buildQuickPrompts({ avgCost, currentPrice, changePct }),
+    [avgCost, currentPrice, changePct],
+  );
 
   // 跟踪 messages 给 messagesRef(switch flush 时拿到最新值,避免依赖 React 闭包)
   useEffect(() => {
@@ -157,8 +202,8 @@ const listRef = useRef<HTMLDivElement | null>(null);
     return slice.map((m) => ({ role: m.role, text: m.text }));
   };
 
-  const send = async () => {
-    const q = input.trim();
+  const send = async (overrideText?: string) => {
+    const q = (overrideText ?? input).trim();
     if (!q || !stockCode || sending) return;
     setInput('');
     // 进入新一轮对话,关闭历史提示
@@ -332,6 +377,21 @@ const listRef = useRef<HTMLDivElement | null>(null);
         </AnimatePresence>
       </div>
 
+      {stockCode && !sending && quickPrompts.length > 0 && (
+        <div className="flex gap-1.5 flex-wrap px-1 pt-1 border-t border-white/5">
+          {quickPrompts.map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => send(p)}
+              className="px-3 py-1 rounded-full border border-white/10 hover:border-accent/50 text-xs text-text-sec hover:text-text-pri transition-colors"
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="flex gap-2 pt-1 border-t border-white/5">
         <input
           value={input}
@@ -341,7 +401,7 @@ const listRef = useRef<HTMLDivElement | null>(null);
           placeholder={stockCode ? '输入你的问题…' : '先选择一只股票'}
           className="flex-1 px-3 py-2 text-sm rounded-xl bg-white/5 border border-white/10 focus:border-accent outline-none text-text-pri placeholder:text-text-ter disabled:opacity-40"
         />
-        <Button onClick={send} disabled={!stockCode || sending || !input.trim()}>
+        <Button onClick={() => send()} disabled={!stockCode || sending || !input.trim()} className="liquid-glass rounded-xl">
           {sending ? '回答中…' : '发送'}
         </Button>
       </div>

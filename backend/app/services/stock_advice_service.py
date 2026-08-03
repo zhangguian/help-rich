@@ -237,18 +237,24 @@ def _build_context(klines: list[dict[str, Any]]) -> dict:
 async def get_stock_analysis(
     stock_code: str, klines: list[dict[str, Any]]
 ) -> dict:
-    """指标 + AI 解读;LLM 失败 → ai=None(纯指标降级)
+    """指标 + AI 解读;LLM 失败 / K 线不足 → ai=None / signal_winrate=None(纯指标降级)
 
-    ai_error: 字符串描述降级原因(unconfigured / timeout / failed);None 表示 AI 成功
+    ai_error: 字符串描述降级原因(unconfigured / timeout / failed / insufficient_klines);None 表示 AI 成功
+    signal_winrate: K 线不足时为 None(K线 < 23 根时回检样本为零)
     """
     indicators = compute_indicators(klines)
     result: dict[str, Any] = {
         "stock_code": stock_code,
         "indicators": indicators,
-        "signal_winrate": compute_signal_winrate(klines),
         "ai": None,
         "ai_error": None,
     }
+    try:
+        result["signal_winrate"] = compute_signal_winrate(klines)
+    except TaError as e:
+        logger.warning("signal_winrate 跳过(%s): %s", stock_code, e)
+        result["signal_winrate"] = None
+        result["ai_error"] = "insufficient_klines"
 
     llm = await _get_llm()
     if llm is None:

@@ -48,7 +48,10 @@ async def list_positions() -> dict:
     行情不可用时为 null。
     """
     positions = await get_all_positions()
-    codes = [p.stock_code for p in positions]
+    from app.core.stock_code import normalize_code
+
+    codes = [normalize_code(p.stock_code) or p.stock_code for p in positions]
+    codes = [c for c in codes if c]
     quotes: dict[str, object] = {}
     if codes:
         quotes = {q.code: q for q in await get_quote_service().get_quotes(codes)}

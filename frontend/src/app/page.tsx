@@ -68,6 +68,18 @@ export default function Workbench() {
   const [showCalc, setShowCalc] = useState(false);
   const [showHealth, setShowHealth] = useState(false);
   const [positionView, setPositionView] = useState<'kline' | 'table'>('kline');
+  // 自动刷新开关(默认关):开启后 15s 周期 fetchBase;同步到 localStorage
+  // 初始一律 false;挂载后 useEffect 读 localStorage 修正 — 避免 SSR/CSR className 不匹配
+  const [autoRefresh, setAutoRefresh] = useState<boolean>(false);
+  // 倒计时显示(秒):开启时从 15 开始倒数,1s 一刷;关闭时为 0
+  const [secondsLeft, setSecondsLeft] = useState<number>(0);
+  useEffect(() => {
+    setAutoRefresh(localStorage.getItem('auto-refresh-enabled') === '1');
+  }, []);
+  useEffect(() => {
+    if (autoRefresh) localStorage.setItem('auto-refresh-enabled', '1');
+    else localStorage.removeItem('auto-refresh-enabled');
+  }, [autoRefresh]);
 
   const fetchBase = useCallback(async () => {
     try {
@@ -117,9 +129,27 @@ export default function Workbench() {
 
   useEffect(() => {
     fetchBase();
-    const timer = setInterval(fetchBase, 15000);
-    return () => clearInterval(timer);
   }, [fetchBase]);
+
+  useEffect(() => {
+    if (!autoRefresh) {
+      setSecondsLeft(0);
+      return;
+    }
+    fetchBase();
+    setSecondsLeft(15);
+    const refresh = setInterval(() => {
+      fetchBase().finally(() => setSecondsLeft(15));
+    }, 15000);
+    const tick = setInterval(
+      () => setSecondsLeft((s) => Math.max(0, s - 1)),
+      1000,
+    );
+    return () => {
+      clearInterval(refresh);
+      clearInterval(tick);
+    };
+  }, [autoRefresh, fetchBase]);
 
   const selectStock = useCallback((code: string) => {
     setActiveCode(code);
@@ -217,7 +247,29 @@ export default function Workbench() {
             })}
           </nav>
         </div>
-        <span className="text-xs text-text-ter">数据源:新浪 · AI 本地配置</span>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setAutoRefresh((v) => !v)}
+            title={autoRefresh ? '点击关闭自动刷新' : '点击开启自动刷新(15s 一次)'}
+            className={clsx(
+              'flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium border transition-colors',
+              autoRefresh
+                ? 'border-up/40 bg-up-bg text-up'
+                : 'border-white/10 bg-white/5 text-text-sec hover:bg-white/10',
+            )}
+          >
+            <span
+              className={clsx(
+                'w-2 h-2 rounded-full',
+                autoRefresh ? 'bg-up animate-pulse' : 'bg-text-ter/50',
+              )}
+            />
+            自动刷新{' '}
+            {autoRefresh ? (secondsLeft > 0 ? `${secondsLeft}s` : '刷新中…') : 'OFF'}
+          </button>
+          <span className="text-xs text-text-ter">数据源:新浪 · AI 本地配置</span>
+        </div>
       </header>
 
       {/* 三区主体 */}
@@ -420,7 +472,13 @@ export default function Workbench() {
               />
             </div>
             <div className="flex-[2] min-h-0">
-              <ChatPanel stockCode={activeCode} stockName={selectedQuote?.name ?? null} />
+              <ChatPanel
+                stockCode={activeCode}
+                stockName={selectedQuote?.name ?? null}
+                avgCost={activePosition ? Number(activePosition.avgCost) : null}
+                currentPrice={selectedQuote ? Number(selectedQuote.currentPrice) : null}
+                changePct={selectedQuote?.changePct != null ? Number(selectedQuote.changePct) : null}
+              />
             </div>
           </aside>
         )}
