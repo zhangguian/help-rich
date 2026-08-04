@@ -59,6 +59,9 @@ class CalculatorAfter(BaseModel):
     total_cost: str
     delta_cost: str | None
     realized_pnl: str
+    realized_pnl_gross: str  # GB-001 IR-4:不含费用
+    realized_pnl_net: str    # GB-001 IR-4:扣除费用
+    fee_paid: str            # GB-001 IR-4:本笔费用
 
 
 class CalculatorResponse(BaseModel):
@@ -96,6 +99,14 @@ async def calculator(req: CalculatorRequest) -> CalculatorResponse:
 
     # 3. 调纯函数
     price_str = format(req.tx_price, ".3f")
+
+    # GB-001 IR-4:读费用参数(开启时双口径,关闭时 net=gross)
+    from app.core.cost_engine import TradeFees
+    from app.repositories.cost_settings_repo import cost_settings_repo
+
+    fees_holder = await cost_settings_repo.get()
+    fees = fees_holder if fees_holder.enabled else None
+
     try:
         result = calculate_after_transaction(
             shares_before=shares_before,
@@ -103,6 +114,7 @@ async def calculator(req: CalculatorRequest) -> CalculatorResponse:
             action=req.action,
             tx_shares=req.tx_shares,
             tx_price=req.tx_price,
+            fees=fees,
         )
     except ValueError as e:
         raise HTTPException(
@@ -137,6 +149,9 @@ async def calculator(req: CalculatorRequest) -> CalculatorResponse:
                 if result["delta_cost"] is not None else None
             ),
             realized_pnl=str(result["realized_pnl"]),
+            realized_pnl_gross=str(result["realized_pnl_gross"]),
+            realized_pnl_net=str(result["realized_pnl_net"]),
+            fee_paid=str(result["fee_paid"]),
         ),
         pnl_grid=[
             PnlGridRow(

@@ -410,8 +410,23 @@ function MainFundFlowPanel({
         <span className="text-text-ter uppercase tracking-wide font-medium inline-flex items-center">
           A 股主力净流入<TermHint term="main_fund_flow" />
         </span>
-        {data && <span className="text-text-ter">top {data.limit}</span>}
+        <span className="inline-flex items-center gap-1.5">
+          {data?.estimated && (
+            <span
+              className="inline-block px-1.5 py-0.5 rounded-sm bg-warn/15 text-warn text-[10px] font-medium"
+              title={data.source ?? '按涨跌幅估算'}
+            >
+              估算值
+            </span>
+          )}
+          {data && <span className="text-text-ter">top {data.limit}</span>}
+        </span>
       </div>
+      {data?.estimated && (
+        <p className="text-[11px] text-text-ter leading-snug">
+          按涨跌幅近似估算(非官方资金流接口),仅供观察趋势
+        </p>
+      )}
       {loading || !data ? (
         <SkeletonBars />
       ) : data.items.length === 0 ? (

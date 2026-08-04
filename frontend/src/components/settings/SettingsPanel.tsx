@@ -1,4 +1,5 @@
 import { Card } from '@/components/ui/Card';
+import { CostSettingsCard } from '@/components/settings/CostSettingsCard';
 import { ExportImportCard } from '@/components/settings/ExportImportCard';
 import { HistoryToolsCard } from '@/components/settings/HistoryToolsCard';
 import { LlmKeysCard } from '@/components/settings/LlmKeysCard';
@@ -34,6 +35,8 @@ export function SettingsPanel() {
 
       <div className=" space-y-6">
         <ExportImportCard />
+
+        <CostSettingsCard />
 
         <LlmProviderCard />
 

@@ -34,6 +34,25 @@ interface RiskReport {
   warnings: string[];
 }
 
+/** GB-001 IR-3:评分样本外校准 */
+interface ScoreCalibrationBucket {
+  label: string;
+  range: [number, number];
+  count: number;
+  insufficient: boolean;
+  avgReturn: number | null;
+  medianReturn: number | null;
+  winRate: number | null;
+}
+
+interface ScoreCalibration {
+  horizonDays: number;
+  sampleCount: number;
+  buckets: ScoreCalibrationBucket[];
+  calibrated: boolean;
+  generatedAt: string;
+}
+
 const RISK_COLOR: Record<string, string> = {
   低: 'text-down',
   中: 'text-warn',
@@ -48,12 +67,19 @@ const RISK_BG: Record<string, string> = {
 
 export default function RiskReportPage() {
   const [data, setData] = useState<RiskReport | null>(null);
+  const [calibration, setCalibration] = useState<ScoreCalibration | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    apiGet<RiskReport>('/risk-report')
-      .then(setData)
+    Promise.all([
+      apiGet<RiskReport>('/risk-report'),
+      apiGet<ScoreCalibration>('/score-calibration').catch(() => null),
+    ])
+      .then(([r, c]) => {
+        setData(r);
+        setCalibration(c);
+      })
       .catch((e) => setError(e?.response?.data?.detail?.message ?? '加载失败'))
       .finally(() => setLoading(false));
   }, []);
@@ -124,6 +150,57 @@ export default function RiskReportPage() {
                   </li>
                 ))}
               </ul>
+            </Card>
+          )}
+
+          {/* GB-001 IR-3:评分样本外校准 */}
+          {calibration && (
+            <Card padding="md">
+              <h3 className="font-semibold mb-2">📊 评分校准(GB-001 IR-3)</h3>
+              <p className="text-xs text-text-ter mb-3">
+                买入评分后 {calibration.horizonDays} 个交易日的实际持有期收益,
+                按分数段聚合。校准证据 — 让分数不再是数字游戏。
+              </p>
+              {!calibration.calibrated ? (
+                <p className="text-sm text-text-ter">
+                  样本不足(有效样本 {calibration.sampleCount} 笔,每桶需 ≥ 3 笔)。
+                  继续记录交易后此处会显示校准结论。
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-text-ter text-xs border-b border-white/10">
+                        <th className="text-left py-2 font-medium">分数段</th>
+                        <th className="text-right py-2 font-medium">样本数</th>
+                        <th className="text-right py-2 font-medium">平均收益</th>
+                        <th className="text-right py-2 font-medium">中位收益</th>
+                        <th className="text-right py-2 font-medium">胜率</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {calibration.buckets.map((b) => (
+                        <tr key={b.label} className="border-b border-white/5">
+                          <td className="py-2 font-mono">{b.label}</td>
+                          <td className="py-2 text-right font-mono tabular-nums">{b.count}</td>
+                          <td className={`py-2 text-right font-mono tabular-nums ${b.avgReturn != null ? (b.avgReturn >= 0 ? 'text-up' : 'text-down') : 'text-text-ter'}`}>
+                            {b.avgReturn != null ? `${b.avgReturn >= 0 ? '+' : ''}${b.avgReturn.toFixed(2)}%` : '—'}
+                          </td>
+                          <td className={`py-2 text-right font-mono tabular-nums ${b.medianReturn != null ? (b.medianReturn >= 0 ? 'text-up' : 'text-down') : 'text-text-ter'}`}>
+                            {b.medianReturn != null ? `${b.medianReturn >= 0 ? '+' : ''}${b.medianReturn.toFixed(2)}%` : '—'}
+                          </td>
+                          <td className="py-2 text-right font-mono tabular-nums">
+                            {b.winRate != null ? `${(b.winRate * 100).toFixed(1)}%` : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="text-xs text-text-ter mt-3">
+                    生成于 {calibration.generatedAt} · 校准数据仅作参考,不构成投资建议
+                  </p>
+                </div>
+              )}
             </Card>
           )}
 

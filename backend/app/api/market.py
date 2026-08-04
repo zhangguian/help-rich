@@ -232,7 +232,14 @@ async def market_main_fund_flow_endpoint(limit: int = 10) -> dict:
             status_code=502,
             detail={"code": "MAIN_FUND_UNAVAILABLE", "message": str(e)},
         ) from e
-    return {"limit": limit, "items": items}
+    # GB-001 IR-6:明确标注"估算值",让用户知道这是近似、非真实主力净额
+    return {
+        "limit": limit,
+        "items": items,
+        "estimated": True,
+        "method": "estimate_by_price_change",
+        "source": "新浪 hs_a 行情估算(非官方资金流接口)",
+    }
 
 
 # ==================== M2.2 板块K线(行业成分合成) ====================

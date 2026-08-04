@@ -248,6 +248,17 @@ class AnnualReportOut(BaseModel):
     top5_profit: list[dict]
     top5_loss: list[dict]
     no_transactions: bool = False  # v0.4.0:无流水时前端提示"导入持仓或录入流水"
+    # GB-001 IR-4:费用双口径(不含费 gross / 含费 net / 费用合计)
+    realized_profit_gross: Optional[str] = None
+    realized_loss_gross: Optional[str] = None
+    net_pnl_gross: Optional[str] = None
+    total_fee: Optional[str] = None
+    fees_enabled: bool = False
+    # GB-001 IR-5:平仓周期胜率 / T 归因 / 时间加权
+    closed_cycles: int = 0
+    t_net_contribution: Optional[str] = None
+    trend_net_pnl: Optional[str] = None
+    dietz_return: Optional[str] = None
 
 
 # ============================================================

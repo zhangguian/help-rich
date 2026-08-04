@@ -19,12 +19,36 @@ from app.repositories.trade_score_repo import trade_score_repo
 from app.repositories.transaction_repo import transaction_repo
 from app.repositories.watchlist_repo import watchlist_repo
 from app.services.event_bus import event_bus
+from app.services.market_overview_service import get_market_index_service
 from app.services.position_service import Position, aggregate_positions, get_all_positions, get_position
 
 logger = logging.getLogger(__name__)
 
 # 诊断用的历史交易条数
 RECENT_LIMIT = 5
+
+# 评分"市场环境"维度参考指数(默认上证,留给后续可配置)
+INDEX_BENCHMARK = "000001.SH"
+
+# 当日涨跌幅中性分阈值(±0.3%,与 scorer.MARKET_ENV 规则一致)
+INDEX_NEUTRAL_THRESHOLD = 0.3
+
+
+async def _fetch_index_change_pct(code: str = INDEX_BENCHMARK) -> float:
+    """拉取当日大盘涨跌幅(失败降级 0.0 = 中性分)。
+
+    复用 QuoteService,享受 5 分钟 JSON 缓存;交易上下文里 dex 边界不会
+    拉取不到时(停牌/未开盘)返回 0.0,score 给中性。
+    """
+    try:
+        quotes = await get_market_index_service().get_quotes([code])
+        if not quotes:
+            return 0.0
+        pct = float(quotes[0].change_pct or 0.0)
+        return pct
+    except Exception as e:  # noqa: BLE001
+        logger.warning("diagnose: 拉取指数 %s 涨跌幅失败,降级中性: %s", code, e)
+        return 0.0
 
 
 def _load_context_trades(all_tx: list, target_id: int):
@@ -143,8 +167,12 @@ class DiagnoseService:
             for t in recent_objs
         ]
 
-        # 3. market_ctx(MVP 中性:大盘涨跌待接指数行情,先给中性分)
-        market_ctx = {"index_change_pct": 0.0, "sector_rank": None}
+        # 3. market_ctx(GB-001 IR-1:对接真实大盘涨跌幅,失败降级 0.0 中性)
+        index_change_pct = await _fetch_index_change_pct(INDEX_BENCHMARK)
+        market_ctx = {
+            "index_change_pct": index_change_pct,
+            "sector_rank": None,
+        }
 
         is_in_watchlist = await watchlist_repo.contains(trade.stock_code)
 

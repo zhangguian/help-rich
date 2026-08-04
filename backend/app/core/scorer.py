@@ -26,6 +26,10 @@ DIMENSIONS = [CONCENTRATION, PRICE_REASON, INTERVAL, MARKET_ENV, SECTOR_HEAT]
 DEGRADED_CONCENTRATION = 15   # 持仓 < 3 只
 DEGRADED_INTERVAL = 15        # 历史交易 < 2 笔
 
+# 做 T 豁免窗口(GB-001 IR-2):同股近 N 日有反向交易 → 操作间隔维度豁免
+# 数值取 product-requirements 场景 B 的"日内做 T + 短期做 T"覆盖范围
+ROUND_TRIP_WINDOW_DAYS = 3
+
 
 def _to_date(d) -> Optional[date]:
     """兼容 date / datetime / 'YYYY-MM-DD' 字符串"""
@@ -94,14 +98,57 @@ def _price_reason_score(
     return 5
 
 
-def _interval_score(recent_trades: list, trade_date, action: str) -> int:
+def _is_round_trip(
+    recent_trades: list,
+    trade_date,
+    stock_code: str,
+    action: str,
+    window_days: int = ROUND_TRIP_WINDOW_DAYS,
+) -> bool:
+    """识别做 T 场景(GB-001 IR-2)
+
+    同股在交易日的 [0, window_days] 天内存在反向交易 → 视为合法做 T。
+    使用条件:stock_code 必填;若缺 stock_code 视为非 T 场景(保守)。
+    """
+    if not stock_code:
+        return False
+    target = _to_date(trade_date)
+    if target is None:
+        return False
+    opposite = "sell" if action == "buy" else "buy"
+    for t in recent_trades:
+        if t.get("stock_code") != stock_code:
+            continue
+        if t.get("action") != opposite:
+            continue
+        d = _to_date(t.get("trade_date"))
+        if d is None:
+            continue
+        delta = (target - d).days
+        if 0 <= delta <= window_days:
+            return True
+    return False
+
+
+def _interval_score(
+    recent_trades: list,
+    trade_date,
+    action: str,
+    stock_code: str = "",
+) -> int:
     """维度 3:操作间隔(20)
 
-    规则(§4.3.6):
+    规则(§4.3.6 + GB-001 IR-2):
     - 历史交易 < 2 笔 → 15(0 数据降级)
+    - 同股近 3 日有反向交易 → 20(做 T 豁免,GB-001 IR-2)
     - 距上次同向操作 > 7 天 → 20;3~7 天 → 15;< 3 天 → 10
     - 无同向操作 → 20
     """
+    # GB-001 IR-2:做 T 豁免优先判定(产品核心场景 vs 评分规则冲突的修复)
+    # 即使历史 < 2 笔,也允许单笔反向交易触发豁免
+    if _is_round_trip(recent_trades, trade_date, stock_code, action):
+        return 20
+
     if len(recent_trades) < 2:
         return DEGRADED_INTERVAL
 
@@ -203,7 +250,10 @@ def score_trade(
             trade.get("action", ""), trade.get("price", 0), position_before
         ),
         INTERVAL: _interval_score(
-            recent_trades, trade.get("trade_date"), trade.get("action", "")
+            recent_trades,
+            trade.get("trade_date"),
+            trade.get("action", ""),
+            trade.get("stock_code", ""),
         ),
         MARKET_ENV: _market_env_score(trade.get("action", ""), market_ctx),
         SECTOR_HEAT: _sector_heat_score(trade.get("stock_code", ""), market_ctx),

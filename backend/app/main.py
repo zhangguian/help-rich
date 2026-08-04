@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.admin import router as admin_router
 from app.api.annual_report import router as annual_report_router
 from app.api.calculator import router as calculator_router
+from app.api.cost_settings import router as cost_settings_router
 from app.api.diagnose import router as diagnose_router
 from app.api.events import router as events_router
 from app.api.fund_flow import router as fund_flow_router
@@ -23,6 +24,7 @@ from app.api.provider_stats import router as provider_stats_router
 from app.api.quotes import router as quotes_router
 from app.api.rebalance import router as rebalance_router
 from app.api.risk_report import router as risk_report_router
+from app.api.score_calibration import router as score_calibration_router
 from app.api.screenshot import router as screenshot_router
 from app.api.stock import router as stock_router
 from app.api.stop_losses import router as stop_losses_router
@@ -60,6 +62,21 @@ async def _run_alembic_upgrade() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """启动 / 关闭钩子(v0.2:用 Alembic 替代 create_all)"""
+    import os as _os
+
+    # 0. 二进制快照备份(GB-001 防丢失:启动前把旧库完整复制一份,失败不阻断启动)
+    if not _os.environ.get("PYTEST_CURRENT_TEST"):
+        from app.api.admin import create_db_snapshot
+
+        try:
+            snap = await asyncio.to_thread(create_db_snapshot)
+            if snap:
+                logger.info("启动快照备份: %s", snap)
+            else:
+                logger.warning("启动快照备份失败(已忽略,继续启动)")
+        except Exception as e:
+            logger.warning("启动快照备份异常(已忽略): %s", e)
+
     # 1. Alembic 迁移(v0.2 起取代 create_all;新表 / 字段变更通过 alembic revision 自动生成)
     try:
         await _run_alembic_upgrade()
@@ -69,8 +86,6 @@ async def lifespan(app: FastAPI):
 
     # 2. 资金流新浪调度器(v0.3.2:真实数据,无 mock)— 后台任务,每 60s 拉一次 3 个市场排行
     # 测试环境跳过(测试 conftest 不期望后台无限循环)
-    import os as _os
-
     if not _os.environ.get("PYTEST_CURRENT_TEST"):
         from app.services.fund_flow_service import start_sina_scheduler
         from app.services.sector_fund_flow_service import start_sector_scheduler
@@ -107,6 +122,7 @@ app.add_middleware(
 app.include_router(admin_router, prefix="/api")
 app.include_router(annual_report_router, prefix="/api")
 app.include_router(calculator_router, prefix="/api")
+app.include_router(cost_settings_router, prefix="/api")
 app.include_router(diagnose_router, prefix="/api")
 app.include_router(events_router, prefix="/api")
 app.include_router(fund_flow_router, prefix="/api")
@@ -122,5 +138,6 @@ app.include_router(provider_stats_router, prefix="/api")
 app.include_router(quotes_router, prefix="/api")
 app.include_router(rebalance_router, prefix="/api")
 app.include_router(risk_report_router, prefix="/api")
+app.include_router(score_calibration_router, prefix="/api")
 app.include_router(screenshot_router, prefix="/api")
 app.include_router(stock_router, prefix="/api")

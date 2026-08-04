@@ -35,6 +35,17 @@ interface AnnualReportData {
     realizedPnl: string;
     tradeDate: string;
   }>;
+  // GB-001 IR-4:费用双口径
+  realizedProfitGross: string | null;
+  realizedLossGross: string | null;
+  netPnlGross: string | null;
+  totalFee: string | null;
+  feesEnabled: boolean;
+  // GB-001 IR-5
+  closedCycles: number;
+  tNetContribution: string | null;
+  trendNetPnl: string | null;
+  dietzReturn: string | null;
 }
 
 const MONTHS = [
@@ -105,7 +116,12 @@ export default function AnnualReportPage({
           {/* 4 宫格总览 */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Card padding="md">
-              <div className="text-text-sec text-sm mb-1">已实现盈亏</div>
+              <div className="text-text-sec text-sm mb-1">
+                已实现盈亏
+                {data.feesEnabled && (
+                  <span className="text-[11px] text-text-ter ml-1">(含费)</span>
+                )}
+              </div>
               <div
                 className={`text-2xl font-mono font-semibold ${
                   Number(data.netPnl) >= 0 ? 'text-up' : 'text-down'
@@ -114,6 +130,14 @@ export default function AnnualReportPage({
                 {Number(data.netPnl) >= 0 ? '+' : ''}¥
                 {decimalFormat(data.netPnl)}
               </div>
+              {data.feesEnabled && data.netPnlGross != null && (
+                <div className="text-xs text-text-ter mt-1">
+                  不含费 ¥{decimalFormat(data.netPnlGross)}
+                  {data.totalFee != null && (
+                    <span> · 费用 ¥{decimalFormat(data.totalFee)}</span>
+                  )}
+                </div>
+              )}
             </Card>
             <Card padding="md">
               <div className="text-text-sec text-sm mb-1">已实现盈利</div>
@@ -133,10 +157,61 @@ export default function AnnualReportPage({
                 {(data.winRate * 100).toFixed(0)}%
               </div>
               <div className="text-xs text-text-ter mt-1">
-                清仓笔数 {data.closedCount}
+                平仓周期 {data.closedCycles} 个
+                {data.closedCount > data.closedCycles &&
+                  ` · 卖出笔数 ${data.closedCount}`}
               </div>
             </Card>
           </div>
+
+          {/* GB-001 IR-5:做 T 归因 + 时间加权收益率 */}
+          {data.tNetContribution != null && (
+            <Card padding="md">
+              <h3 className="font-semibold mb-3">🧬 收益归因(GB-001 IR-5)</h3>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div>
+                  <div className="text-xs text-text-ter mb-1">做 T 净贡献</div>
+                  <div
+                    className={`font-mono text-lg font-semibold ${
+                      Number(data.tNetContribution) >= 0 ? 'text-up' : 'text-down'
+                    }`}
+                  >
+                    {Number(data.tNetContribution) >= 0 ? '+' : ''}¥
+                    {decimalFormat(data.tNetContribution)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-text-ter mb-1">趋势持仓净贡献</div>
+                  <div
+                    className={`font-mono text-lg font-semibold ${
+                      Number(data.trendNetPnl) >= 0 ? 'text-up' : 'text-down'
+                    }`}
+                  >
+                    {Number(data.trendNetPnl) >= 0 ? '+' : ''}¥
+                    {decimalFormat(data.trendNetPnl)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-text-ter mb-1">
+                    资金加权收益率(modified Dietz)
+                  </div>
+                  <div
+                    className={`font-mono text-lg font-semibold ${
+                      Number(data.dietzReturn) >= 0 ? 'text-up' : 'text-down'
+                    }`}
+                  >
+                    {data.dietzReturn != null
+                      ? `${(Number(data.dietzReturn) * 100).toFixed(2)}%`
+                      : '—'}
+                  </div>
+                </div>
+              </div>
+              <p className="text-xs text-text-ter mt-3">
+                做 T = 同股 3 日内反向交易。胜率按「建仓→清仓」平仓周期聚合,
+                避免高频小赢虚增胜率。
+              </p>
+            </Card>
+          )}
 
           {/* Top 5 最赚 + 最亏 */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

@@ -15,7 +15,12 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.repositories.transaction_repo import transaction_repo
-from app.services.diagnose_service import diagnose_service, _load_context_trades
+from app.services.diagnose_service import (
+    INDEX_BENCHMARK,
+    _fetch_index_change_pct,
+    diagnose_service,
+    _load_context_trades,
+)
 
 
 @pytest.fixture()
@@ -94,6 +99,69 @@ class TestContextTrades:
         assert found is False
         assert len(before) == 1
         assert before[0].id == 1
+
+
+class TestFetchIndexChangePct:
+    """GB-001 IR-1:大盘环境维度接入真实涨跌,失败降级 0.0"""
+
+    def test_returns_pct_on_success(self, monkeypatch):
+        """QuoteService 返回带 change_pct 的行情 → 透传数值"""
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeQuote:
+            code: str = INDEX_BENCHMARK
+            change_pct: float = 0.85
+
+        class FakeSvc:
+            async def get_quotes(self, codes):
+                assert codes == [INDEX_BENCHMARK]
+                return [FakeQuote()]
+
+        import app.services.diagnose_service as ds
+        monkeypatch.setattr(ds, "get_market_index_service", lambda: FakeSvc())
+        pct = asyncio.run(_fetch_index_change_pct())
+        assert pct == 0.85
+
+    def test_returns_zero_on_empty_quotes(self, monkeypatch):
+        """空 list(停牌/未开盘) → 0.0 中性分"""
+        class FakeSvc:
+            async def get_quotes(self, codes):
+                return []
+
+        import app.services.diagnose_service as ds
+        monkeypatch.setattr(ds, "get_market_index_service", lambda: FakeSvc())
+        pct = asyncio.run(_fetch_index_change_pct())
+        assert pct == 0.0
+
+    def test_returns_zero_on_exception(self, monkeypatch):
+        """拉到异常 → 0.0 降级(不阻塞诊断)"""
+        class BadSvc:
+            async def get_quotes(self, codes):
+                raise RuntimeError("sina 502")
+
+        import app.services.diagnose_service as ds
+        monkeypatch.setattr(ds, "get_market_index_service", lambda: BadSvc())
+        pct = asyncio.run(_fetch_index_change_pct())
+        assert pct == 0.0
+
+    def test_handles_none_change_pct(self, monkeypatch):
+        """change_pct 为 None → 0.0 兜底"""
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeQuote:
+            code: str = INDEX_BENCHMARK
+            change_pct: float = None
+
+        class FakeSvc:
+            async def get_quotes(self, codes):
+                return [FakeQuote()]
+
+        import app.services.diagnose_service as ds
+        monkeypatch.setattr(ds, "get_market_index_service", lambda: FakeSvc())
+        pct = asyncio.run(_fetch_index_change_pct())
+        assert pct == 0.0
 
 
 class TestScoreAndNotify:

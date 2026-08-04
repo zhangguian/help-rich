@@ -9,6 +9,7 @@
 | `README.md` | 本文件 | — |
 | `decisions-index.md` | ADR 总索引 | 每次写 ADR 后追加一行 |
 | `ADR-NNNN-xxx.md` | 单个架构决策记录 | 临时决策 / 重大调整时 |
+| `investment-review-NNN.md` | 投资评审报告(ID 编号制) | 系统级投顾/经济学评审时 |
 | `phase-completion-log.md` | Phase 完成日志 | 每个 Phase 完成时 |
 | `runbook.md` | 运维手册(启动 / 备份 / 应急) | 遇到新坑时追加 |
 

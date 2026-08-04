@@ -237,6 +237,104 @@ class TestSectorHeat:
         assert r["score_breakdown"][SECTOR_HEAT] == 0
 
 
+class TestRoundTripExemption:
+    """GB-001 IR-2:做 T 场景评分豁免(同股近 3 日反向交易 → 操作间隔满分 20)"""
+
+    def test_buy_after_sell_today_exempted(self):
+        """同日先卖后买 → 满分 20(原逻辑会扣到 10)"""
+        recent = [
+            {"stock_code": "600519.SH", "action": "buy", "trade_date": "2026-07-10"},
+            {"stock_code": "600519.SH", "action": "sell", "trade_date": "2026-07-20"},
+            {"stock_code": "000001.SZ", "action": "buy", "trade_date": "2026-07-05"},
+        ]
+        r = score_trade(
+            _trade(action="buy", trade_date="2026-07-20"),
+            {"shares": 100, "avg_cost": "1400.000"},
+            recent, _MKT, True, _POS_4,
+        )
+        assert r["score_breakdown"][INTERVAL] == 20
+
+    def test_buy_3_days_after_sell_exempted(self):
+        """3 天前反向 → 豁免(窗口边界)"""
+        recent = [
+            {"stock_code": "600519.SH", "action": "sell", "trade_date": "2026-07-17"},
+            {"stock_code": "600519.SH", "action": "buy", "trade_date": "2026-07-10"},
+        ]
+        r = score_trade(
+            _trade(action="buy", trade_date="2026-07-20"),
+            {"shares": 100, "avg_cost": "1400.000"},
+            recent, _MKT, True, _POS_4,
+        )
+        assert r["score_breakdown"][INTERVAL] == 20
+
+    def test_sell_1_day_after_buy_exempted(self):
+        """做 T 卖出:1 天前同股买 → 豁免"""
+        recent = [
+            {"stock_code": "600519.SH", "action": "buy", "trade_date": "2026-07-19"},
+            {"stock_code": "600519.SH", "action": "sell", "trade_date": "2026-07-05"},
+        ]
+        r = score_trade(
+            _trade(action="sell", trade_date="2026-07-20"),
+            {"shares": 100, "avg_cost": "1400.000"},
+            recent, _MKT, True, _POS_4,
+        )
+        assert r["score_breakdown"][INTERVAL] == 20
+
+    def test_buy_4_days_after_sell_not_exempted(self):
+        """4 天前反向(超出窗口) → 不豁免,走原逻辑"""
+        recent = [
+            {"stock_code": "600519.SH", "action": "sell", "trade_date": "2026-07-16"},
+            {"stock_code": "600519.SH", "action": "buy", "trade_date": "2026-07-19"},
+        ]
+        r = score_trade(
+            _trade(action="buy", trade_date="2026-07-20"),
+            {"shares": 100, "avg_cost": "1400.000"},
+            recent, _MKT, True, _POS_4,
+        )
+        # 不豁免;最近同向 buy = 2026-07-19,距 1 天 → 10
+        assert r["score_breakdown"][INTERVAL] == 10
+
+    def test_reverse_but_different_stock_not_exempted(self):
+        """反向交易但不同股票 → 不豁免"""
+        recent = [
+            {"stock_code": "000001.SZ", "action": "sell", "trade_date": "2026-07-19"},
+            {"stock_code": "600519.SH", "action": "buy", "trade_date": "2026-07-10"},
+        ]
+        r = score_trade(
+            _trade(action="buy", trade_date="2026-07-20"),
+            {"shares": 100, "avg_cost": "1400.000"},
+            recent, _MKT, True, _POS_4,
+        )
+        # 不豁免;最近同向 buy = 2026-07-10,距 10 天 → 20
+        assert r["score_breakdown"][INTERVAL] == 20
+
+    def test_history_less_than_2_no_round_trip_degraded(self):
+        """历史 < 2 笔且无做 T → 降级 15"""
+        recent = [
+            {"stock_code": "600519.SH", "action": "buy", "trade_date": "2026-07-19"},
+        ]
+        r = score_trade(
+            _trade(action="buy", trade_date="2026-07-20"),
+            {"shares": 100, "avg_cost": "1400.000"},
+            recent, _MKT, True, _POS_4,
+        )
+        assert r["score_breakdown"][INTERVAL] == DEGRADED_INTERVAL
+
+    def test_window_only_looks_backward(self):
+        """窗口只看 [0, 3] 天前,不包括未来交易(防乱序)"""
+        recent = [
+            {"stock_code": "600519.SH", "action": "sell", "trade_date": "2026-07-22"},  # 未来
+            {"stock_code": "600519.SH", "action": "buy", "trade_date": "2026-07-10"},
+        ]
+        r = score_trade(
+            _trade(action="buy", trade_date="2026-07-20"),
+            {"shares": 100, "avg_cost": "1400.000"},
+            recent, _MKT, True, _POS_4,
+        )
+        # 不豁免;最近同向 buy = 2026-07-10,距 10 天 → 20
+        assert r["score_breakdown"][INTERVAL] == 20
+
+
 class TestScoreAggregation:
     def test_negative_clamped(self):
         r = score_trade(

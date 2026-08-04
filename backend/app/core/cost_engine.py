@@ -17,6 +17,7 @@
 21 档盈亏表(基准 = C' 新成本):
     21 个点,从 -10% 到 +10%,步长 1%
 """
+from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Literal, Optional
 
@@ -24,6 +25,43 @@ from typing import Literal, Optional
 # 精度常量
 PRICE_QUANTUM = Decimal("0.001")   # 价格 3 位小数
 MONEY_QUANTUM = Decimal("0.01")    # 金额 2 位小数
+
+
+@dataclass(frozen=True)
+class TradeFees:
+    """交易费用参数(GB-001 IR-4)
+
+    enabled=False 时完全不计费用(行为与旧版一致,双口径展示默认关闭)。
+    """
+    enabled: bool = False
+    commission_rate: Decimal = Decimal("0.00025")   # 佣金 万2.5
+    min_commission: Decimal = Decimal("5.00")        # 最低佣金 5 元
+    stamp_tax_rate: Decimal = Decimal("0.0005")      # 印花税 卖出 0.05%
+    transfer_fee_rate: Decimal = Decimal("0.00001")  # 过户费 沪深 0.001%(双向)
+
+    def __post_init__(self):
+        object.__setattr__(self, "commission_rate", Decimal(self.commission_rate))
+        object.__setattr__(self, "min_commission", Decimal(self.min_commission))
+        object.__setattr__(self, "stamp_tax_rate", Decimal(self.stamp_tax_rate))
+        object.__setattr__(self, "transfer_fee_rate", Decimal(self.transfer_fee_rate))
+
+
+def buy_fee(shares: int, price: Decimal, fees: Optional[TradeFees] = None) -> Decimal:
+    """买入费用 = max(佣金, 最低佣金) + 过户费"""
+    if fees is None or not fees.enabled:
+        return Decimal("0")
+    amount = Decimal(shares) * price
+    commission = max(amount * fees.commission_rate, fees.min_commission)
+    return commission + amount * fees.transfer_fee_rate
+
+
+def sell_fee(shares: int, price: Decimal, fees: Optional[TradeFees] = None) -> Decimal:
+    """卖出费用 = max(佣金, 最低佣金) + 印花税 + 过户费"""
+    if fees is None or not fees.enabled:
+        return Decimal("0")
+    amount = Decimal(shares) * price
+    commission = max(amount * fees.commission_rate, fees.min_commission)
+    return commission + amount * fees.stamp_tax_rate + amount * fees.transfer_fee_rate
 
 
 def _q_price(d: Decimal) -> Decimal:
@@ -42,6 +80,7 @@ def calculate_after_transaction(
     action: Literal["buy", "sell"],
     tx_shares: int,
     tx_price: Decimal,
+    fees: Optional[TradeFees] = None,
 ) -> dict:
     """计算交易后的持仓 + 已实现盈亏
 
@@ -51,6 +90,7 @@ def calculate_after_transaction(
         action: 'buy' 或 'sell'
         tx_shares: 本次交易股数(必须 > 0)
         tx_price: 本次交易价格(Decimal,必须 > 0)
+        fees: 交易费用参数(GB-001 IR-4)。None 或 enabled=False 时完全不计费。
 
     Returns:
         {
@@ -58,7 +98,10 @@ def calculate_after_transaction(
           "cost_after": Optional[Decimal],   # 清仓时 None
           "total_cost_after": Decimal,        # 剩余持仓的总成本
           "delta_cost": Decimal,              # 新成本 - 旧成本(清仓时 None)
-          "realized_pnl": Decimal,            # 已实现盈亏(本次交易产生)
+          "realized_pnl": Decimal,            # 已实现盈亏(不含费用,兼容旧版)
+          "realized_pnl_gross": Decimal,      # 已实现盈亏(不含费用)
+          "realized_pnl_net": Decimal,        # 已实现盈亏净额(扣除交易费用)
+          "fee_paid": Decimal,                # 本次交易产生的总费用
           "is_closed": bool,                   # 是否清仓
         }
 
@@ -72,7 +115,10 @@ def calculate_after_transaction(
 
     if action == "buy":
         new_shares = shares_before + tx_shares
-        new_total_cost = (cost_before * shares_before) + (tx_price * tx_shares)
+        tx_cost = tx_price * tx_shares
+        # IR-4:买入费用计入成本,提高下次卖出的成本基准
+        fee_paid = buy_fee(tx_shares, tx_price, fees)
+        new_total_cost = (cost_before * shares_before) + tx_cost + fee_paid
         new_cost = (new_total_cost / new_shares) if new_shares > 0 else Decimal("0")
         realized_pnl = Decimal("0")
         delta_cost = (new_cost - cost_before) if shares_before > 0 else new_cost
@@ -83,6 +129,9 @@ def calculate_after_transaction(
             "total_cost_after": _q_money(new_total_cost),
             "delta_cost": _q_price(delta_cost) if shares_before > 0 else _q_price(new_cost),
             "realized_pnl": _q_money(realized_pnl),
+            "realized_pnl_gross": _q_money(realized_pnl),
+            "realized_pnl_net": _q_money(realized_pnl),
+            "fee_paid": _q_money(fee_paid),
             "is_closed": False,
         }
 
@@ -98,6 +147,8 @@ def calculate_after_transaction(
     new_cost = avg_cost_before  # 剩余持仓成本不变
     new_total_cost = avg_cost_before * new_shares
     realized_pnl = (tx_price - avg_cost_before) * tx_shares
+    # IR-4:卖出费用从已实现盈亏中扣除
+    fee_paid = sell_fee(tx_shares, tx_price, fees)
 
     is_closed = new_shares == 0
     delta_cost = Decimal("0") if not is_closed else None
@@ -108,6 +159,9 @@ def calculate_after_transaction(
         "total_cost_after": _q_money(new_total_cost),
         "delta_cost": delta_cost,
         "realized_pnl": _q_money(realized_pnl),
+        "realized_pnl_gross": _q_money(realized_pnl),
+        "realized_pnl_net": _q_money(realized_pnl - fee_paid),
+        "fee_paid": _q_money(fee_paid),
         "is_closed": is_closed,
     }
 
@@ -165,6 +219,9 @@ __all__ = [
     "calculate_after_transaction",
     "build_pnl_grid",
     "calc",
+    "TradeFees",
+    "buy_fee",
+    "sell_fee",
     "PRICE_QUANTUM",
     "MONEY_QUANTUM",
 ]

@@ -263,6 +263,9 @@ export interface MainFundFlowItem {
 export interface MainFundFlowResponse {
   limit: number;
   items: MainFundFlowItem[];
+  estimated?: boolean; // GB-001 IR-6:估算值标记
+  method?: string;
+  source?: string;
 }
 
 /** 计算器(P3.2) */
@@ -285,6 +288,18 @@ export interface CalculatorAfter {
   totalCost: string;
   deltaCost: string | null;
   realizedPnl: string;
+  realizedPnlGross: string; // GB-001 IR-4:不含费用
+  realizedPnlNet: string;   // GB-001 IR-4:扣除费用
+  feePaid: string;          // GB-001 IR-4:本笔费用
+}
+
+/** 交易费用设置(GB-001 IR-4) */
+export interface CostSettings {
+  enabled: boolean;
+  commissionRate: string;
+  minCommission: string;
+  stampTaxRate: string;
+  transferFeeRate: string;
 }
 
 export interface PnlGridRow {

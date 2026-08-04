@@ -53,6 +53,28 @@ class LlmSettings(Base):
 
 
 # ============================================================
+# === v2.2:cost_settings 表(GB-001 IR-4 交易费用) ===
+# ============================================================
+
+class CostSettings(Base):
+    """交易费用设置(单行,id=1,GB-001 IR-4)
+
+    enabled=False 时双口径展示关闭,代价/盈亏完全不含费用(保持旧版行为)。
+    """
+    __tablename__ = "cost_settings"
+
+    id: Mapped[int] = mapped_column(default=1, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    commission_rate: Mapped[str] = mapped_column(String, default="0.00025")  # 万2.5
+    min_commission: Mapped[str] = mapped_column(String, default="5.00")       # 最低佣金
+    stamp_tax_rate: Mapped[str] = mapped_column(String, default="0.0005")     # 卖出印花税
+    transfer_fee_rate: Mapped[str] = mapped_column(String, default="0.00001")  # 过户费
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+
+# ============================================================
 # === MVP 核心:transactions / watchlist / trade_scores ===
 # ============================================================
 

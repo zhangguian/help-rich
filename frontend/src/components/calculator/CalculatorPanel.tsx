@@ -312,7 +312,7 @@ export function CalculatorPanel({
 
 function ResultGrid({ after }: { before: CalculatorBefore; after: CalculatorAfter }) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
       <Stat
         label={
           <span className="inline-flex items-center">
@@ -352,8 +352,16 @@ function ResultGrid({ after }: { before: CalculatorBefore; after: CalculatorAfte
             已实现盈亏<TermHint term="realized_pnl" />
           </span>
         }
-        value={`¥${decimalFormat(after.realizedPnl)}`}
-        color={Number(after.realizedPnl) >= 0 ? 'up' : 'down'}
+        value={`¥${decimalFormat(after.realizedPnlNet)}`}
+        color={Number(after.realizedPnlNet) >= 0 ? 'up' : 'down'}
+      />
+      <Stat
+        label="已实现(毛)"
+        value={`¥${decimalFormat(after.realizedPnlGross)}`}
+      />
+      <Stat
+        label="交易费用"
+        value={`¥${decimalFormat(after.feePaid)}`}
       />
     </div>
   );

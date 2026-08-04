@@ -7,6 +7,7 @@
 import asyncio
 import json
 from datetime import date
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -101,7 +102,10 @@ class TestExport:
 
 class TestImport:
     def test_import_requires_payload(self, client):
-        r = client.post("/api/admin/import", json={"payload": {}, "mode": "replace"})
+        r = client.post(
+            "/api/admin/import",
+            json={"payload": {}, "mode": "replace", "confirm": True},
+        )
         assert r.status_code == 400
         assert r.json()["detail"]["code"] == "INVALID_PAYLOAD"
 
@@ -111,6 +115,15 @@ class TestImport:
         )
         assert r.status_code == 400
         assert r.json()["detail"]["code"] == "UNSUPPORTED_MODE"
+
+    def test_import_replace_requires_confirm(self, client):
+        """GB-001 防误清:replace 模式不带 confirm=true 必须拒绝"""
+        r = client.post(
+            "/api/admin/import",
+            json={"payload": {"tables": {}}, "mode": "replace", "confirm": False},
+        )
+        assert r.status_code == 400
+        assert r.json()["detail"]["code"] == "CONFIRM_REQUIRED"
 
 
 class TestRoundTrip:
@@ -153,10 +166,10 @@ class TestRoundTrip:
         r = client.get("/api/admin/export")
         assert all(len(v) == 0 for v in r.json()["tables"].values())
 
-        # 5. 导入
+        # 5. 导入(防误清:replace 必须显式 confirm=true)
         r = client.post(
             "/api/admin/import",
-            json={"payload": exported, "mode": "replace"},
+            json={"payload": exported, "mode": "replace", "confirm": True},
         )
         assert r.status_code == 200
         body = r.json()
@@ -183,14 +196,23 @@ class TestRoundTrip:
 
 
 class TestBackup:
-    def test_backup_writes_file(self, client, tmp_path=None):
-        """P7.9:POST /admin/backup 写文件"""
+    def test_backup_writes_file_isolated_dir(self, client):
+        """P7.9:POST /admin/backup 写文件(GB-001:测试写入隔离目录,不得污染仓库 backups/)"""
         r = client.post("/api/admin/backup")
         assert r.status_code == 200
         body = r.json()
         assert body["ok"] is True
         assert "pre-" in body["path"]
         assert body["size_bytes"] > 0
+        # 隔离:备份必须落在 TEST_BACKUP_DIR(临时目录),不写仓库 backups/
+        import os
+
+        tmp_root = os.environ["TEST_BACKUP_DIR"].replace("\\", "/")
+        repo_root = Path(__file__).resolve().parents[1].parent
+        repo_backups = (repo_root / "backups").resolve()
+        written = Path(body["path"])
+        assert tmp_root in str(written).replace("\\", "/")
+        assert str(written).startswith(str(repo_backups)) is False
 
     def test_health(self, client):
         r = client.get("/api/admin/health")
