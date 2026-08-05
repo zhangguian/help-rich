@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import Link from 'next/link';
 import { AnimatePresence, motion } from 'framer-motion';
 import clsx from 'clsx';
 
@@ -20,6 +21,7 @@ import { MarketOverviewPage } from '@/components/market/MarketOverviewPage';
 import { NewsFeed } from '@/components/news/NewsFeed';
 import { PositionStatsCards } from '@/components/positions/PositionStatsCards';
 import { PositionSummaryTable } from '@/components/positions/PositionSummaryTable';
+import { StockFlowTab } from '@/components/positions/StockFlowTab';
 import { SectorBoard } from '@/components/sector/SectorBoard';
 import { SettingsPanel } from '@/components/settings/SettingsPanel';
 import { Button } from '@/components/ui/Button';
@@ -68,7 +70,7 @@ export default function Workbench() {
   const activeCodeRef = useRef<string | null>(null);
   const [showCalc, setShowCalc] = useState(false);
   const [showHealth, setShowHealth] = useState(false);
-  const [positionView, setPositionView] = useState<'kline' | 'table'>('kline');
+  const [positionView, setPositionView] = useState<'kline' | 'flow' | 'table'>('kline');
   // 自动刷新开关(默认关):开启后 15s 周期 fetchBase;同步到 localStorage
   // 初始一律 false;挂载后 useEffect 读 localStorage 修正 — 避免 SSR/CSR className 不匹配
   const [autoRefresh, setAutoRefresh] = useState<boolean>(false);
@@ -176,14 +178,20 @@ export default function Workbench() {
     apiGet<Quote>(`/quotes/${encodeURIComponent(code)}`)
       .then(setSelectedQuote)
       .catch(() => {});
-    // 恢复 IndexedDB 缓存(24h 内分析过的不再重新烧 token)
-    getAnalysisCache(code).then((cached) => {
-      if (activeCodeRef.current !== code) return;
-      setAnalysis(cached);
-      setAnalysisStarted(cached != null);
-    });
+    // 读 IndexedDB 缓存(24h 内命中);无缓存时不主动 fetch — 等用户点「开始分析」
+    void refreshAnalysisFromCache(code);
   }, []);
 
+  /** 仅读缓存:无缓存不显示分析,等用户手动触发 */
+  const refreshAnalysisFromCache = useCallback(async (code: string) => {
+    if (!code) return;
+    const cached = await getAnalysisCache(code);
+    if (activeCodeRef.current !== code) return;
+    setAnalysis(cached);
+    setAnalysisStarted(cached != null);
+  }, []);
+
+  /** 用户手动点「开始分析/重新分析」 — 调后端 + 写缓存(key 含 latestKlineDate) */
   const refreshAnalysis = useCallback(() => {
     const code = activeCode;
     if (!code) return;
@@ -193,7 +201,7 @@ export default function Workbench() {
       timeout: 60000,
     })
       .then((r) => {
-        setAnalysisCache(code, r);
+        void setAnalysisCache(code, r);
         if (activeCodeRef.current === code) setAnalysis(r);
       })
       .catch(() => {
@@ -395,6 +403,15 @@ export default function Workbench() {
                           >
                             🩺 持仓分析
                           </Button>
+                          <Link
+                            href={activeCode
+                              ? `/replay-history?code=${encodeURIComponent(activeCode)}`
+                              : '/replay-history'}
+                          >
+                            <Button size="sm" variant="secondary">
+                              📊 复盘历史
+                            </Button>
+                          </Link>
                         </div>
                       </div>
                     </GlassCard>
@@ -420,6 +437,18 @@ export default function Workbench() {
                           📈 K 线
                         </button>
                         <button
+                          onClick={() => setPositionView('flow')}
+                          disabled={!activeCode}
+                          className={clsx(
+                            'px-3 py-1.5 text-sm rounded-xl transition-colors ',
+                            positionView === 'flow'
+                              ? 'bg-accent-subtle text-accent border border-accent/25 liquid-glass'
+                              : 'bg-white/5 text-text-sec hover:text-text-pri border border-white/5 disabled:opacity-40 disabled:cursor-not-allowed',
+                          )}
+                        >
+                          📋 流水
+                        </button>
+                        <button
                           onClick={() => setPositionView('table')}
                           className={clsx(
                             'px-3 py-1.5 text-sm rounded-xl transition-colors ',
@@ -433,7 +462,7 @@ export default function Workbench() {
                       </div>
                     )}
                     {/* 右侧:周期切换(持仓表视图下隐藏,切回 K 线再显示) */}
-                    {!(tab === 'position' && positionView === 'table') && (
+                    {!(tab === 'position' && (positionView === 'table' || positionView === 'flow')) && (
                       <div className="flex items-center gap-1.5">
                         {PERIODS.map((p) => (
                           <button
@@ -455,6 +484,13 @@ export default function Workbench() {
 
                   {tab === 'position' && positionView === 'table' ? (
                     <PositionSummaryTable positions={positions} onSelect={selectStock} />
+                  ) : tab === 'position' && positionView === 'flow' && activeCode ? (
+                    <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+                      <StockFlowTab
+                        stockCode={activeCode}
+                        stockName={selectedQuote?.name ?? null}
+                      />
+                    </div>
                   ) : activeCode ? (
                     <div className="flex-1 min-h-0 overflow-y-auto">
                       {period === 'intraday' ? (
@@ -472,7 +508,11 @@ export default function Workbench() {
                     </div>
                   ) : (
                     <div className="flex-1 min-h-0 liquid-glass rounded-2xl flex items-center justify-center">
-                      <p className="text-text-ter text-sm">选择股票后显示 K 线图</p>
+                      <p className="text-text-ter text-sm">
+                        {tab === 'position' && positionView === 'flow'
+                          ? '先选一只股票才能查看流水与复盘'
+                          : '选择股票后显示 K 线图'}
+                      </p>
                     </div>
                   )}
                 </>

@@ -228,6 +228,33 @@ class DiagnoseOut(BaseModel):
     ai_status: Optional[str] = None
 
 
+class ReplaySummaryOut(BaseModel):
+    """GET/POST /api/diagnose/stock/{code}/summary 响应(v2.3 一键复盘)
+
+    window: 1d / 3d / 5d / 10d / 20d / 60d(交易日口径)
+    score_avg: 窗口内所有评分笔数均值(可空 — 窗口无评分时)
+    dimension_avg: {集中度: 12, 价格合理性: 8, ...}
+    top_issues: [{"dim": "价格合理性", "score": 8, "hint": "..."}, ...] 前 3 低分
+    ai_status: success / failed / no_key
+    summary_snapshot: 窗口内流水 / 持仓快照(供前端展示 + 历史追溯)
+    latest_tx_id: 缓存失效键(新流水触发重算)
+    """
+    stock_code: str
+    window: str
+    score_avg: Optional[str] = None  # Decimal-as-string
+    dimension_avg: dict
+    top_issues: list  # [{dim, score, hint}]
+    ai_comment: Optional[str] = None
+    ai_status: str
+    ai_provider: Optional[str] = None
+    ai_model: Optional[str] = None
+    ai_latency_ms: Optional[int] = None
+    summary_snapshot: dict
+    latest_tx_id: int
+    created_at: datetime
+    updated_at: datetime
+
+
 class FeedbackUpdate(BaseModel):
     """PUT /api/diagnose/{trade_id}/feedback body(P4.9)"""
     feedback: Optional[Literal["useful", "useless"]] = None

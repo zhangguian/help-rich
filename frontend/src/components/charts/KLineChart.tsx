@@ -162,7 +162,7 @@ function stateOfVolume(code: string | null): LegendState | null {
 /**
  * K 线图(K线智能分析 v1 升级版)
  *
- * - 数据源:`/api/kline/{code}/indicators?period=&limit=`(轻量,含全量指标序列,不触发 LLM)
+ * - 数据源:`/api/kline/{code}/indicators?period=&limit=300`(轻量,含全量指标序列,不触发 LLM)
  * - 主图:candlestick 红涨绿跌 + MA5/10/20/60 四线 + BOLL 上中下轨(虚线)
  * - 副图区:成交量柱 + MACD(HIST+DIF/DEA)+ KDJ(K/D/J);多 price scale 堆叠
  * - 信号标注:`series.setMarkers` 显示金叉死叉/形态/诱多诱空(§10.1)
@@ -350,7 +350,7 @@ export function KLineChart({
     window.addEventListener('resize', onResize);
 
     apiGet<KlineIndicatorsResponse>(
-      `/kline/${encodeURIComponent(stockCode)}/indicators?period=${period}&limit=120`,
+      `/kline/${encodeURIComponent(stockCode)}/indicators?period=${period}&limit=300`,
     )
       .then((d) => {
         if (disposed) return;

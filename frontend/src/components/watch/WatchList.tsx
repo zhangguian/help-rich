@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import clsx from 'clsx';
-import { ChevronDown, Star } from 'reicon-react';
+import { ChevronDown, Edit, Star } from 'reicon-react';
 
 import { apiDelete, apiPatch, apiPost } from '@/lib/api';
 import { useUIStore } from '@/stores/useUIStore';
@@ -14,6 +14,7 @@ import type { Quote } from '@/lib/types';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { LiquidModal } from '@/components/ui/LiquidModal';
 import { Button } from '@/components/ui/Button';
+import { TransactionForm } from '@/components/transaction/TransactionForm';
 
 export interface WatchItem {
   code: string;
@@ -48,6 +49,9 @@ export function WatchList({
   const [addForm, setAddForm] = useState({ stockCode: '', stockName: '' });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: WatchItem } | null>(null);
   const [removeTarget, setRemoveTarget] = useState<WatchItem | null>(null);
+  // 设置持仓弹窗(直设股数/成本 or 录入流水)
+  const [setPosTarget, setSetPosTarget] = useState<WatchItem | null>(null);
+  const [posForm, setPosForm] = useState({ shares: '', costPrice: '' });
   // portal 挂载标记:只在客户端渲染 portal,避免 SSR/CSR hydration mismatch
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -82,6 +86,11 @@ export function WatchList({
     if (v == null) return 'text-text-ter';
     return v > 0 ? 'text-up' : v < 0 ? 'text-down' : 'text-text-ter';
   };
+
+  // 渲染弹窗到 body:绕开 GlassCard.backdrop-filter 创建的 containing block,
+  // 否则 fixed 定位相对 aside 收缩,无法在全宽显示
+  const renderModal = (modal: React.ReactNode) =>
+    mounted ? createPortal(modal, document.body) : null;
 
   const submitAdd = async () => {
     const code = addForm.stockCode.trim();
@@ -131,6 +140,39 @@ export function WatchList({
   const onContextMenu = (e: React.MouseEvent, item: WatchItem) => {
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY, item });
+  };
+
+  const submitSetPosition = async () => {
+    if (!setPosTarget) return;
+    const shares = Number(posForm.shares);
+    const price = posForm.costPrice.trim();
+    if (!Number.isFinite(shares) || shares <= 0) {
+      showToast({ type: 'warning', message: '请输入有效股数' });
+      return;
+    }
+    if (!price || Number.isNaN(Number(price)) || Number(price) <= 0) {
+      showToast({ type: 'warning', message: '请输入有效每股成本价' });
+      return;
+    }
+    try {
+      await apiPost('/positions', {
+        stockCode: setPosTarget.code,
+        stockName: setPosTarget.name ?? undefined,
+        shares,
+        costPrice: price,
+      });
+      showToast({ type: 'success', message: `${setPosTarget.name ?? setPosTarget.code} 持仓已保存` });
+      setSetPosTarget(null);
+      setPosForm({ shares: '', costPrice: '' });
+      onChanged();
+    } catch {
+      /* toast 已由拦截器处理 */
+    }
+  };
+
+  const openSetPos = (item: WatchItem) => {
+    setSetPosTarget(item);
+    setPosForm({ shares: '', costPrice: '' });
   };
 
   const toggleFavorite = async (code: string, next: boolean) => {
@@ -262,6 +304,20 @@ export function WatchList({
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
+                        openSetPos(it);
+                      }}
+                      className="inline-flex items-center shrink-0"
+                      title={it.inPosition ? '调整持仓(股数/成本)' : '设为持仓(股数/成本)'}
+                    >
+                      <Edit
+                        size={13}
+                        className="text-text-ter/60 hover:text-accent"
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
                         void toggleFavorite(it.code, !it.isFavorite);
                       }}
                       className="inline-flex items-center shrink-0"
@@ -317,56 +373,60 @@ export function WatchList({
         </Button>
       </div>
 
-      <LiquidModal
-        open={showAdd}
-        onClose={() => setShowAdd(false)}
-        title="添加自选"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setShowAdd(false)} className=" rounded-xl">
-              取消
-            </Button>
-            <Button onClick={submitAdd} className="liquid-glass rounded-xl">添加</Button>
-          </>
-        }
-      >
-        <div className="space-y-3">
-          <input
-            value={addForm.stockCode}
-            onChange={(e) => setAddForm({ ...addForm, stockCode: e.target.value })}
-            placeholder="股票代码,如 600519"
-            className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
-          />
-          <input
-            value={addForm.stockName}
-            onChange={(e) => setAddForm({ ...addForm, stockName: e.target.value })}
-            placeholder="名称(可选)"
-            className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
-          />
-        </div>
-      </LiquidModal>
+      {renderModal(
+        <LiquidModal
+          open={showAdd}
+          onClose={() => setShowAdd(false)}
+          title="添加自选"
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setShowAdd(false)} className=" rounded-xl">
+                取消
+              </Button>
+              <Button onClick={submitAdd} className="liquid-glass rounded-xl">添加</Button>
+            </>
+          }
+        >
+          <div className="space-y-3">
+            <input
+              value={addForm.stockCode}
+              onChange={(e) => setAddForm({ ...addForm, stockCode: e.target.value })}
+              placeholder="股票代码,如 600519"
+              className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
+            />
+            <input
+              value={addForm.stockName}
+              onChange={(e) => setAddForm({ ...addForm, stockName: e.target.value })}
+              placeholder="名称(可选)"
+              className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
+            />
+          </div>
+        </LiquidModal>,
+      )}
 
-      <LiquidModal
-        open={clearTarget !== null}
-        onClose={() => setClearTarget(null)}
-        title={`一键清仓 ${clearTarget?.name ?? clearTarget?.code ?? ''}`}
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setClearTarget(null)}>
-              取消
-            </Button>
-            <Button onClick={submitClear}>确认清仓</Button>
-          </>
-        }
-      >
-        <p className="text-sm text-text-sec">
-          将以实时价
-          <span className="font-mono text-text-pri">
-            {' '}{clearTarget?.quote?.currentPrice ?? '--'}{' '}
-          </span>
-          生成卖出流水并结算实际盈亏。确认?
-        </p>
-      </LiquidModal>
+      {renderModal(
+        <LiquidModal
+          open={clearTarget !== null}
+          onClose={() => setClearTarget(null)}
+          title={`一键清仓 ${clearTarget?.name ?? clearTarget?.code ?? ''}`}
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setClearTarget(null)}>
+                取消
+              </Button>
+              <Button onClick={submitClear}>确认清仓</Button>
+            </>
+          }
+        >
+          <p className="text-sm text-text-sec">
+            将以实时价
+            <span className="font-mono text-text-pri">
+              {' '}{clearTarget?.quote?.currentPrice ?? '--'}{' '}
+            </span>
+            生成卖出流水并结算实际盈亏。确认?
+          </p>
+        </LiquidModal>,
+      )}
 
       {/* 右键菜单:portal 到 body 避开 GlassCard.backdrop-filter 创建的 containing block,
           否则 fixed 定位会相对 GlassCard 偏移 */}
@@ -386,6 +446,16 @@ export function WatchList({
           >
             删除自选
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              openSetPos(contextMenu.item);
+              setContextMenu(null);
+            }}
+            className="w-full text-left px-3 py-1.5 rounded-lg text-xs text-text-sec hover:bg-white/10 hover:text-text-pri transition-colors"
+          >
+            {contextMenu.item.inPosition ? '调整持仓' : '设为持仓'}
+          </button>
           {contextMenu.item.inPosition && (
             <button
               type="button"
@@ -403,29 +473,95 @@ export function WatchList({
       )}
 
       {/* 删除确认 */}
-      <LiquidModal
-        open={removeTarget !== null}
-        onClose={() => setRemoveTarget(null)}
-        title={`删除 ${removeTarget?.name ?? removeTarget?.code ?? ''}`}
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setRemoveTarget(null)}>
-              取消
-            </Button>
-            <Button onClick={submitRemove}>确认删除</Button>
-          </>
-        }
-      >
-        <div className="text-sm text-text-sec space-y-2">
-          <p>
-            将删除「{removeTarget?.code}」
-            {removeTarget?.inPosition ? '持仓及其关联流水' : '自选'}。
-          </p>
-          {removeTarget?.inPosition && (
-            <p className="text-text-ter text-xs">此操作不可撤销，请确认。</p>
-          )}
-        </div>
-      </LiquidModal>
+      {renderModal(
+        <LiquidModal
+          open={removeTarget !== null}
+          onClose={() => setRemoveTarget(null)}
+          title={`删除 ${removeTarget?.name ?? removeTarget?.code ?? ''}`}
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => setRemoveTarget(null)}>
+                取消
+              </Button>
+              <Button onClick={submitRemove}>确认删除</Button>
+            </>
+          }
+        >
+          <div className="text-sm text-text-sec space-y-2">
+            <p>
+              将删除「{removeTarget?.code}」
+              {removeTarget?.inPosition ? '持仓及其关联流水' : '自选'}。
+            </p>
+            {removeTarget?.inPosition && (
+              <p className="text-text-ter text-xs">此操作不可撤销，请确认。</p>
+            )}
+          </div>
+        </LiquidModal>,
+      )}
+
+      {/* 设置持仓:直设股数/成本 or 录入流水(流水自动同步持仓) */}
+      {renderModal(
+        <LiquidModal
+          open={setPosTarget !== null}
+          onClose={() => setSetPosTarget(null)}
+          size="lg"
+          title={`${setPosTarget?.inPosition ? '调整持仓' : '设为持仓'} ${setPosTarget?.name ?? setPosTarget?.code ?? ''}`}
+        >
+          <div className="space-y-5">
+            {/* ① 直接设置股数 + 成本 */}
+            <div>
+              <div className="text-xs text-text-sec mb-2">直接设置</div>
+              <div className="flex gap-2 items-end">
+                <div className="flex-1">
+                <label className="text-xs text-text-ter block mb-1">股数</label>
+                <input
+                  type="number"
+                  min={1}
+                  step={100}
+                  value={posForm.shares}
+                  onChange={(e) => setPosForm({ ...posForm, shares: e.target.value })}
+                  placeholder="100"
+                  className="w-full px-2 py-1.5 text-sm rounded-lg bg-bg-surface border border-border-strong focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
+                />
+                </div>
+                <div className="flex-1">
+                <label className="text-xs text-text-ter block mb-1">每股成本价</label>
+                <input
+                  type="number"
+                  step="0.001"
+                  value={posForm.costPrice}
+                  onChange={(e) => setPosForm({ ...posForm, costPrice: e.target.value })}
+                  placeholder="10.500"
+                  className="w-full px-2 py-1.5 text-sm rounded-lg bg-bg-surface border border-border-strong focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
+                />
+                </div>
+                <Button onClick={submitSetPosition} className="liquid-glass rounded-xl" size="sm">
+                  保存
+                </Button>
+              </div>
+              <p className="text-xs text-text-ter mt-1.5">
+                直接设置会覆盖当前持仓；或改用下方流水录入（推荐，自动同步成本与股数）。
+              </p>
+            </div>
+
+            {/* ② 录入流水(自动同步持仓) */}
+            <div className="border-t border-white/10 pt-4">
+              <div className="text-xs text-text-sec mb-2">录入流水（自动同步持仓）</div>
+              {setPosTarget && (
+                <TransactionForm
+                  initialStockCode={setPosTarget.code}
+                  onCancel={() => setSetPosTarget(null)}
+                  onSuccess={() => {
+                    setSetPosTarget(null);
+                    showToast({ type: 'success', message: '流水已录入，持仓已同步' });
+                    onChanged();
+                  }}
+                />
+              )}
+            </div>
+          </div>
+        </LiquidModal>,
+      )}
     </GlassCard>
   );
 }

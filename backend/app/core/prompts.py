@@ -95,6 +95,87 @@ def build_ocr_prompt(ocr_text: str) -> str:
     return OCR_USER_TEMPLATE.format(ocr_text=ocr_text)
 
 
+# ============================================================
+# === 一键复盘(per 股票 + 窗口聚合,v2.3) ===
+# ============================================================
+
+# 系统提示:克制的复盘助手(聚合视图,与 DIAGNOSE_SYSTEM 风格保持一致)
+REPLAY_SYSTEM = (
+    "你是克制的复盘助手,基于给定的窗口内流水 + 评分聚合 + 持仓快照,"
+    "用 3 段(亮点/问题/建议)写 200~300 字综合复盘。只基于给定数据,"
+    "不预测涨跌,不给出买卖指令,引用具体数字,末尾固定加"
+    '"以上不构成投资建议"。'
+)
+
+# 用户模板占位符:{window_label}{tx_count}{buy_count}{sell_count}{score_avg}
+# {dimension_avg}{top_issues}{concentration}{realized_pnl}{snapshot_lines}{watchlist_hint}
+REPLAY_USER_TEMPLATE = """数据窗口:{window_label}(共 {tx_count} 笔流水,买入 {buy_count} 笔 / 卖出 {sell_count} 笔)
+
+该窗口评分聚合:
+- 平均分 {score_avg}
+- 5 维度均值:{dimension_avg_lines}
+
+Top 3 问题维度(低分优先):
+{top_issues_lines}
+
+持仓上下文:
+- 当前持仓占比 {concentration_pct}%
+- 已实现盈亏(本次窗口内):¥{realized_pnl}
+- 自选股状态:{watchlist_hint}
+
+流水明细(本次窗口内):
+{snapshot_lines}
+
+任务(3 段输出):
+1) 亮点:本次窗口内做得好的 1~2 点(引用具体数据)
+2) 问题:本次窗口内主要的 1~2 个操作问题(引用维度低分原因)
+3) 建议:下次类似场景的 1~2 条可执行改进(具体数字)
+"""
+
+
+def build_replay_user_prompt(
+    window_label: str,
+    tx_count: int,
+    buy_count: int,
+    sell_count: int,
+    score_avg: str,
+    dimension_avg: dict,
+    top_issues: list,
+    concentration_pct: str,
+    realized_pnl: str,
+    snapshot_lines: str,
+    is_in_watchlist: bool,
+) -> str:
+    """组装一键复盘用户消息"""
+    dimension_avg_lines = "、".join(
+        f"{k} {v}分" for k, v in dimension_avg.items()
+    ) if dimension_avg else "无评分数据(窗口内无单笔 diagnose)"
+
+    top_issues_lines = "、".join(
+        f"{it['dim']} {it['score']}分({it['hint']})"
+        for it in top_issues
+    ) if top_issues else "无明显低分维度"
+
+    if is_in_watchlist:
+        watchlist_hint = "在自选股中"
+    else:
+        watchlist_hint = "不在自选股中(可考虑加入自选持续观察)"
+
+    return REPLAY_USER_TEMPLATE.format(
+        window_label=window_label,
+        tx_count=tx_count,
+        buy_count=buy_count,
+        sell_count=sell_count,
+        score_avg=score_avg,
+        dimension_avg_lines=dimension_avg_lines,
+        top_issues_lines=top_issues_lines,
+        concentration_pct=concentration_pct,
+        realized_pnl=realized_pnl,
+        snapshot_lines=snapshot_lines,
+        watchlist_hint=watchlist_hint,
+    )
+
+
 __all__ = [
     "DIAGNOSE_SYSTEM",
     "DIAGNOSE_USER_TEMPLATE",
@@ -103,4 +184,7 @@ __all__ = [
     "OCR_SYSTEM",
     "OCR_USER_TEMPLATE",
     "build_ocr_prompt",
+    "REPLAY_SYSTEM",
+    "REPLAY_USER_TEMPLATE",
+    "build_replay_user_prompt",
 ]

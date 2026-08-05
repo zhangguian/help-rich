@@ -98,6 +98,20 @@ export function AnalysisPanel({
           </Button>
         </div>
 
+        {/* 数据截至 + 现价(盘中实时 vs K 线收盘) */}
+        {analysis && (
+          <div className="flex items-center justify-between text-xs text-text-ter">
+            <span>
+              📅 数据截至 {analysis.latestKlineDate ?? '—'} 收盘
+              {analysis.currentPrice && Number(analysis.currentPrice) !== ind?.latestClose && (
+                <span className="text-up ml-2">
+                  · 实时 ¥{analysis.currentPrice}
+                </span>
+              )}
+            </span>
+          </div>
+        )}
+
         <AnimatePresence mode="wait">
           {loading ? (
             <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -125,8 +139,8 @@ export function AnalysisPanel({
                 </span>
                 <span className="text-sm text-text-sec">{analysis.ai.viewReason}</span>
               </div>
-              <p className="text-sm text-text-sec leading-relaxed">{analysis.ai.trend}</p>
-              <p className="text-sm text-text-sec leading-relaxed">{analysis.ai.volumeNote}</p>
+              <p className="text-sm text-text-sec leading-relaxed whitespace-pre-wrap">{analysis.ai.trend}</p>
+              <p className="text-sm text-text-sec leading-relaxed whitespace-pre-wrap">{analysis.ai.volumeNote}</p>
               {analysis.ai.keyLevels.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                   {analysis.ai.keyLevels.map((lvl, i) => (
@@ -143,11 +157,12 @@ export function AnalysisPanel({
               )}
               <div className="rounded-xl bg-accent-subtle/60 border border-accent/20 p-3">
                 <div className="text-xs text-accent font-semibold mb-1">操作参考</div>
-                <p className="text-sm text-text-pri leading-relaxed">{analysis.ai.advice}</p>
+                <p className="text-sm text-text-pri leading-relaxed whitespace-pre-wrap">{analysis.ai.advice}</p>
               </div>
-              <p className="text-xs text-text-ter leading-relaxed">
-                ⚠ {analysis.ai.riskWarning}
-              </p>
+              <div className="text-xs text-text-ter leading-relaxed bg-warn-bg/30 border border-warn/20 rounded-lg p-3 space-y-1.5 whitespace-pre-wrap">
+                <p className="font-semibold text-warn">⚠ 风险提示</p>
+                <p>{analysis.ai.riskWarning}</p>
+              </div>
             </motion.div>
           ) : started ? (
             <motion.div

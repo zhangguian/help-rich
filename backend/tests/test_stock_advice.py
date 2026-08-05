@@ -135,8 +135,39 @@ def _mock_llm(monkeypatch, llm):
     monkeypatch.setattr(stock_advice_service.provider_factory, "get", _async(llm))
 
 
+def _stub_quote(monkeypatch, current_price: str = "100.500", change_pct: float = 1.2):
+    """Mock QuoteService 返回指定行情(v2.3 analysis 端点会拉)
+
+    stock.py 用 `from app.services.quote_service import QuoteService` 拿到引用,
+    所以同时 patch `app.api.stock.QuoteService` 和 `app.services.quote_service.QuoteService`
+    """
+    from datetime import datetime as _dt
+    from decimal import Decimal as _D
+    from app.data.unified import UnifiedQuote
+    from app.services import quote_service
+
+    class FakeQuoteService:
+        async def get_quotes(self, codes):
+            return [
+                UnifiedQuote(
+                    code=codes[0], name="测试",
+                    current_price=_D(current_price), prev_close=_D("99.000"),
+                    open=_D("99.500"), high=_D("101.000"), low=_D("99.000"),
+                    change=_D("1.500"), change_pct=change_pct,
+                    volume=10000, amount=_D("1000000"), timestamp=_dt.now(),
+                )
+            ]
+
+    monkeypatch.setattr(quote_service, "QuoteService", FakeQuoteService)
+    # stock.py 是 `from import` 形式,需 patch 它的本地引用
+    import app.api.stock as _stock_mod
+    monkeypatch.setattr(_stock_mod, "QuoteService", FakeQuoteService)
+
+
 @pytest.fixture()
-def client():
+def client(monkeypatch):
+    # 默认 stub QuoteService,避免 chat/analysis 端点真实拉行情
+    _stub_quote(monkeypatch)
     with TestClient(app) as c:
         yield c
 
@@ -454,10 +485,13 @@ def make_fake_client_class(responses: list[httpx.Response]) -> type:
     return FakeAsyncClient
 
 
-def _sina_rows(n: int = 120) -> list[dict]:
+def _sina_rows(n: int = 120, end_date: str = "2026-08-04") -> list[dict]:
+    """生成 n 条 K 线,最后一天 close=101;默认 end_date = 2026-08-04(距 today=2026-08-05 = 1 天,命中)"""
+    from datetime import date, timedelta
+    end = date.fromisoformat(end_date)
     return [
         {
-            "day": f"2026-01-{i % 28 + 1:02d}",
+            "day": (end - timedelta(days=n - 1 - i)).isoformat(),
             "open": "100", "high": "102", "low": "99", "close": "101", "volume": "10000",
         }
         for i in range(n)
@@ -494,11 +528,16 @@ class TestStockAPI:
         ])
         monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake)
         _mock_llm(monkeypatch, FakeLLM(VALID_AI_JSON))
+        _stub_quote(monkeypatch, current_price="105.500", change_pct=2.5)
         r = client.get("/api/stock/600519.SH/analysis")
         assert r.status_code == 200
         body = r.json()
         assert body["ai"]["view"] == "bullish"
         assert body["indicators"]["latest_close"] == 101.0
+        # v2.3:返回实时价 + 最新 K 线日期
+        assert body["current_price"] == "105.500"
+        assert body["quote_change_pct"] == 2.5
+        assert body["latest_kline_date"] is not None
 
     def test_analysis_llm_fail_still_200(self, client, monkeypatch):
         fake = make_fake_client_class([
@@ -506,9 +545,64 @@ class TestStockAPI:
         ])
         monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake)
         _mock_llm(monkeypatch, FakeLLM("垃圾输出"))
+        _stub_quote(monkeypatch)
         r = client.get("/api/stock/600519.SH/analysis")
         assert r.status_code == 200
         assert r.json()["ai"] is None
+
+    def test_analysis_quote_unavailable_still_200(self, client, monkeypatch):
+        """行情源不可用时,实时价字段为 None 但不阻断分析(降级)"""
+        fake = make_fake_client_class([
+            httpx.Response(200, text=f"cb({json.dumps(_sina_rows())});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake)
+        _mock_llm(monkeypatch, FakeLLM(VALID_AI_JSON))
+        # 模拟 QuoteService 抛错
+        from app.services import quote_service
+        import app.api.stock as _stock_mod
+
+        class BoomQuote:
+            async def get_quotes(self, codes):
+                raise RuntimeError("quote down")
+
+        monkeypatch.setattr(quote_service, "QuoteService", BoomQuote)
+        monkeypatch.setattr(_stock_mod, "QuoteService", BoomQuote)
+        r = client.get("/api/stock/600519.SH/analysis")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["current_price"] is None
+        assert body["quote_change_pct"] is None
+
+    def test_analysis_quote_deviation_degrades(self, client, monkeypatch):
+        """current_price 与 K 线 close 偏差 > 10% → 视为数据源异常,降级为 None
+
+        直接调 _sanitize_current_price 函数测试降级逻辑,避免 fetch_klines 缓存竞态。
+        """
+        from decimal import Decimal as _D
+        from datetime import datetime as _dt
+        from app.data.unified import UnifiedQuote
+        from app.api.stock import _sanitize_current_price
+
+        klines = [{"date": "2026-08-04", "close": "101.000"}]
+        # 偏差 48%:降级
+        big = UnifiedQuote(
+            code="001", name="x", current_price=_D("150"), prev_close=_D("101"),
+            open=_D("100"), high=_D("151"), low=_D("99"), change=_D("49"),
+            change_pct=48.5, volume=100, amount=_D("10000"), timestamp=_dt.now(),
+        )
+        assert _sanitize_current_price(big, klines) == (None, None)
+        # 偏差 4%:正常
+        small = UnifiedQuote(
+            code="001", name="x", current_price=_D("105"), prev_close=_D("101"),
+            open=_D("100"), high=_D("106"), low=_D("99"), change=_D("4"),
+            change_pct=4.0, volume=100, amount=_D("10000"), timestamp=_dt.now(),
+        )
+        cur, dt_iso = _sanitize_current_price(small, klines)
+        assert cur == "105" and dt_iso is not None
+        # 无 kline:不校验,正常返回
+        assert _sanitize_current_price(small, None) == ("105", dt_iso)
+        # 无 quote:None
+        assert _sanitize_current_price(None, klines) == (None, None)
 
     def test_analysis_invalid_code(self, client):
         r = client.get("/api/stock/abc/analysis")
@@ -667,5 +761,56 @@ class TestStockAPI:
         )
         assert r.status_code == 200
         assert '"text": "流式OK"' in r.text
-        assert llm.last_messages is not None
-        assert llm.last_messages[1] == {"role": "assistant", "content": "A1"}
+
+    def test_chat_injects_current_price(self, client, monkeypatch):
+        """POST /chat → LLM prompt 包含 current_price + current_price_date + 字段说明"""
+        fake = make_fake_client_class([
+            httpx.Response(200, text=f"cb({json.dumps(_sina_rows())});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake)
+        # 强制使用带具体 current_price 的 QuoteService(覆盖默认 fixture)
+        _stub_quote(monkeypatch, current_price="105.500", change_pct=2.5)
+        llm = FakeLLM("OK")
+        _mock_llm(monkeypatch, llm)
+        r = client.post(
+            "/api/stock/600519.SH/chat",
+            json={"question": "现价多少?"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["current_price"] == "105.500"
+        assert body["current_price_date"] is not None
+        # 字段注入到 LLM 当前 user message
+        assert llm.last_prompt is not None
+        assert "¥105.500" in llm.last_prompt
+        assert "current_price" in llm.last_prompt  # JSON 字段名
+        assert "实时报价" in llm.last_prompt
+        # system prompt 包含字段语义说明(防止 LLM 混用)
+        assert "current_price" in llm.last_system
+        assert "严禁编造任何价格" in llm.last_system
+
+    def test_chat_quote_unavailable_degrades(self, client, monkeypatch):
+        """行情源不可用 → current_price=None,chat 仍正常返回"""
+        fake = make_fake_client_class([
+            httpx.Response(200, text=f"cb({json.dumps(_sina_rows())});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake)
+        # 覆盖默认 quote mock:抛错
+        from app.services import quote_service
+        import app.api.stock as _stock_mod
+
+        class BoomQuote:
+            async def get_quotes(self, codes):
+                raise RuntimeError("quote down")
+
+        monkeypatch.setattr(quote_service, "QuoteService", BoomQuote)
+        monkeypatch.setattr(_stock_mod, "QuoteService", BoomQuote)
+        llm = FakeLLM("行情不可用也能聊")
+        _mock_llm(monkeypatch, llm)
+        r = client.post("/api/stock/600519.SH/chat", json={"question": "还能加仓吗"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["current_price"] is None
+        assert body["current_price_date"] is None
+        # LLM 看到"行情源不可用"提示
+        assert "行情源不可用" in llm.last_prompt

@@ -24,7 +24,7 @@ import { Button } from '../ui/Button';
  * - [诊断] 按钮:显式触发重新评分(异步)
  * - [删除] 按钮
  */
-export function TransactionTable({ refreshKey }: { refreshKey?: number }) {
+export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: number; stockCode?: string }) {
   const router = useRouter();
   const showToast = useUIStore((s) => s.showToast);
   useSseSubscription();
@@ -50,7 +50,10 @@ export function TransactionTable({ refreshKey }: { refreshKey?: number }) {
     const fetchData = async () => {
       setLoading(true);
       try {
-        const resp = await apiGet<TransactionListResponse>('/transactions');
+        const url = stockCode
+          ? `/transactions?stock_code=${encodeURIComponent(stockCode)}&limit=200`
+          : '/transactions?limit=200';
+        const resp = await apiGet<TransactionListResponse>(url);
         if (!cancelled) {
           setData(resp.items);
           reset();
@@ -70,7 +73,7 @@ export function TransactionTable({ refreshKey }: { refreshKey?: number }) {
     return () => {
       cancelled = true;
     };
-  }, [refreshKey, reset, setComment, setScore]);
+  }, [refreshKey, stockCode, reset, setComment, setScore]);
 
   const handleDelete = async (id: number) => {
     if (!window.confirm(`确认删除交易 #${id}?`)) return;

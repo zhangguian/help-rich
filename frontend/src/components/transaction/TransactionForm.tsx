@@ -32,9 +32,11 @@ type FormData = z.infer<typeof schema>;
 interface TransactionFormProps {
   onSuccess?: (tx: Transaction) => void;
   onCancel?: () => void;
+  /** 预填股票代码(外部弹窗场景,如持仓/自选录入流水);输入框将只读 */
+  initialStockCode?: string;
 }
 
-export function TransactionForm({ onSuccess, onCancel }: TransactionFormProps) {
+export function TransactionForm({ onSuccess, onCancel, initialStockCode }: TransactionFormProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,7 +48,7 @@ export function TransactionForm({ onSuccess, onCancel }: TransactionFormProps) {
   } = useForm<FormData>({
     resolver: zodResolver(schema) as never, // exactOptionalPropertyTypes 兼容
     defaultValues: {
-      stockCode: '',
+      stockCode: initialStockCode ?? '',
       action: 'buy' as const,
       shares: 500,
       price: '',
@@ -78,7 +80,7 @@ export function TransactionForm({ onSuccess, onCancel }: TransactionFormProps) {
   };
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+    <form onSubmit={handleSubmit(onSubmit)} noValidate className="space-y-4">
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-sm font-medium mb-1">股票代码</label>
@@ -87,7 +89,10 @@ export function TransactionForm({ onSuccess, onCancel }: TransactionFormProps) {
             inputMode="numeric"
             maxLength={12}
             placeholder="600519 或 600519.SH"
-            className="w-full px-3 py-2 border border-border-strong rounded-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+            readOnly={!!initialStockCode}
+            className={`w-full px-3 py-2 border border-border-strong rounded-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface ${
+              initialStockCode ? 'opacity-70 cursor-not-allowed' : ''
+            }`}
             {...register('stockCode')}
           />
           {errors.stockCode && (
@@ -125,7 +130,7 @@ export function TransactionForm({ onSuccess, onCancel }: TransactionFormProps) {
           <label className="block text-sm font-medium mb-1">交易日期</label>
           <input
             type="date"
-            className="w-full px-3 py-2 border border-border-strong rounded-sm focus:outline-none focus:ring-2 focus:ring-accent"
+            className="w-full px-3 py-2 border border-border-strong rounded-sm focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface"
             {...register('tradeDate')}
           />
           {errors.tradeDate && (
@@ -139,7 +144,7 @@ export function TransactionForm({ onSuccess, onCancel }: TransactionFormProps) {
             type="number"
             min={1}
             step={100}
-            className="w-full px-3 py-2 border border-border-strong rounded-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+            className="w-full px-3 py-2 border border-border-strong rounded-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface"
             {...register('shares', { valueAsNumber: true })}
           />
           {errors.shares && (
@@ -154,7 +159,7 @@ export function TransactionForm({ onSuccess, onCancel }: TransactionFormProps) {
           type="text"
           inputMode="decimal"
           placeholder="10.500"
-          className="w-full px-3 py-2 border border-border-strong rounded-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent"
+          className="w-full px-3 py-2 border border-border-strong rounded-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface"
           {...register('price')}
         />
         {errors.price && (
@@ -168,7 +173,7 @@ export function TransactionForm({ onSuccess, onCancel }: TransactionFormProps) {
           type="text"
           maxLength={200}
           placeholder="看好银行板块..."
-          className="w-full px-3 py-2 border border-border-strong rounded-sm focus:outline-none focus:ring-2 focus:ring-accent"
+          className="w-full px-3 py-2 border border-border-strong rounded-sm focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface"
           {...register('note')}
         />
         {errors.note && (

@@ -72,8 +72,12 @@ def _load_context_trades(all_tx: list, target_id: int):
 def position_before_stock(
     before_trades: list, stock_code: str
 ) -> Position | None:
-    """目标交易之前该股票的持仓(流水聚合,供诊断上下文使用)"""
-    pos = aggregate_positions(before_trades)
+    """目标交易之前该股票的持仓(流水聚合,供诊断上下文使用)
+
+    strict=False:与 v0.4.0 持仓主数据语义一致,允许 sell 超过纯流水聚合
+    (导入基准 + 仅卖场景,如 001896 持仓 200 + 流水仅 sell 100)
+    """
+    pos = aggregate_positions(before_trades, strict=False, keep_zero=False)
     for p in pos:
         if p.stock_code == stock_code:
             return p
@@ -140,7 +144,8 @@ class DiagnoseService:
 
         cur = await get_position(trade.stock_code)
         # 全部流水聚合(含本交易) → delta = 持仓表当前 - 流水聚合
-        flow_all = aggregate_positions(all_tx)
+        # strict=False:与 capture_delta/recalc_position 一致,允许 sell 超过纯流水聚合
+        flow_all = aggregate_positions(all_tx, strict=False, keep_zero=False)
         flow_all_stock = next(
             (p for p in flow_all if p.stock_code == trade.stock_code), None
         )

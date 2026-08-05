@@ -133,6 +133,89 @@ export interface FeedbackUpdate {
   feedback: 'useful' | 'useless' | null;
 }
 
+/** 一键复盘聚合结果(v2.3) */
+export type ReplayWindow = '1d' | '3d' | '5d' | '10d' | '20d' | '60d';
+
+export interface ReplaySummary {
+  stockCode: string;
+  window: ReplayWindow;
+  scoreAvg: string | null;
+  dimensionAvg: Record<string, number>;
+  topIssues: Array<{ dim: string; score: number; hint: string }>;
+  aiComment: string | null;
+  aiStatus: 'success' | 'failed' | 'no_key';
+  aiProvider: string | null;
+  aiModel: string | null;
+  aiLatencyMs: number | null;
+  summarySnapshot: {
+    txCount: number;
+    buyCount: number;
+    sellCount: number;
+    txLines: string[];
+    concentrationPct: string;
+    realizedPnl: string;
+    isInWatchlist: boolean;
+    startDate: string;
+    endDate: string;
+  };
+  latestTxId: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReplaySummaries {
+  stockCode: string;
+  windows: Partial<Record<ReplayWindow, ReplaySummary | null>>;
+}
+
+/** 每日 AI 分析持久化(v2.4)— 后端 GET /api/diagnose/stock/{code}/daily-analyses */
+export interface DailyAnalysisItem {
+  stockCode: string;
+  analysisDate: string;  // YYYY-MM-DD(K 线最新交易日)
+  scoreAvg: string | null;
+  dimensionAvg: Record<string, number>;
+  topIssues: Array<{ dim: string; score: number; hint: string }>;
+  aiView: 'bullish' | 'bearish' | 'neutral' | null;
+  aiSummary: string | null;  // LLM 评语
+  currentPrice: string | null;  // 当时实时报价
+  latestKlineDate: string | null;
+  createdAt: string;
+  updatedAt: string;
+  // N 天后实际涨跌(由后端 lazy 计算)
+  actualChangePct: string | null;  // e.g. "+5.32" / "-3.10" / null
+  outcome: 'hit' | 'miss' | null;
+}
+
+export interface DailyAnalysisList {
+  stockCode: string;
+  days: number;
+  horizonDays: number;
+  total: number;
+  items: DailyAnalysisItem[];
+}
+
+/** 方向胜率(view vs N 天后涨跌)— 后端 GET /winrate */
+export interface WinrateDirection {
+  total: number;
+  hits: number;
+  winrate: number | null;  // null:样本不足(WINRATE_MIN_SAMPLES)
+}
+
+export interface WinrateResponse {
+  stockCode: string;
+  days: number;
+  horizonDays: number;
+  samples: number;
+  skipped: number;
+  bullish: WinrateDirection;
+  bearish: WinrateDirection;
+  overallAccuracy: number | null;
+  insufficient: boolean;
+  // 同向模拟累计简单收益率(%):bullish 做多 / bearish 做空,等权 1 单位/次
+  simulateReturnPct: number | null;
+  generatedAt: string;
+}
+
 /** 止损(P5.1) */
 export interface StopLoss {
   id: number;
@@ -565,6 +648,11 @@ export interface AnalysisResult {
   } | null;
   /** ai=null 时的原因:'unconfigured' | 'timeout' | 'failed' | null(ai 成功) */
   aiError?: 'unconfigured' | 'timeout' | 'failed' | null;
+  /** v2.3:K 线缓存最新一根的 trade_date(YYYY-MM-DD),前端用作缓存失效键 */
+  latestKlineDate?: string | null;
+  /** v2.3:实时盘中报价(盘中为实时价,盘后/停牌 = latest_close) */
+  currentPrice?: string | null;
+  quoteChangePct?: number | null;
 }
 
 /** 自选股(P2.2) */

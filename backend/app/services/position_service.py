@@ -152,8 +152,16 @@ async def capture_delta(stock_code: str) -> "DeltaBaseline":
         if row is None:
             return DeltaBaseline(shares=0, cost=Decimal("0"), pnl=Decimal("0"))
         flow_tx = await _load_flow(session, stock_code)
+        # 与 recalc_position 一致:delta+flow 模式允许 sell 超过纯流水聚合
+        # (持仓主数据 + 仅卖/少数流水的场景),strict=False 避免抛错
         flow = next(
-            (p for p in aggregate_positions(flow_tx) if p.stock_code == stock_code),
+            (
+                p
+                for p in aggregate_positions(
+                    flow_tx, strict=False, keep_zero=False
+                )
+                if p.stock_code == stock_code
+            ),
             None,
         )
         return DeltaBaseline(

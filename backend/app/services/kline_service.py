@@ -53,6 +53,20 @@ def _dedupe_asc(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _is_post_close(now: datetime | None = None) -> bool:
+    """当前是否已收盘(A 股 15:00 后;工作日口径)
+
+    盘前 / 盘中 / 周末返回 False——这些时段新浪日 K 本来就拿不到当日,
+    无意义重拉。简化口径:未维护法定假日历,节假日落在工作日时会被误判
+    为"收盘后"触发一次无效新浪请求(返回旧数据落库,下次自我修复,无
+    功能性错误)。如需严谨,后续可接入交易日历。
+    """
+    now = now or datetime.now()
+    if now.weekday() >= 5:
+        return False
+    return now.hour >= 15
+
+
 async def _fetch_sina_kline(
     stock_code: str, period: str, count: int, keep_time: bool = False
 ) -> list[dict[str, Any]]:
@@ -199,6 +213,8 @@ async def fetch_klines(
     """拉 K 线(guide §3.2 新浪;数据源失败抛 KLineSourceUnavailable,不兜底 mock)
 
     缓存层:DB 优先,miss 调真实接口,落库
+    - 缓存命中条件:根数 >= count **且** (最新 trade_date == today OR 当前未收盘)
+    - 收盘后(工作日 >= 15:00)且最新 != today → 强制重拉,确保收盘当日完整日 K 入库
     """
     from app.db import async_session
     from app.models.orm import KlineCache
@@ -217,20 +233,30 @@ async def fetch_klines(
         )
         cached = list((await session.execute(stmt)).scalars().all())
 
+    # 1.1 陈旧检测:
+    #     - 收盘后(工作日 >= 15:00)且最新缓存不是今天 → 视为过期,强制重拉
+    #     - 盘前/盘中/周末/节假日 → 容忍陈旧(今日日 K 还未生成,无意义重拉)
     if len(cached) >= count:
-        logger.debug("K 线缓存命中: %s %s (%d 根)", stock_code, period, len(cached))
-        rows = [
-            {
-                "date": r.trade_date.isoformat(),
-                "open": r.open_price,
-                "high": r.high_price,
-                "low": r.low_price,
-                "close": r.close_price,
-                "volume": r.volume,
-            }
-            for r in reversed(cached)
-        ]
-        return _dedupe_asc(rows)
+        latest_date = cached[0].trade_date
+        post_close = _is_post_close()
+        is_stale = post_close and latest_date < date.today()
+        if not is_stale:
+            logger.debug("K 线缓存命中: %s %s (%d 根, 最新 %s)",
+                         stock_code, period, len(cached), latest_date)
+            rows = [
+                {
+                    "date": r.trade_date.isoformat(),
+                    "open": r.open_price,
+                    "high": r.high_price,
+                    "low": r.low_price,
+                    "close": r.close_price,
+                    "volume": r.volume,
+                }
+                for r in reversed(cached)
+            ]
+            return _dedupe_asc(rows)
+        logger.info("K 线收盘后陈旧: %s %s (最新 %s, today=%s), 强制重拉",
+                    stock_code, period, latest_date, date.today())
 
     # 2. 真实接口(失败抛 KLineSourceUnavailable,无 mock)
     rows = await _fetch_sina_kline(stock_code, period, count)
@@ -238,8 +264,19 @@ async def fetch_klines(
         raise KLineSourceUnavailable(f"新浪 K 线返回空数据: {stock_code}")
     rows = _dedupe_asc(rows)
 
-    # 3. 落库
+    # 3. 落库 — 先删该 (stock_code, period) 旧行,再插新数据
+    #    避免不同 count 调用(如 60→180→300)导致重复行累积
+    from sqlalchemy import delete as sa_delete
+
+    from app.models.orm import KlineCache
+
     async with async_session() as session:
+        await session.execute(
+            sa_delete(KlineCache).where(
+                KlineCache.stock_code == stock_code,
+                KlineCache.period == period,
+            )
+        )
         for r in rows:
             try:
                 d = (

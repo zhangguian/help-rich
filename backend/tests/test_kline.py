@@ -131,11 +131,173 @@ class TestFetchKlines:
         assert len(out) == 1
         assert out[0]["close"] == "1520"
 
+    def test_repeated_fetch_replaces_old_rows(self, monkeypatch):
+        """第二次拉取(更大 count)后,DB 应先删旧行再插新行,避免重复日期累积"""
+        from app.db import async_session
+        from app.models.orm import KlineCache
+        from sqlalchemy import select as _sel
+
+        # 第一次:60 根
+        rows_60 = [
+            {"day": f"2026-05-{d:02d}", "open": "1500", "high": "1530",
+             "low": "1495", "close": f"15{d % 10}.0", "volume": "100"}
+            for d in range(1, 11)
+        ]
+        fake_class, _ = make_fake_client_class([
+            httpx.Response(200, text=f"callback_x({json.dumps(rows_60, ensure_ascii=False)});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake_class)
+        asyncio.run(fetch_klines("600519.SH", "daily", 60))
+
+        # 第二次:更大窗口
+        rows_120 = [
+            {"day": f"2026-04-{d:02d}", "open": "1500", "high": "1530",
+             "low": "1495", "close": f"14{d % 10}.0", "volume": "100"}
+            for d in range(1, 11)
+        ] + rows_60  # 含部分重叠日期
+        fake_class2, _ = make_fake_client_class([
+            httpx.Response(200, text=f"callback_x({json.dumps(rows_120, ensure_ascii=False)});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake_class2)
+        asyncio.run(fetch_klines("600519.SH", "daily", 120))
+
+        # 验证:DB 中同一日期只有 1 行
+        async def _count():
+            async with async_session() as session:
+                stmt = _sel(KlineCache).where(
+                    KlineCache.stock_code == "600519.SH",
+                    KlineCache.period == "daily",
+                )
+                rows = list((await session.execute(stmt)).scalars().all())
+                dates = [r.trade_date for r in rows]
+                return len(rows), len(set(dates))
+
+        total, unique = asyncio.run(_count())
+        assert total == unique, f"重复行: total={total} unique={unique}"
+        # 第二次应包含第一次的日期(2026-05-01~10) + 新增(2026-04-01~10) = 20 行
+        assert unique == 20
+
     def test_source_unavailable_propagates(self, monkeypatch):
         fake_class, _ = make_fake_client_class([httpx.Response(200, text="[]")])
         monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake_class)
         with pytest.raises(KLineSourceUnavailable):
             asyncio.run(fetch_klines("600519.SH", "daily", 30))
+
+    def test_cache_hit_when_fresh(self, monkeypatch):
+        """最新 trade_date 距今 ≤ 1 天 → 命中缓存,不调新浪"""
+        from datetime import date as _date, timedelta
+        from app.db import async_session
+        from app.models.orm import KlineCache
+        from sqlalchemy import delete as _del
+
+        # 模拟 today = 8/4(seed today 的数据 → 命中)
+        fake_today = _date(2026, 8, 4)
+        class FakeDate(_date):
+            @classmethod
+            def today(cls):
+                return fake_today
+        monkeypatch.setattr(kline_service, "date", FakeDate)
+
+        async def _seed():
+            async with async_session() as session:
+                await session.execute(_del(KlineCache))
+                session.add(KlineCache(
+                    stock_code="600519.SH", trade_date=fake_today,
+                    period="daily", open_price="1500", high_price="1530",
+                    low_price="1495", close_price="1520", volume=100, source="sina",
+                ))
+                await session.commit()
+        asyncio.run(_seed())
+
+        # 二次调用:不应调新浪
+        class MustNotBeCalled:
+            def __init__(self, *a, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *e): return None
+            async def get(self, *a, **kw):
+                raise RuntimeError("不应调新浪 — 缓存应命中")
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", MustNotBeCalled)
+        out = asyncio.run(fetch_klines("600519.SH", "daily", 1))
+        assert len(out) == 1
+        assert out[0]["close"] == "1520"
+
+    def test_cache_stale_force_refetch(self, monkeypatch):
+        """最新 trade_date 距今 > 1 天 → 视为过期,强制重拉新浪"""
+        from datetime import date, timedelta
+        from app.db import async_session
+        from app.models.orm import KlineCache
+        from sqlalchemy import delete as _del
+
+        # seed: 写入 8/3 的旧数据(模拟"今天 = 8/5 但 K 线最新还是 8/3")
+        today = date(2026, 8, 5)
+        async def _seed():
+            async with async_session() as session:
+                await session.execute(_del(KlineCache))
+                session.add(KlineCache(
+                    stock_code="600519.SH", trade_date=today - timedelta(days=2),
+                    period="daily", open_price="1500", high_price="1530",
+                    low_price="1495", close_price="1500", volume=100, source="sina",
+                ))
+                await session.commit()
+        asyncio.run(_seed())
+
+        # 用 monkeypatch 修改 date.today 返回 8/5
+        class FakeDate(date):
+            @classmethod
+            def today(cls):
+                return today
+        monkeypatch.setattr(kline_service, "date", FakeDate)
+
+        # 第二次调用:应触发重拉(因 stale)
+        new_rows = [
+            {"day": "2026-08-04", "open": "1510", "high": "1540", "low": "1500", "close": "1530", "volume": "2000"},
+        ]
+        fake_class, _ = make_fake_client_class([
+            httpx.Response(200, text=f"callback_x({json.dumps(new_rows, ensure_ascii=False)});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake_class)
+        out = asyncio.run(fetch_klines("600519.SH", "daily", 1))
+        # 应返回新拉的 8/4 数据
+        assert len(out) == 1
+        assert out[0]["close"] == "1530"
+        assert out[0]["date"] == "2026-08-04"
+
+    def test_cache_today_is_fresh(self, monkeypatch):
+        """最新 trade_date = today → 命中(staleness = 0)"""
+        from datetime import date
+        from app.db import async_session
+        from app.models.orm import KlineCache
+        from sqlalchemy import delete as _del
+
+        today = date(2026, 8, 4)
+        async def _seed():
+            async with async_session() as session:
+                await session.execute(_del(KlineCache))
+                session.add(KlineCache(
+                    stock_code="600519.SH", trade_date=today,
+                    period="daily", open_price="1500", high_price="1530",
+                    low_price="1495", close_price="1520", volume=100, source="sina",
+                ))
+                await session.commit()
+        asyncio.run(_seed())
+
+        class FakeDate(date):
+            @classmethod
+            def today(cls):
+                return today
+        monkeypatch.setattr(kline_service, "date", FakeDate)
+
+        # 二次调用:不应调新浪
+        class MustNotBeCalled:
+            def __init__(self, *a, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *e): return None
+            async def get(self, *a, **kw):
+                raise RuntimeError("today 是最新,不应当重拉")
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", MustNotBeCalled)
+        out = asyncio.run(fetch_klines("600519.SH", "daily", 1))
+        assert len(out) == 1
+        assert out[0]["close"] == "1520"
 
 
 class TestIntraday:

@@ -293,6 +293,50 @@ class KlineCache(Base):
 
 
 # ============================================================
+# === v2.3:复盘记录表(一键复盘持久化,per (股票, 窗口) UPSERT) ===
+# ============================================================
+
+class ReplayRecord(Base):
+    """股票复盘记录表(v2.3 一键复盘)
+
+    同一 (stock_code, window) 多次复盘只保留最新一条(UNIQUE 约束 + UPSERT)。
+    window 取值:1d / 3d / 5d / 10d / 20d / 60d(交易日口径)。
+    cache_key 派生:`replay:{stock}:{window_days}:{latest_tx_id}` — 新流水自动失效。
+    """
+    __tablename__ = "replay_records"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
+    window: Mapped[str] = mapped_column(String, nullable=False)  # '1d' / '3d' / ...
+    # 评分聚合
+    score_avg: Mapped[str | None] = mapped_column(String, nullable=True)  # Decimal-as-string
+    dimension_avg: Mapped[str] = mapped_column(Text, nullable=False)  # JSON: {集中度: 12, ...}
+    top_issues: Mapped[str] = mapped_column(Text, nullable=False)  # JSON: [{dim, score, hint}, ...]
+    # 流水快照(本次复盘窗口内的流水 + 持仓快照,供"对比历史"用)
+    summary_snapshot: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
+    # LLM
+    ai_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_status: Mapped[str] = mapped_column(String, default="success")  # success / failed / no_key
+    ai_provider: Mapped[str | None] = mapped_column(String, nullable=True)
+    ai_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    ai_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 缓存失效键:窗口内最新流水 id(0 = 窗口无流水)
+    latest_tx_id: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    __table_args__ = (
+        # 同一 (股票, 窗口) 多次复盘只保留最新一条
+        Index("uq_replay_stock_window", "stock_code", "window", unique=True),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ReplayRecord {self.stock_code} {self.window} score={self.score_avg}>"
+
+
+# ============================================================
 # === v1.5:止损表(P5.1 实施) ===
 # ============================================================
 
@@ -319,3 +363,55 @@ class StopLoss(Base):
 
     def __repr__(self) -> str:
         return f"<StopLoss {self.stock_code} {self.stop_loss_price}>"
+
+
+# ============================================================
+# === v2.4:每日 AI 分析持久化(P0 一键复盘演进) ===
+# ============================================================
+
+class DailyAnalysis(Base):
+    """每日 AI 分析持久化表(v2.4)
+
+    用户每次点 "开始分析" / "重新分析",把当次结果 UPSERT 到 (stock_code, analysis_date)。
+    - analysis_date = K 线最新交易日(语义:对哪天的行情做分析),fallback today
+    - 同一天多次生成 UPSERT 覆盖最新(created_at 首写时间,updated_at 最新)
+    - 用于后续历史查看 / 方向胜率分析(P1)
+    """
+    __tablename__ = "daily_analyses"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
+    analysis_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # 5 维度均值(Decimal-as-string 精度保护)
+    score_avg: Mapped[str | None] = mapped_column(String, nullable=True)
+    # JSON 字符串:d {集中度: 12, 价格合理性: 8, ...}
+    dimension_avg: Mapped[str] = mapped_column(Text, nullable=False)
+    # JSON 字符串:[{dim, score, hint}, ...] 前 3 低分维度
+    top_issues: Mapped[str] = mapped_column(Text, nullable=False)
+    # LLM view:bullish / bearish / neutral / null(LLM 失败)
+    ai_view: Mapped[str | None] = mapped_column(String, nullable=True)
+    # LLM 评语全文(用于历史查看)
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 当时实时报价(精度保护)
+    current_price: Mapped[str | None] = mapped_column(String, nullable=True)
+    # K 线最新交易日(冗余便于查询;与 analysis_date 相同)
+    latest_kline_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    __table_args__ = (
+        # 同 (股票, 日期) 多次分析只保留最新一条
+        Index(
+            "uq_daily_stock_date",
+            "stock_code",
+            "analysis_date",
+            unique=True,
+        ),
+        # 历史查询按日期倒序
+        Index("idx_daily_stock_date_desc", "stock_code", "analysis_date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<DailyAnalysis {self.stock_code} {self.analysis_date} view={self.ai_view}>"

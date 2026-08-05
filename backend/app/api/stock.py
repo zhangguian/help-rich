@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from app.services.kline_service import KLineSourceUnavailable, fetch_klines
 from app.services.position_service import get_position
+from app.services.quote_service import QuoteService
 from app.services.stock_advice_service import (
     StockAdviceUnavailable,
     ask_stock_question,
@@ -27,6 +28,9 @@ from app.services.industry_service import resolve_industry
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/stock", tags=["stock"])
+
+# v2.3:与分析上下文一致,改用 300 根(约 12 个月交易日),与 KLineChart indicators 对齐
+_KLINE_COUNT = 300
 
 
 class ChatRequest(BaseModel):
@@ -45,14 +49,24 @@ def _is_valid_code(code: str) -> bool:
     return len(num) == 6 and num.isdigit() and market in {"SH", "SZ", "BJ"}
 
 
-async def _load_klines(code: str) -> list[dict]:
+async def _load_klines(code: str, count: int = _KLINE_COUNT) -> list[dict]:
     try:
-        return await fetch_klines(code, period="daily", count=120)
+        return await fetch_klines(code, period="daily", count=count)
     except KLineSourceUnavailable as e:
         raise HTTPException(
             status_code=502,
             detail={"code": "DATA_SOURCE_UNAVAILABLE", "message": str(e)},
         ) from e
+
+
+async def _load_quote(code: str):
+    """拉取实时行情(失败返回 None,不阻断分析)"""
+    try:
+        qs = await QuoteService().get_quotes([code])
+        return qs[0] if qs else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("analysis 拉取行情失败(%s): %s", code, e)
+        return None
 
 
 async def _position_cost(code: str) -> float | None:
@@ -69,6 +83,39 @@ async def _check_code(code: str) -> None:
         )
 
 
+def _sanitize_current_price(
+    quote, klines: list[dict] | None
+) -> tuple[str | None, str | None]:
+    """校验 current_price 与 K 线最新 close 的偏离度;偏差 > 10% 视为数据源异常,降级 None。
+
+    Returns:
+        (current_price_str, current_price_date_str) — 校验通过返回;否则 (None, None)
+    """
+    if quote is None:
+        return None, None
+    price = quote.current_price
+    if price is None:
+        return None, None
+    current_price = str(price)
+    current_price_date = quote.timestamp.date().isoformat() if quote.timestamp else None
+    # 与 K 线最新收盘价比对,偏差过大则降级
+    if klines:
+        try:
+            latest_close = float(klines[-1]["close"])
+            cur = float(current_price)
+            if latest_close > 0:
+                deviation = abs(cur - latest_close) / latest_close
+                if deviation > 0.10:
+                    logger.warning(
+                        "current_price 与 K 线 close 偏差过大: quote=%s kline=%s 偏差 %.2f%%, 降级",
+                        current_price, latest_close, deviation * 100,
+                    )
+                    return None, None
+        except (ValueError, TypeError):
+            pass
+    return current_price, current_price_date
+
+
 def _check_question(question: str) -> str:
     q = question.strip()
     if not q:
@@ -81,10 +128,34 @@ def _check_question(question: str) -> str:
 
 @router.get("/{code}/analysis")
 async def analysis(code: str) -> dict:
-    """指标 + AI 解读;AI 不可用自动降级纯指标(200 返回,ai=null)"""
+    """指标 + AI 解读;AI 不可用自动降级纯指标(200 返回,ai=null)
+
+    v2.3:返回 current_price(实时盘中) + latest_kline_date(K线最新日),前端可据此:
+    - 区分盘中/盘后/历史日
+    - 用 latest_kline_date 做缓存失效键(同 replay_records 思路)
+
+    current_price 与 K 线最新 close 偏差 > 10% 视为数据源异常,降级为 None(避免 LLM
+    基于陈旧/异常报价给出错误解读)。
+    """
     await _check_code(code)
-    klines = await _load_klines(code)
-    return await get_stock_analysis(code, klines)
+    klines, quote = await asyncio.gather(
+        _load_klines(code),
+        _load_quote(code),
+    )
+    current_price, current_price_date = _sanitize_current_price(quote, klines)
+    result = await get_stock_analysis(
+        code, klines,
+        current_price=current_price,
+    )
+    result["latest_kline_date"] = klines[-1]["date"] if klines else None
+    result["current_price"] = current_price
+    result["quote_change_pct"] = (
+        float(quote.change_pct) if quote is not None and quote.change_pct is not None else None
+    )
+    # v2.4:后台 UPSERT 写入 daily_analyses(失败不抛)
+    from app.services.daily_analysis_service import save_from_analysis_result
+    await save_from_analysis_result(code, klines, result)
+    return result
 
 
 @router.get("/{code}/industry")
@@ -96,14 +167,19 @@ async def industry(code: str) -> dict:
 
 @router.post("/{code}/chat")
 async def chat(code: str, payload: ChatRequest) -> dict:
-    """操作问答:结合行情 + 指标 + 持仓成本"""
+    """操作问答:结合行情 + 指标 + 持仓成本 + 实时报价"""
     await _check_code(code)
     question = _check_question(payload.question)
 
-    klines = await _load_klines(code)
+    klines, quote = await asyncio.gather(
+        _load_klines(code),
+        _load_quote(code),
+    )
     cost, sector = await asyncio.gather(
         _position_cost(code), find_sector_context(code)
     )
+    # 偏差 > 10% 视为数据源异常,降级
+    current_price, current_price_date = _sanitize_current_price(quote, klines)
 
     try:
         answer = await ask_stock_question(
@@ -114,13 +190,20 @@ async def chat(code: str, payload: ChatRequest) -> dict:
             stock_name=payload.stock_name,
             sector=sector,
             history=payload.history,
+            current_price=current_price,
+            current_price_date=current_price_date,
         )
     except StockAdviceUnavailable as e:
         raise HTTPException(
             status_code=503,
             detail={"code": "LLM_UNAVAILABLE", "message": str(e)},
         ) from e
-    return {"stock_code": code, "answer": answer}
+    return {
+        "stock_code": code,
+        "answer": answer,
+        "current_price": current_price,
+        "current_price_date": current_price_date,
+    }
 
 
 @router.post("/{code}/chat/stream")
@@ -141,10 +224,14 @@ async def chat_stream(code: str, payload: ChatRequest) -> StreamingResponse:
             detail={"code": "LLM_UNAVAILABLE", "message": str(e)},
         ) from e
 
-    klines = await _load_klines(code)
+    klines, quote = await asyncio.gather(
+        _load_klines(code),
+        _load_quote(code),
+    )
     cost, sector = await asyncio.gather(
         _position_cost(code), find_sector_context(code)
     )
+    current_price, current_price_date = _sanitize_current_price(quote, klines)
 
     async def gen():
         try:
@@ -156,6 +243,8 @@ async def chat_stream(code: str, payload: ChatRequest) -> StreamingResponse:
                 stock_name=payload.stock_name,
                 sector=sector,
                 history=payload.history,
+                current_price=current_price,
+                current_price_date=current_price_date,
             ):
                 yield f"data: {json.dumps({'text': piece}, ensure_ascii=False)}\n\n"
         except StockAdviceUnavailable as e:

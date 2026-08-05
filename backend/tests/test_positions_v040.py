@@ -115,6 +115,65 @@ class TestFlowSyncsPositions:
         assert r.status_code == 422
         assert r.json()["detail"]["code"] == "INSUFFICIENT_SHARES"
 
+    def test_buy_after_only_sell_flow_does_not_500(self, client):
+        """positions row 存在 + 流水仅一笔 sell(无 buy)→ 提交新流水不应 500
+
+        复现 001896.SZ 真实场景:导入持仓 200@27.75 后只录了一笔 sell 100@12.93,
+        任何事务流触发 capture_delta 时,strict=True 模式下 sell 100>0 抛 ValueError → 500
+        修复:capture_delta 改用 strict=False/keep_zero=False 与 recalc_position 一致
+        """
+        # 1. 导入持仓主数据(基准 200@27.75)
+        r = client.post(
+            "/api/positions",
+            json={"stock_code": "001896", "stock_name": "豫能控股",
+                  "shares": 200, "cost_price": "27.750"},
+        )
+        assert r.status_code == 201
+
+        # 2. 录一笔 sell 100@12.93(SQLite 报低位?但保持一致);通过 upsert+recalc:
+        # 先 upsert 持仓 200,然后只插 sell 流水(直接调 db 模拟"历史已经发生一笔 sell")
+        from app.db import async_session
+        from app.models.orm import Transaction
+
+        async def _seed_sell():
+            async with async_session() as session:
+                session.add(
+                    Transaction(
+                        stock_code="001896.SZ",
+                        stock_name="豫能控股",
+                        action="sell",
+                        shares=100,
+                        price="12.930",
+                        trade_date=date(2026, 7, 26),
+                    )
+                )
+                await session.commit()
+
+        asyncio.run(_seed_sell())
+
+        # 3. 在此状态下提交一笔新的 buy 流水——之前会 500
+        r = client.post(
+            "/api/transactions",
+            json={
+                "stock_code": "001896",
+                "action": "buy",
+                "shares": 100,
+                "price": "12.990",
+                "trade_date": "2026-08-04",
+            },
+        )
+        assert r.status_code == 201, r.text
+
+        # 4. 校验持仓:capture_delta 必须不抛,recalc 保持导入基准 + 流水聚合正确
+        items = client.get("/api/positions").json()["items"]
+        assert len(items) == 1
+        p = items[0]
+        assert p["stock_code"] == "001896.SZ"
+        # 导入 200@27.75 + 流水 sell 100@12.93 + 流水 buy 100@12.99
+        # recalc 公式:final = delta(=row-flow) + new_flow
+        # key 是不抛 500、并保持持仓存在
+        assert p["shares"] >= 100
+
 
 class TestManualPosition:
     """手动录入 / 覆盖 / 删除(v0.4.0 持仓主数据)"""
