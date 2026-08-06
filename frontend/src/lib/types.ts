@@ -631,6 +631,31 @@ export interface KlineItem {
   volume: number;
 }
 
+/** v2.5:LLM 输出的操作参考结构化字段(替代旧版单字符串 advice) */
+export interface AdviceTStrategy {
+  suitable: boolean;
+  tRange: string;
+  basePositionPct: string;
+  sellTrigger: string;
+  buybackTrigger: string;
+  stopLoss: string;
+  unsuitableSignals: string;
+}
+
+export interface AdviceStructured {
+  rationale: string;
+  price: {
+    entryOrExitRange: string;
+    stopLoss: string;
+  };
+  positionPct: string;
+  trigger: string;
+  holdingWindow: string;
+  notAction: string;
+  /** v2.5:做 T 策略;仅 profit/loss 角色下由 LLM 决定是否输出 */
+  tStrategy?: AdviceTStrategy | null;
+}
+
 /** 单只股票 AI 分析结果(/api/stock/{code}/analysis) */
 export interface AnalysisResult {
   stockCode: string;
@@ -643,7 +668,12 @@ export interface AnalysisResult {
     trend: string;
     volumeNote: string;
     keyLevels: { type: string; price: number; note: string }[];
-    advice: string;
+    /** v2.5:用户持仓状态,决定 advice 角色段 */
+    positionStatus: 'empty' | 'profit' | 'loss';
+    /** v2.5:advice 角色名(建仓参考 / 止盈参考 / 解套参考) */
+    adviceRole: string;
+    /** v2.5:结构化操作参考(6 字段 + 可选 tStrategy) */
+    advice: AdviceStructured;
     riskWarning: string;
   } | null;
   /** ai=null 时的原因:'unconfigured' | 'timeout' | 'failed' | null(ai 成功) */
@@ -653,6 +683,10 @@ export interface AnalysisResult {
   /** v2.3:实时盘中报价(盘中为实时价,盘后/停牌 = latest_close) */
   currentPrice?: string | null;
   quoteChangePct?: number | null;
+  /** v2.5:后端判定的用户持仓角色(empty/profit/loss) */
+  positionStatus?: 'empty' | 'profit' | 'loss';
+  /** v2.5:基于持仓成本的盈亏百分比(0.05=+5%);空仓或成本缺失时 null */
+  costBasisPct?: number | null;
 }
 
 /** 自选股(P2.2) */

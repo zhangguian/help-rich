@@ -32,16 +32,54 @@ ANALYSIS_SYSTEM = """你是股票技术分析助理,面向完全不懂 K 线的�
 4. 结论客观,不承诺收益,结尾必须包含风险提示
 5. 术语用大白话:"均线"可解释为"一段时间平均成本价","企稳点"解释为"价格站住不破的位置"
 
-JSON 结构:
+输入字段 position_status 表示该股相对当前用户的持仓状态(关键,决定 advice 角色段):
+  - empty: 用户未持仓,advice_role 输出「建仓参考」
+  - profit: 用户持仓浮盈,advice_role 输出「止盈参考」
+  - loss: 用户持仓浮亏,advice_role 输出「解套参考」
+
+JSON 结构(必填字段若无值填空字符串,不允许字段缺失):
 {
   "view": "bullish | bearish | neutral",
   "view_reason": "看多/看空依据(引用具体指标数字)",
   "trend": "K线走势描述(上涨通道/下降通道/震荡,当前处于什么阶段)",
   "volume_note": "放量/缩量解读",
   "key_levels": [{"type": "support|pressure|stabilize", "price": 123.45, "note": "小白视角说明"}],
-  "advice": "给小白可执行的操作参考(不构成投资建议)",
+  "position_status": "empty | profit | loss",
+  "advice_role": "建仓参考 | 止盈参考 | 解套参考",
+  "advice": {
+    "rationale": "判断依据 1 句(引用具体指标数字,如 MACD/均线/RSI/成交量等)",
+    "price": {
+      "entry_or_exit_range": "价位区间(如 '95.00~98.50 元')",
+      "stop_loss": "止损位(如 '92.00 元(≈ -7%)')"
+    },
+    "position_pct": "仓位建议(空仓:首仓比例 + 分批节奏;止盈:分批止盈节奏;解套:减仓/补仓量)",
+    "trigger": "触发条件(具体指标信号,如放量>5日均量1.5倍且站稳XX元)",
+    "holding_window": "时间窗口(持有预期 + 多久未启动则减仓/未解套则调仓)",
+    "not_action": "不操作条件(什么信号出现时不要动手)"
+  },
   "risk_warning": "风险提示"
 }
+
+advice 内字段硬约束:
+- price.entry_or_exit_range 和 price.stop_loss 的具体数字必须从 key_levels / ma / current_price 中取,不允许编造
+- 空仓时 entry_or_exit_range 写入场区间;profit/loss 时写出场/止损区间
+- 所有数值字段必须包含具体数字,不可只写"等企稳"/"看情况"
+
+可选字段 t_strategy(持仓状态下的做 T 策略;空仓时不输出):
+  当 position_status=profit 或 loss,且行情有 T 空间(近 5 日振幅>3%、非单边趋势、非重要消息日)时,在 advice 对象内增加:
+  "t_strategy": {
+    "suitable": true,
+    "t_range": "T 区间价格 + 振幅(如 '95.00~98.00 元(振幅 4.2%)')",
+    "base_position_pct": "底仓保留比例(如 '≥ 60%')",
+    "sell_trigger": "卖出触发条件(冲高价位 + 量能特征)",
+    "buyback_trigger": "买回触发条件(回踩价位 + 量能特征)",
+    "stop_loss": "底仓跌破止损位(防 T 飞)",
+    "unsuitable_signals": "不适合做 T 的场景(如 '振幅<3% / 单边趋势 / 重要消息日前')"
+  }
+  当行情不适合做 T 时输出 suitable=false + 简短说明在 unsuitable_signals。
+  当 position_status=empty 时,完全省略 t_strategy 字段。
+
+t_strategy 数值同样必须从 key_levels / ma / current_price 取,不允许编造。
 """
 
 def build_question_system(
@@ -181,17 +219,69 @@ def _parse_llm_json(raw: str) -> dict:
     return data
 
 
+_ADVICE_ROLE_BY_STATUS: dict[str, str] = {
+    "empty": "建仓参考",
+    "profit": "止盈参考",
+    "loss": "解套参考",
+}
+
+_ADVICE_SUB_FIELDS = ("rationale", "position_pct", "trigger", "holding_window", "not_action")
+_ADVICE_PRICE_FIELDS = ("entry_or_exit_range", "stop_loss")
+_T_STRATEGY_SUB_FIELDS = (
+    "t_range", "base_position_pct",
+    "sell_trigger", "buyback_trigger", "stop_loss", "unsuitable_signals",
+)
+
+
 def _validate_analysis(d: dict) -> dict:
-    """schema 校验:view 枚举 + 关键字段存在"""
+    """schema 校验:view 枚举 + advice 结构化 6 字段 + 可选 t_strategy
+
+    旧格式(advice 为字符串)自动降级:rationale 用原字符串,其余填空。
+    """
     view = d.get("view")
     if view not in {"bullish", "bearish", "neutral"}:
         raise ValueError(f"view 非法: {view}")
-    for field in ("view_reason", "trend", "volume_note", "advice", "risk_warning"):
+    for field in ("view_reason", "trend", "volume_note", "risk_warning"):
         if not isinstance(d.get(field), str):
             d[field] = ""
     levels = d.get("key_levels")
     if not isinstance(levels, list):
         d["key_levels"] = []
+    position_status = d.get("position_status")
+    if position_status not in {"empty", "profit", "loss"}:
+        position_status = "empty"
+        d["position_status"] = position_status
+    if not isinstance(d.get("advice_role"), str) or not d["advice_role"]:
+        d["advice_role"] = _ADVICE_ROLE_BY_STATUS[position_status]
+
+    advice = d.get("advice")
+    if not isinstance(advice, dict):
+        advice = {"rationale": advice if isinstance(advice, str) else ""}
+    for f in _ADVICE_SUB_FIELDS:
+        if not isinstance(advice.get(f), str):
+            advice[f] = ""
+    price = advice.get("price")
+    if not isinstance(price, dict):
+        price = {}
+    for f in _ADVICE_PRICE_FIELDS:
+        if not isinstance(price.get(f), str):
+            price[f] = ""
+    advice["price"] = price
+
+    t_strategy = advice.get("t_strategy")
+    if position_status == "empty":
+        advice["t_strategy"] = None
+    elif isinstance(t_strategy, dict):
+        if not isinstance(t_strategy.get("suitable"), bool):
+            t_strategy["suitable"] = True
+        for f in _T_STRATEGY_SUB_FIELDS:
+            if not isinstance(t_strategy.get(f), str):
+                t_strategy[f] = ""
+        advice["t_strategy"] = t_strategy
+    else:
+        advice["t_strategy"] = None
+
+    d["advice"] = advice
     return d
 
 
@@ -249,6 +339,8 @@ async def get_stock_analysis(
     stock_code: str,
     klines: list[dict[str, Any]],
     current_price: str | None = None,
+    position: Any | None = None,
+    position_status: str = "empty",
 ) -> dict:
     """指标 + AI 解读;LLM 失败 / K 线不足 → ai=None / signal_winrate=None(纯指标降级)
 
@@ -256,6 +348,8 @@ async def get_stock_analysis(
     signal_winrate: K 线不足时为 None(K线 < 23 根时回检样本为零)
 
     current_price: 实时盘中价(None 时 LLM 仅看 K 线 latest_close)
+    position: 当前用户持仓(position_service.Position 或 None);供 LLM 感知用户成本
+    position_status: "empty"|"profit"|"loss" — 决定 advice 输出的角色段
     """
     indicators = compute_indicators(klines)
     result: dict[str, Any] = {
@@ -277,9 +371,17 @@ async def get_stock_analysis(
         return result
 
     ctx = json.dumps(_build_context(klines, current_price), ensure_ascii=False)
+    user_msg = f"以下为该股票技术指标与最近K线:\n{ctx}\n用户持仓状态(position_status):{position_status}"
+    if position is not None:
+        try:
+            avg_cost = float(position.avg_cost) if position.avg_cost is not None else None
+            shares = int(position.shares) if position.shares else 0
+            user_msg += f"\n用户持仓:{shares}股 @成本{avg_cost}元(若 position_status 已给定则仅作交叉校验,不要复述精确成本数字)"
+        except Exception:
+            pass
     try:
         raw = await asyncio.wait_for(
-            llm.chat(ANALYSIS_SYSTEM, f"以下为该股票技术指标与最近K线:\n{ctx}"),
+            llm.chat(ANALYSIS_SYSTEM, user_msg),
             timeout=LLM_ANALYSIS_BUDGET,
         )
         parsed = _parse_llm_json(raw)

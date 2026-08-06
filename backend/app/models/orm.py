@@ -390,8 +390,11 @@ class DailyAnalysis(Base):
     top_issues: Mapped[str] = mapped_column(Text, nullable=False)
     # LLM view:bullish / bearish / neutral / null(LLM 失败)
     ai_view: Mapped[str | None] = mapped_column(String, nullable=True)
-    # LLM 评语全文(用于历史查看)
+    # LLM 评语全文(用于历史查看)— 旧版单字符串;新版存 rationale 单句
     ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # v2.5:LLM 操作参考结构化 JSON 全文(6 字段 + 可选 t_strategy);
+    # 老行 nullable=True → 前端读不到时降级为空对象
+    ai_advice_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 当时实时报价(精度保护)
     current_price: Mapped[str | None] = mapped_column(String, nullable=True)
     # K 线最新交易日(冗余便于查询;与 analysis_date 相同)

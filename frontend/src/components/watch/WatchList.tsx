@@ -295,11 +295,11 @@ export function WatchList({
                     <span className="text-sm text-text-pri truncate">
                       {it.name ?? it.code}
                     </span>
-                    {it.inPosition && (
+                    {/* {it.inPosition && (
                       <span className="text-[10px] px-1 py-px rounded bg-accent-subtle text-accent border border-accent/30">
                         持仓
                       </span>
-                    )}
+                    )} */}
                     <button
                       type="button"
                       onClick={(e) => {

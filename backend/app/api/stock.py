@@ -75,6 +75,33 @@ async def _position_cost(code: str) -> float | None:
     return float(position.avg_cost) if position is not None else None
 
 
+def _resolve_position_status(position, current_price: str | None) -> tuple[str, float | None]:
+    """根据持仓 + 现价判断 role:empty / profit / loss
+
+    Returns:
+        (status, cost_basis_pct)
+        status: empty / profit / loss
+        cost_basis_pct: 基于持仓成本的盈亏百分比(0.05 = +5%);空仓 / 现价缺失时为 None
+    """
+    if position is None or position.shares <= 0:
+        return "empty", None
+    if current_price is None:
+        return "empty", None
+    try:
+        cur = float(current_price)
+        cost = float(position.avg_cost)
+        if cost <= 0 or cur <= 0:
+            return "empty", None
+        pct = (cur / cost - 1.0)
+        if pct > 1e-6:
+            return "profit", pct
+        if pct < -1e-6:
+            return "loss", pct
+        return "empty", 0.0  # 持平:fallback 为空仓参考
+    except (ValueError, TypeError):
+        return "empty", None
+
+
 async def _check_code(code: str) -> None:
     if not _is_valid_code(code):
         raise HTTPException(
@@ -136,6 +163,9 @@ async def analysis(code: str) -> dict:
 
     current_price 与 K 线最新 close 偏差 > 10% 视为数据源异常,降级为 None(避免 LLM
     基于陈旧/异常报价给出错误解读)。
+
+    v2.5:返回 position_status / cost_basis_pct — 基于用户当前持仓判断 role,
+    AI 按 role 输出对应角色的单段操作参考(建仓参考 / 止盈参考 / 解套参考)。
     """
     await _check_code(code)
     klines, quote = await asyncio.gather(
@@ -143,15 +173,21 @@ async def analysis(code: str) -> dict:
         _load_quote(code),
     )
     current_price, current_price_date = _sanitize_current_price(quote, klines)
+    position = await get_position(code)
+    position_status, cost_basis_pct = _resolve_position_status(position, current_price)
     result = await get_stock_analysis(
         code, klines,
         current_price=current_price,
+        position=position,
+        position_status=position_status,
     )
     result["latest_kline_date"] = klines[-1]["date"] if klines else None
     result["current_price"] = current_price
     result["quote_change_pct"] = (
         float(quote.change_pct) if quote is not None and quote.change_pct is not None else None
     )
+    result["position_status"] = position_status
+    result["cost_basis_pct"] = cost_basis_pct
     # v2.4:后台 UPSERT 写入 daily_analyses(失败不抛)
     from app.services.daily_analysis_service import save_from_analysis_result
     await save_from_analysis_result(code, klines, result)

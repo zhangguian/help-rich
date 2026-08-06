@@ -51,19 +51,21 @@ async def save_from_analysis_result(
         # indicators / ai 字段
         indicators = result.get("indicators") or {}
         score_avg = _to_decimal_str(indicators.get("latest_close"))
-        # 5 维度均值:indicators.dimensionAvg 已经在 prompt 里组装,此处从 result 取
-        # result 是 stock_advice_service.get_stock_analysis 的输出 dict
-        # 它返回的 indicators dict 不含 dimensionAvg(那是 _build_context 内部)
-        # 我们从 _summarize 风格的 input 重建一份最小 dimension_avg
-        # 但 service 层已有 WINDOW/DIMS,简化:从 indicators 的已有字段抽取
-        # 实际上 analysis_result['indicators'] 只含 macd/kdj/boll 等独立字段
-        # 不含 5 维 dict,所以从 ta_service 的 _signal_fusion 区域找
-        # 简化为:不存 dimension_avg 全量,存 score_avg + ai_view + ai_summary 即可
         dimension_avg: dict[str, float] = {}
         top_issues: list[dict] = []
         ai = result.get("ai") or {}
         ai_view = ai.get("view") if ai else None
-        ai_summary = ai.get("advice") if ai else None
+        # v2.5:advice 改结构化 dict;旧 ai_summary 兼容存 rationale 单字符串
+        ai_advice = ai.get("advice") if ai else None
+        if isinstance(ai_advice, dict):
+            ai_summary = ai_advice.get("rationale") or ""
+            ai_advice_json = json.dumps(ai_advice, ensure_ascii=False)
+        elif isinstance(ai_advice, str):
+            ai_summary = ai_advice
+            ai_advice_json = None
+        else:
+            ai_summary = None
+            ai_advice_json = None
         # 关联流水概要(供历史查看)
         summary_snapshot = result.get("summary_snapshot") or {}
         current_price = _to_decimal_str(result.get("current_price"))
@@ -76,6 +78,7 @@ async def save_from_analysis_result(
             top_issues=top_issues,
             ai_view=ai_view,
             ai_summary=ai_summary,
+            ai_advice_json=ai_advice_json,
             current_price=current_price,
             latest_kline_date=analysis_date,
         )

@@ -155,10 +155,7 @@ export function AnalysisPanel({
                   ))}
                 </div>
               )}
-              <div className="rounded-xl bg-accent-subtle/60 border border-accent/20 p-3">
-                <div className="text-xs text-accent font-semibold mb-1">操作参考</div>
-                <p className="text-sm text-text-pri leading-relaxed whitespace-pre-wrap">{analysis.ai.advice}</p>
-              </div>
+              <OperationAdviceBlock analysis={analysis} />
               <div className="text-xs text-text-ter leading-relaxed bg-warn-bg/30 border border-warn/20 rounded-lg p-3 space-y-1.5 whitespace-pre-wrap">
                 <p className="font-semibold text-warn">⚠ 风险提示</p>
                 <p>{analysis.ai.riskWarning}</p>
@@ -824,6 +821,137 @@ function Mini({ label, value, suffix }: { label: string; value: number | null; s
       <div className="text-sm font-mono text-text-pri">
         {value != null ? `${value.toFixed(label === 'HIST' || label === 'MACD' || label.includes('DIF') || label.includes('DEA') ? 4 : 2)}${suffix ?? ''}` : '--'}
       </div>
+    </div>
+  );
+}
+
+// === v2.5 操作参考结构化区块(rationale + 6 字段网格 + 可选 T 区块) ===
+
+type RoleColor = {
+  cardCls: string;
+  labelCls: string;
+};
+
+const ROLE_COLOR: Record<'empty' | 'profit' | 'loss', RoleColor> = {
+  empty: {
+    cardCls: 'rounded-xl bg-accent-subtle/60 border border-accent/20 p-3',
+    labelCls: 'text-xs text-accent font-semibold',
+  },
+  profit: {
+    cardCls: 'rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-3',
+    labelCls: 'text-xs text-emerald-600 dark:text-emerald-400 font-semibold',
+  },
+  loss: {
+    cardCls: 'rounded-xl bg-red-500/10 border border-red-500/30 p-3',
+    labelCls: 'text-xs text-red-500 dark:text-red-400 font-semibold',
+  },
+};
+
+const T_CARD_UNSUITABLE_CLS =
+  'rounded-xl bg-warn-bg/30 border border-warn/20 p-3';
+
+function OperationAdviceBlock({ analysis }: { analysis: AnalysisResult }) {
+  const ai = analysis.ai;
+  if (!ai) return null;
+  const ps = ai.positionStatus;
+  const palette = ROLE_COLOR[ps];
+  const pctTxt =
+    analysis.costBasisPct != null && ps !== 'empty'
+      ? `${analysis.costBasisPct > 0 ? '+' : ''}${((analysis.costBasisPct as number) * 100).toFixed(2)}%`
+      : null;
+  const a = ai.advice || {
+    rationale: '',
+    price: { entryOrExitRange: '', stopLoss: '' },
+    positionPct: '',
+    trigger: '',
+    holdingWindow: '',
+    notAction: '',
+    tStrategy: null,
+  };
+  const cells: Array<{ icon: string; label: string; value: string }> = [
+    { icon: '💰', label: '价位', value: a.price?.entryOrExitRange ?? '' },
+    { icon: '🛑', label: '止损', value: a.price?.stopLoss ?? '' },
+    { icon: '📊', label: '仓位', value: a.positionPct ?? '' },
+    { icon: '⚡', label: '触发', value: a.trigger ?? '' },
+    { icon: '⏰', label: '时间', value: a.holdingWindow ?? '' },
+    { icon: '🚫', label: '不动', value: a.notAction ?? '' },
+  ];
+  const visibleCells = cells.filter((c) => c.value);
+  const t = a.tStrategy;
+  const showT = (ps === 'profit' || ps === 'loss') && t != null;
+  return (
+    <div className="space-y-2">
+      {/* 头部:rationale(整行)+ 角色 + 浮盈/浮亏 */}
+      <div className={palette.cardCls}>
+        <div className="flex items-baseline justify-between mb-2">
+          <div className={palette.labelCls}>{ai.adviceRole || '操作参考'}</div>
+          {pctTxt && <div className={palette.labelCls}>{pctTxt}</div>}
+        </div>
+        {a.rationale && (
+          <p className="text-sm text-text-pri leading-relaxed whitespace-pre-wrap">
+            {a.rationale}
+          </p>
+        )}
+      </div>
+      {/* 6 字段网格 */}
+      {visibleCells.length > 0 && (
+        <div className="grid grid-cols-1 ">
+          {visibleCells.map((c) => (
+            <div key={c.label} className={palette.cardCls}>
+              <div className={palette.labelCls}>
+                {c.icon} {c.label}
+              </div>
+              <p className="text-sm text-text-pri leading-relaxed whitespace-pre-wrap">
+                {c.value}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+      {/* 做 T 区块(仅 profit/loss 渲染) */}
+      {showT && t && (
+        <div
+          className={
+            t.suitable
+              ? 'rounded-xl bg-accent-subtle/60 border border-accent/20 p-3'
+              : T_CARD_UNSUITABLE_CLS
+          }
+        >
+          <div className="flex items-baseline justify-between mb-2">
+            <div className={palette.labelCls}>🔄 做 T 参考</div>
+            <div className={palette.labelCls}>
+              {t.suitable ? '适合 ✓' : '不适合'}
+            </div>
+          </div>
+          {t.suitable ? (
+            <div className="grid grid-cols-1  gap-2">
+              {[
+                { icon: '📏', label: 'T 区间', value: t.tRange },
+                { icon: '🛡️', label: '底仓', value: t.basePositionPct },
+                { icon: '📤', label: '卖出触发', value: t.sellTrigger },
+                { icon: '📥', label: '买回触发', value: t.buybackTrigger },
+                { icon: '🛑', label: '底仓止损', value: t.stopLoss },
+                { icon: '🚫', label: '不做 T', value: t.unsuitableSignals },
+              ]
+                .filter((c) => c.value)
+                .map((c) => (
+                  <div key={c.label} className={palette.cardCls}>
+                    <div className={palette.labelCls}>
+                      {c.icon} {c.label}
+                    </div>
+                    <p className="text-sm text-text-pri leading-relaxed whitespace-pre-wrap">
+                      {c.value}
+                    </p>
+                  </div>
+                ))}
+            </div>
+          ) : (
+            <p className="text-sm text-text-sec leading-relaxed whitespace-pre-wrap">
+              {t.unsuitableSignals || '当前行情不适合做 T'}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

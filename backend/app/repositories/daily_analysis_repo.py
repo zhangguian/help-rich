@@ -29,6 +29,7 @@ class DailyAnalysisRepository:
         top_issues: list,
         ai_view: str | None,
         ai_summary: str | None,
+        ai_advice_json: str | None,
         current_price: str | None,
         latest_kline_date: date | None,
     ) -> DailyAnalysis:
@@ -47,6 +48,7 @@ class DailyAnalysisRepository:
                 existing.top_issues = issues_json
                 existing.ai_view = ai_view
                 existing.ai_summary = ai_summary
+                existing.ai_advice_json = ai_advice_json
                 existing.current_price = current_price
                 existing.latest_kline_date = latest_kline_date
                 # updated_at 由 onupdate 自动更新;created_at 保留首写时间
@@ -60,6 +62,7 @@ class DailyAnalysisRepository:
                     top_issues=issues_json,
                     ai_view=ai_view,
                     ai_summary=ai_summary,
+                    ai_advice_json=ai_advice_json,
                     current_price=current_price,
                     latest_kline_date=latest_kline_date,
                 )
