@@ -6,6 +6,7 @@
 """
 import asyncio
 import json
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -16,12 +17,23 @@ from app.main import app
 from app.services import kline_service
 from app.services.kline_service import (
     KLineSourceUnavailable,
+    _is_post_close,
+    _last_trading_day,
     _to_sina_scale,
     _to_sina_symbol,
     fetch_intraday,
     fetch_klines,
 )
 from sqlalchemy import delete
+
+
+def make_fake_now(monkeypatch, dt: Any) -> None:
+    """mock kline_service.datetime.now() 为指定时刻(测试不再依赖真实时钟)"""
+    class FakeDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return dt
+    monkeypatch.setattr(kline_service, "datetime", FakeDatetime)
 
 
 @pytest.fixture()
@@ -184,25 +196,20 @@ class TestFetchKlines:
             asyncio.run(fetch_klines("600519.SH", "daily", 30))
 
     def test_cache_hit_when_fresh(self, monkeypatch):
-        """最新 trade_date 距今 ≤ 1 天 → 命中缓存,不调新浪"""
-        from datetime import date as _date, timedelta
+        """最新 trade_date = 最近交易日 → 命中缓存,不调新浪(工作日盘后场景)"""
+        from datetime import date as _date
         from app.db import async_session
         from app.models.orm import KlineCache
         from sqlalchemy import delete as _del
 
-        # 模拟 today = 8/4(seed today 的数据 → 命中)
-        fake_today = _date(2026, 8, 4)
-        class FakeDate(_date):
-            @classmethod
-            def today(cls):
-                return fake_today
-        monkeypatch.setattr(kline_service, "date", FakeDate)
+        # 模拟 now = 2026-08-04(周二)16:30 盘后;最近交易日 = 8/4
+        make_fake_now(monkeypatch, datetime(2026, 8, 4, 16, 30))
 
         async def _seed():
             async with async_session() as session:
                 await session.execute(_del(KlineCache))
                 session.add(KlineCache(
-                    stock_code="600519.SH", trade_date=fake_today,
+                    stock_code="600519.SH", trade_date=_date(2026, 8, 4),
                     period="daily", open_price="1500", high_price="1530",
                     low_price="1495", close_price="1520", volume=100, source="sina",
                 ))
@@ -222,31 +229,25 @@ class TestFetchKlines:
         assert out[0]["close"] == "1520"
 
     def test_cache_stale_force_refetch(self, monkeypatch):
-        """最新 trade_date 距今 > 1 天 → 视为过期,强制重拉新浪"""
-        from datetime import date, timedelta
+        """最新 trade_date < 最近交易日 → 视为过期,强制重拉新浪"""
+        from datetime import date as _date, timedelta
         from app.db import async_session
         from app.models.orm import KlineCache
         from sqlalchemy import delete as _del
 
-        # seed: 写入 8/3 的旧数据(模拟"今天 = 8/5 但 K 线最新还是 8/3")
-        today = date(2026, 8, 5)
+        # 模拟 now = 2026-08-05(周三)16:30 盘后;最近交易日 = 8/5;缓存止于 8/3
+        make_fake_now(monkeypatch, datetime(2026, 8, 5, 16, 30))
+
         async def _seed():
             async with async_session() as session:
                 await session.execute(_del(KlineCache))
                 session.add(KlineCache(
-                    stock_code="600519.SH", trade_date=today - timedelta(days=2),
+                    stock_code="600519.SH", trade_date=_date(2026, 8, 3),
                     period="daily", open_price="1500", high_price="1530",
                     low_price="1495", close_price="1500", volume=100, source="sina",
                 ))
                 await session.commit()
         asyncio.run(_seed())
-
-        # 用 monkeypatch 修改 date.today 返回 8/5
-        class FakeDate(date):
-            @classmethod
-            def today(cls):
-                return today
-        monkeypatch.setattr(kline_service, "date", FakeDate)
 
         # 第二次调用:应触发重拉(因 stale)
         new_rows = [
@@ -264,28 +265,23 @@ class TestFetchKlines:
 
     def test_cache_today_is_fresh(self, monkeypatch):
         """最新 trade_date = today → 命中(staleness = 0)"""
-        from datetime import date
+        from datetime import date as _date
         from app.db import async_session
         from app.models.orm import KlineCache
         from sqlalchemy import delete as _del
 
-        today = date(2026, 8, 4)
+        make_fake_now(monkeypatch, datetime(2026, 8, 4, 16, 30))
+
         async def _seed():
             async with async_session() as session:
                 await session.execute(_del(KlineCache))
                 session.add(KlineCache(
-                    stock_code="600519.SH", trade_date=today,
+                    stock_code="600519.SH", trade_date=_date(2026, 8, 4),
                     period="daily", open_price="1500", high_price="1530",
                     low_price="1495", close_price="1520", volume=100, source="sina",
                 ))
                 await session.commit()
         asyncio.run(_seed())
-
-        class FakeDate(date):
-            @classmethod
-            def today(cls):
-                return today
-        monkeypatch.setattr(kline_service, "date", FakeDate)
 
         # 二次调用:不应调新浪
         class MustNotBeCalled:
@@ -297,6 +293,121 @@ class TestFetchKlines:
         monkeypatch.setattr(kline_service.httpx, "AsyncClient", MustNotBeCalled)
         out = asyncio.run(fetch_klines("600519.SH", "daily", 1))
         assert len(out) == 1
+        assert out[0]["close"] == "1520"
+
+
+class TestTradingDayLogic:
+    """v2.5.4:周末/工作日判定 — 修复"周六看到周四数据"问题"""
+
+    def test_last_trading_day_saturday(self):
+        # 2026-08-08 周六 → 最近交易日 8/7(周五)
+        assert _last_trading_day(datetime(2026, 8, 8, 10, 0)) == datetime(2026, 8, 7).date()
+
+    def test_last_trading_day_sunday(self):
+        assert _last_trading_day(datetime(2026, 8, 9, 10, 0)) == datetime(2026, 8, 7).date()
+
+    def test_last_trading_day_weekday(self):
+        assert _last_trading_day(datetime(2026, 8, 5, 10, 0)) == datetime(2026, 8, 5).date()
+
+    def test_post_close_weekend_true(self):
+        assert _is_post_close(datetime(2026, 8, 8, 9, 0)) is True
+
+    def test_post_close_weekday_morning_false(self):
+        assert _is_post_close(datetime(2026, 8, 5, 10, 0)) is False
+
+    def test_post_close_weekday_after15_true(self):
+        assert _is_post_close(datetime(2026, 8, 5, 16, 30)) is True
+
+    def test_saturday_stale_force_refetch(self, monkeypatch):
+        """核心 bug:周六打开、缓存止于周四(6号) → 必须重拉(新浪已有周五 7号 数据)"""
+        from datetime import date as _date
+        from app.db import async_session
+        from app.models.orm import KlineCache
+        from sqlalchemy import delete as _del
+
+        # now = 2026-08-08(周六);最近交易日 = 8/7(周五);缓存最新 8/6(周四)
+        make_fake_now(monkeypatch, datetime(2026, 8, 8, 10, 0))
+
+        async def _seed():
+            async with async_session() as session:
+                await session.execute(_del(KlineCache))
+                session.add(KlineCache(
+                    stock_code="600519.SH", trade_date=_date(2026, 8, 6),
+                    period="daily", open_price="1500", high_price="1530",
+                    low_price="1495", close_price="1520", volume=100, source="sina",
+                ))
+                await session.commit()
+        asyncio.run(_seed())
+
+        new_rows = [
+            {"day": "2026-08-07", "open": "1525", "high": "1560", "low": "1520", "close": "1555", "volume": "3000"},
+        ]
+        fake_class, _ = make_fake_client_class([
+            httpx.Response(200, text=f"callback_x({json.dumps(new_rows, ensure_ascii=False)});")
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake_class)
+        out = asyncio.run(fetch_klines("600519.SH", "daily", 1))
+        assert out[0]["date"] == "2026-08-07"
+        assert out[0]["close"] == "1555"
+
+    def test_saturday_cache_already_friday_hit(self, monkeypatch):
+        """周六但缓存已是周五 → 命中,不重拉(避免周末反复请求)"""
+        from datetime import date as _date
+        from app.db import async_session
+        from app.models.orm import KlineCache
+        from sqlalchemy import delete as _del
+
+        make_fake_now(monkeypatch, datetime(2026, 8, 8, 10, 0))
+
+        async def _seed():
+            async with async_session() as session:
+                await session.execute(_del(KlineCache))
+                session.add(KlineCache(
+                    stock_code="600519.SH", trade_date=_date(2026, 8, 7),
+                    period="daily", open_price="1520", high_price="1560",
+                    low_price="1510", close_price="1550", volume=100, source="sina",
+                ))
+                await session.commit()
+        asyncio.run(_seed())
+
+        class MustNotBeCalled:
+            def __init__(self, *a, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *e): return None
+            async def get(self, *a, **kw):
+                raise RuntimeError("缓存已是周五,周末不应重拉")
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", MustNotBeCalled)
+        out = asyncio.run(fetch_klines("600519.SH", "daily", 1))
+        assert out[0]["close"] == "1550"
+
+    def test_intraday_intolerant_stale(self, monkeypatch):
+        """工作日盘中(<15:00)缓存陈旧 → 容忍命中(不拉未定格 bar)"""
+        from datetime import date as _date
+        from app.db import async_session
+        from app.models.orm import KlineCache
+        from sqlalchemy import delete as _del
+
+        make_fake_now(monkeypatch, datetime(2026, 8, 5, 10, 30))
+
+        async def _seed():
+            async with async_session() as session:
+                await session.execute(_del(KlineCache))
+                session.add(KlineCache(
+                    stock_code="600519.SH", trade_date=_date(2026, 8, 4),
+                    period="daily", open_price="1500", high_price="1530",
+                    low_price="1495", close_price="1520", volume=100, source="sina",
+                ))
+                await session.commit()
+        asyncio.run(_seed())
+
+        class MustNotBeCalled:
+            def __init__(self, *a, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *e): return None
+            async def get(self, *a, **kw):
+                raise RuntimeError("盘中不应重拉日 K")
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", MustNotBeCalled)
+        out = asyncio.run(fetch_klines("600519.SH", "daily", 1))
         assert out[0]["close"] == "1520"
 
 

@@ -101,8 +101,9 @@ function camelToSnake(obj: unknown): unknown {
 
 /**
  * snake_case → camelCase 转换(递归对象/数组)
+ * 供 SSE 流式(fetch 直连,不走 axios 拦截器)等场景复用
  */
-function snakeToCamel(obj: unknown): unknown {
+export function snakeToCamel(obj: unknown): unknown {
   if (Array.isArray(obj)) return obj.map(snakeToCamel);
   if (obj !== null && typeof obj === 'object' && !(obj instanceof Date)) {
     return Object.fromEntries(

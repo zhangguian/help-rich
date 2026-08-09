@@ -67,7 +67,8 @@ class BaseLLM(ABC):
         system: str,
         user: str,
         temperature: float = 0.3,
-        max_retries: int = 3,
+        max_retries: int = 2,
+        max_tokens: int = 1500,
     ) -> str:
         """发送对话,返回回复文本
 
@@ -82,7 +83,8 @@ class BaseLLM(ABC):
         system: str,
         messages: list[dict[str, str]],
         temperature: float = 0.3,
-        max_retries: int = 3,
+        max_retries: int = 2,
+        max_tokens: int = 1500,
     ) -> str:
         """多轮对话:system 单独传入,messages 是 [{role,content}] 列表(不含 system)
 
@@ -125,7 +127,8 @@ class BaseLLM(ABC):
         user_prompt: str,
         image_data_url: str,
         temperature: float = 0.3,
-        max_retries: int = 3,
+        max_retries: int = 2,
+        max_tokens: int = 2000,
     ) -> str:
         """多模态 chat:文本 + 图片(base64 data URL)
 
@@ -167,10 +170,11 @@ class OpenAICompatClient(BaseLLM):
         system: str,
         user: str,
         temperature: float = 0.3,
-        max_retries: int = 3,
+        max_retries: int = 2,
+        max_tokens: int = 1500,
     ) -> str:
         return await self.chat_with_messages(
-            system, [{"role": "user", "content": user}], temperature, max_retries
+            system, [{"role": "user", "content": user}], temperature, max_retries, max_tokens
         )
 
     async def chat_with_messages(
@@ -178,7 +182,8 @@ class OpenAICompatClient(BaseLLM):
         system: str,
         messages: list[dict[str, str]],
         temperature: float = 0.3,
-        max_retries: int = 3,
+        max_retries: int = 2,
+        max_tokens: int = 1500,
     ) -> str:
         last_err: Exception | None = None
         # trust_env=False:避免系统代理干扰(公司网络下 TSL 断连,ADR-0005 同因)
@@ -196,6 +201,7 @@ class OpenAICompatClient(BaseLLM):
                             "model": self._model,
                             "messages": payload_messages,
                             "temperature": temperature,
+                            "max_tokens": max_tokens,
                         },
                     )
                 except (httpx.TimeoutException, httpx.NetworkError) as e:

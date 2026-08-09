@@ -6,8 +6,8 @@ import Link from 'next/link';
 import { AnimatePresence, motion } from 'framer-motion';
 import clsx from 'clsx';
 
-import { apiGet } from '@/lib/api';
-import { getAnalysisCache, setAnalysisCache } from '@/lib/analysisCache';
+import { apiGet, snakeToCamel } from '@/lib/api';
+import { consumeAnalysisStream } from '@/lib/analysisStream';
 import type { AnalysisResult, Position, Quote, WatchlistItem } from '@/lib/types';
 
 import { AnalysisPanel } from '@/components/advice/AnalysisPanel';
@@ -65,6 +65,8 @@ export default function Workbench() {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [analysisStarted, setAnalysisStarted] = useState(false);
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  // 流式进度:LLM 启动 30s 后开始推,这里存最新的 elapsed_s(供 AnalysisPanel 显示「思考中…Ns」)
+  const [analysisProgress, setAnalysisProgress] = useState<number | null>(null);
   const [selectedQuote, setSelectedQuote] = useState<Quote | null>(null);
   // 当前选中股票(异步回调防串:分析/缓存返回时比对,避免贴到别的股票面板)
   const activeCodeRef = useRef<string | null>(null);
@@ -182,33 +184,115 @@ export default function Workbench() {
     void refreshAnalysisFromCache(code);
   }, []);
 
-  /** 仅读缓存:无缓存不显示分析,等用户手动触发 */
+  /** 切股回显:统一走后端 daily_analyses 存档(跨浏览器/换设备一致)。
+     防御:#4 + #5 双校验 — stockCode 不匹配则丢弃/拒绝 */
   const refreshAnalysisFromCache = useCallback(async (code: string) => {
     if (!code) return;
-    const cached = await getAnalysisCache(code);
-    if (activeCodeRef.current !== code) return;
-    setAnalysis(cached);
-    setAnalysisStarted(cached != null);
+    try {
+      const latest = await apiGet<AnalysisResult>(
+        `/diagnose/stock/${encodeURIComponent(code)}/analysis-latest`,
+      );
+      if (activeCodeRef.current !== code) return;
+      if (latest && latest.stockCode !== code) {
+        console.error(
+          `[isolation] Backend stockCode mismatch: ${latest.stockCode} != ${code}`,
+        );
+        setAnalysis(null);
+        setAnalysisStarted(false);
+        return;
+      }
+      if (latest && (latest.indicators || latest.ai)) {
+        // 有存档 → 显示(展示即最新,无需前端缓存)
+        setAnalysis(latest);
+        setAnalysisStarted(true);
+      } else {
+        setAnalysis(null);
+        setAnalysisStarted(false);
+      }
+    } catch (e) {
+      if (activeCodeRef.current === code) {
+        console.warn(`[analysis-latest] 后端兜底失败(${code}):`, e);
+        setAnalysis(null);
+        setAnalysisStarted(false);
+      }
+    }
   }, []);
 
-  /** 用户手动点「开始分析/重新分析」 — 调后端 + 写缓存(key 含 latestKlineDate) */
-  const refreshAnalysis = useCallback(() => {
+  /** 流式:用户手动点「开始分析/重新分析」 — 默认走后端节点缓存;
+   *  force=true 时调流式端点加 ?force=true,后端跳过节点缓存强制重算 LLM */
+  const refreshAnalysis = useCallback((force = false) => {
     const code = activeCode;
     if (!code) return;
     setAnalysisStarted(true);
     setAnalysisLoading(true);
-    apiGet<AnalysisResult>(`/stock/${encodeURIComponent(code)}/analysis`, {
-      timeout: 60000,
+    setAnalysisProgress(null);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 305000);
+    const url = `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api'}/stock/${encodeURIComponent(code)}/analysis/stream${force ? '?force=true' : ''}`;
+    consumeAnalysisStream(url, {
+      signal: controller.signal,
+      onEvent: (evt) => {
+        if (activeCodeRef.current !== code) return;
+        if (evt.event === 'indicators') {
+          // 先用已有 analysis,只更新 indicators(避免 ai 闪烁)
+          setAnalysis((prev) => ({
+            ...(prev ?? ({} as AnalysisResult)),
+            stockCode: code,
+            latestKlineDate: evt.latest_kline_date ?? prev?.latestKlineDate ?? null,
+            indicators: snakeToCamel(evt.data) as AnalysisResult['indicators'],
+          } as AnalysisResult));
+        } else if (evt.event === 'cache_hit') {
+          const r = snakeToCamel(evt.data) as AnalysisResult;
+          setAnalysis(r);
+        } else if (evt.event === 'ai_started') {
+          setAnalysisProgress(0);
+        } else if (evt.event === 'ai_progress') {
+          setAnalysisProgress(evt.elapsed_s);
+        } else if (evt.event === 'ai_complete') {
+          setAnalysis((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  ai: snakeToCamel(evt.ai) as AnalysisResult['ai'],
+                  aiSource: 'live',
+                  aiError: null,
+                  latestKlineDate: evt.latest_kline_date ?? prev.latestKlineDate ?? null,
+                }
+              : prev,
+          );
+        } else if (evt.event === 'stale_cache') {
+          const r = snakeToCamel(evt.data) as AnalysisResult;
+          setAnalysis(r);
+        } else if (evt.event === 'ai_error') {
+          setAnalysis((prev) => {
+            if (!prev) return prev;
+            const code = evt.code as 'unconfigured' | 'timeout' | 'failed';
+            return { ...prev, aiError: code, aiSource: null };
+          });
+        } else if (evt.event === 'done') {
+          // 流结束,分析结果由后端 ai_source=="live" 时落库,前端无需缓存
+          setAnalysis((prev) => prev);
+        }
+      },
     })
-      .then((r) => {
-        void setAnalysisCache(code, r);
-        if (activeCodeRef.current === code) setAnalysis(r);
-      })
       .catch(() => {
         if (activeCodeRef.current === code) setAnalysis(null);
       })
-      .finally(() => setAnalysisLoading(false));
+      .finally(() => {
+        clearTimeout(timer);
+        if (activeCodeRef.current === code) {
+          setAnalysisLoading(false);
+          setAnalysisProgress(null);
+        }
+      });
   }, [activeCode]);
+
+  /** 强制重算:调流式端点 ?force=true,后端跳过节点缓存强制重算 LLM。
+   *  后端 save_from_analysis_result 仅在 ai_source=="live" 时落库,符合 stale_cache 不污染今日行 的约束。 */
+  const forceRefreshAnalysis = useCallback(() => {
+    if (!activeCode) return;
+    refreshAnalysis(true);
+  }, [activeCode, refreshAnalysis]);
 
   const visibleItems = useMemo(() => {
     if (tab === 'favorite') {
@@ -525,12 +609,15 @@ export default function Workbench() {
         {tab !== 'market' && tab !== 'settings' && (
           <aside className="w-[22rem] shrink-0 flex flex-col gap-3 min-h-0">
             <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-              <AnalysisPanel
-                analysis={analysis}
-                started={analysisStarted}
-                loading={analysisLoading}
-                onRefresh={refreshAnalysis}
-              />
+<AnalysisPanel
+                  analysis={analysis}
+                  started={analysisStarted}
+                  loading={analysisLoading}
+                  aiProgress={analysisProgress}
+                  onRefresh={() => refreshAnalysis(false)}
+                  onForceRefresh={forceRefreshAnalysis}
+                  onRetry={() => refreshAnalysis(true)}
+                />
             </div>
             <div className="flex-none min-h-0">
               <ChatPanel

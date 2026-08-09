@@ -6,6 +6,7 @@ LLM 不可用 / 输出非法 → ai=None,由前端降级纯指标展示(页面�
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -18,9 +19,10 @@ from app.services.ta_service import compute_indicators
 logger = logging.getLogger(__name__)
 
 # LLM 调用总时间预算(秒):超过直接降级/503,保证接口快速返回,不被慢模型拖死
-# 分析端实测 23-25s 接近原 25s 上限,常因慢模型降级为 ai=null;50s 留足够 buffer
-LLM_ANALYSIS_BUDGET = 50.0
-LLM_QUESTION_BUDGET = 55.0
+# v2.5 放宽至 300s:覆盖 MiniMax-M2.5 思考链典型30~70s + 长尾抖动;
+# 配合 max_tokens=1500/2000 进一步压缩输出耗时,流式 /analysis/stream 提供进度反馈
+LLM_ANALYSIS_BUDGET = 300.0
+LLM_QUESTION_BUDGET = 300.0
 # 多轮对话上下文窗口:超过此轮数的旧问答会被丢弃,防止 LLM context 撑爆
 MAX_HISTORY_TURNS = 6
 
@@ -345,6 +347,10 @@ async def get_stock_analysis(
     """指标 + AI 解读;LLM 失败 / K 线不足 → ai=None / signal_winrate=None(纯指标降级)
 
     ai_error: 字符串描述降级原因(unconfigured / timeout / failed / insufficient_klines);None 表示 AI 成功
+    ai_source: "live" / "stale_cache" / None
+      - "live":本次 LLM 调用成功
+      - "stale_cache":本次 LLM 超时/失败,从 daily_analysis 历史兜底
+      - None:AI 完全不可用(无 LLM 或超时且无旧解读)
     signal_winrate: K 线不足时为 None(K线 < 23 根时回检样本为零)
 
     current_price: 实时盘中价(None 时 LLM 仅看 K 线 latest_close)
@@ -357,6 +363,7 @@ async def get_stock_analysis(
         "indicators": indicators,
         "ai": None,
         "ai_error": None,
+        "ai_source": None,
     }
     try:
         result["signal_winrate"] = compute_signal_winrate(klines)
@@ -381,14 +388,35 @@ async def get_stock_analysis(
             pass
     try:
         raw = await asyncio.wait_for(
-            llm.chat(ANALYSIS_SYSTEM, user_msg),
+            llm.chat(ANALYSIS_SYSTEM, user_msg, max_tokens=1500),
             timeout=LLM_ANALYSIS_BUDGET,
         )
         parsed = _parse_llm_json(raw)
         result["ai"] = _validate_analysis(parsed)
+        result["ai_source"] = "live"
     except asyncio.TimeoutError:
-        logger.warning("个股分析 LLM 超时(>%ss),降级纯指标: %s", LLM_ANALYSIS_BUDGET, stock_code)
+        logger.warning("个股分析 LLM 超时(>%ss),尝试 stale_cache 兜底: %s", LLM_ANALYSIS_BUDGET, stock_code)
         result["ai_error"] = "timeout"
+        # v2.5.4:从历史成功 AI 兜底
+        from app.services.daily_analysis_service import get_stale_ai_cache
+        latest_kline_date_str = klines[-1]["date"] if klines else None
+        stale = await get_stale_ai_cache(
+            stock_code,
+            current_latest_kline_date=latest_kline_date_str,
+            override_position_status=position_status,
+        )
+        if stale and stale.get("ai") is not None:
+            result["ai"] = stale["ai"]
+            result["ai_source"] = "stale_cache"
+            result["cached_at"] = stale.get("cached_at")
+            result["stale_minutes"] = stale.get("stale_minutes")
+            result["source_latest_kline_date"] = stale.get("source_latest_kline_date")
+            logger.info(
+                "个股分析 stale_cache 命中(%s): stale_minutes=%s source_date=%s",
+                stock_code, result.get("stale_minutes"), result.get("source_latest_kline_date"),
+            )
+        else:
+            logger.warning("个股分析 stale_cache 未命中,降级纯指标: %s", stock_code)
     except Exception as e:
         logger.warning("个股分析 LLM 失败,降级纯指标(%s): %s", stock_code, e)
         result["ai_error"] = "failed"
@@ -431,7 +459,7 @@ async def ask_stock_question(
     )
     try:
         raw = await asyncio.wait_for(
-            llm.chat_with_messages(system, messages, temperature=0.4),
+            llm.chat_with_messages(system, messages, temperature=0.4, max_tokens=2000),
             timeout=LLM_QUESTION_BUDGET,
         )
     except asyncio.TimeoutError as e:
@@ -552,3 +580,159 @@ async def ask_stock_question_stream(
             yield piece
     except Exception as e:
         raise StockAdviceUnavailable(f"LLM 调用失败: {e}") from e
+
+
+# ============================================================
+# 流式 /analysis/stream(v2.5.4)
+# 事件序列(异步生成器,SSE data: <json>\n\n):
+#   {event:"indicators", data:{...}}              ← 立即(LLM 未启动)
+#   {event:"cache_check", hit:true}                ← 仅未命中时
+#   {event:"cache_miss"}
+#   {event:"ai_started", at:<ts>}                  ← 进入 LLM
+#   {event:"ai_progress", elapsed_s:N}             ← LLM 启动 30s 后每 10s 推
+#   {event:"ai_complete", ai:{...}}                ← 成功
+#   {event:"ai_error", code, message, ai_source, ai?}  ← 失败/超时(stale_cache 兜底)
+#   {event:"done"}                                 ← 始终最后
+# ============================================================
+
+AI_PROGRESS_INITIAL_DELAY = 30.0
+AI_PROGRESS_INTERVAL = 10.0
+
+
+async def stream_stock_analysis(
+    stock_code: str,
+    klines: list[dict[str, Any]],
+    current_price: str | None = None,
+    position: Any | None = None,
+    position_status: str = "empty",
+    force: bool = False,
+) -> AsyncIterator[dict[str, Any]]:
+    """流式个股分析:先吐 indicators/cache_check,再吐 ai 进度,最后 done。
+
+    force=True 跳过节点缓存,强制重算 LLM(「强制重算 ⚡」入口)。
+    超时与 stale_cache 兜底复用 get_stock_analysis 的语义;调用方拿到的是
+    dict 列表,SSE 包装在 api 层完成。
+    """
+    indicators = compute_indicators(klines)
+    latest_kline_date = klines[-1]["date"] if klines else None
+    yield {"event": "indicators", "data": indicators,
+           "latest_kline_date": latest_kline_date}
+
+    # 节点缓存命中(同日 ai_json 非空)→ 直接 done,不走 LLM;force=True 跳过
+    if not force and latest_kline_date:
+        from app.services.daily_analysis_service import get_cached_analysis
+        cached = await get_cached_analysis(stock_code, latest_kline_date)
+        if cached is not None:
+            # 同步 ai 角色
+            if isinstance(cached.get("ai"), dict):
+                cached["ai"]["positionStatus"] = position_status
+                cached["ai"]["adviceRole"] = {
+                    "empty": "建仓参考",
+                    "profit": "止盈参考",
+                    "loss": "解套参考",
+                }[position_status]
+                if position_status == "empty":
+                    advice = cached["ai"].get("advice") or {}
+                    if isinstance(advice, dict):
+                        advice["tStrategy"] = None
+                        cached["ai"]["advice"] = advice
+            cached["ai_source"] = "live"
+            cached["from_cache"] = True
+            cached["latest_kline_date"] = latest_kline_date
+            yield {"event": "cache_hit", "data": cached}
+            yield {"event": "done"}
+            return
+    yield {"event": "cache_miss"}
+
+    llm = await _get_llm()
+    if llm is None:
+        yield {"event": "ai_error", "code": "unconfigured", "message": "未配置 LLM Key"}
+        yield {"event": "done"}
+        return
+
+    ctx = json.dumps(_build_context(klines, current_price), ensure_ascii=False)
+    user_msg = f"以下为该股票技术指标与最近K线:\n{ctx}\n用户持仓状态(position_status):{position_status}"
+    if position is not None:
+        try:
+            avg_cost = float(position.avg_cost) if position.avg_cost is not None else None
+            shares = int(position.shares) if position.shares else 0
+            user_msg += f"\n用户持仓:{shares}股 @成本{avg_cost}元(若 position_status 已给定则仅作交叉校验,不要复述精确成本数字)"
+        except Exception:
+            pass
+
+    yield {"event": "ai_started", "at": int(time.time())}
+
+    # 用 task 包 LLM 调用,主循环周期性 yield progress
+    t0 = time.time()
+
+    async def _do_llm() -> str:
+        return await asyncio.wait_for(
+            llm.chat(ANALYSIS_SYSTEM, user_msg, max_tokens=1500),
+            timeout=LLM_ANALYSIS_BUDGET,
+        )
+
+    task = asyncio.create_task(_do_llm())
+    try:
+        next_progress = AI_PROGRESS_INITIAL_DELAY
+        while not task.done():
+            await asyncio.sleep(AI_PROGRESS_INTERVAL)
+            if task.done():
+                break
+            elapsed = time.time() - t0
+            if elapsed >= next_progress:
+                yield {"event": "ai_progress", "elapsed_s": int(elapsed)}
+                next_progress += AI_PROGRESS_INTERVAL
+        raw = await task
+    except asyncio.CancelledError:
+        if not task.done():
+            task.cancel()
+        raise
+    except asyncio.TimeoutError:
+        # task 已自动抛 TimeoutError,这里再补一条 error 事件
+        yield {"event": "ai_error", "code": "timeout", "message": f"LLM 超时(>{LLM_ANALYSIS_BUDGET}s)"}
+        # stale_cache 兜底
+        from app.services.daily_analysis_service import get_stale_ai_cache
+        latest_kline_date_str = klines[-1]["date"] if klines else None
+        stale = await get_stale_ai_cache(
+            stock_code,
+            current_latest_kline_date=latest_kline_date_str,
+            override_position_status=position_status,
+        )
+        if stale and stale.get("ai") is not None:
+            stale["ai_source"] = "stale_cache"
+            yield {"event": "stale_cache", "data": stale}
+        yield {"event": "done"}
+        return
+    except Exception as e:
+        logger.warning("流式分析 LLM 失败(%s): %s", stock_code, e)
+        yield {"event": "ai_error", "code": "failed", "message": str(e)}
+        yield {"event": "done"}
+        return
+
+    try:
+        parsed = _parse_llm_json(raw)
+        ai = _validate_analysis(parsed)
+    except Exception as e:
+        logger.warning("流式分析 JSON 解析失败(%s): %s", stock_code, e)
+        yield {"event": "ai_error", "code": "failed", "message": f"JSON 解析失败: {e}"}
+        yield {"event": "done"}
+        return
+
+    # 落库守卫:仅 ai 解析成功且为 live 时写库
+    try:
+        from app.services.daily_analysis_service import save_from_analysis_result
+        result_for_save = {
+            "stock_code": stock_code,
+            "indicators": indicators,
+            "ai": ai,
+            "ai_source": "live",
+            "ai_error": None,
+            "position_status": position_status,
+        }
+        await save_from_analysis_result(stock_code, klines, result_for_save)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("流式分析 save_from_analysis_result 失败(%s): %s", stock_code, e)
+
+    yield {"event": "ai_complete", "ai": ai, "ai_source": "live",
+           "latest_kline_date": latest_kline_date}
+    yield {"event": "done"}

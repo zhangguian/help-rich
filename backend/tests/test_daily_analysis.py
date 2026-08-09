@@ -115,8 +115,9 @@ class TestDailyAnalysisRepo:
                 score_avg="101.00",
                 dimension_avg={"集中度": 16.0, "价格合理性": 8.0},
                 top_issues=[{"dim": "价格合理性", "score": 8, "hint": "买入价相对成本偏离"}],
-                ai_view="bullish",
-                ai_summary="测试评语",
+ai_view="bullish",
+                    ai_summary="测试评语",
+                    ai_advice_json=None,
                 current_price="105.500",
                 latest_kline_date=date(2026, 8, 4),
             )
@@ -133,13 +134,13 @@ class TestDailyAnalysisRepo:
             r1 = await daily_analysis_repo.upsert(
                 stock_code="001896.SZ", analysis_date=date(2026, 8, 4),
                 score_avg="101.00", dimension_avg={}, top_issues=[],
-                ai_view="bullish", ai_summary="v1",
+                ai_view="bullish", ai_summary="v1", ai_advice_json=None,
                 current_price="100", latest_kline_date=date(2026, 8, 4),
             )
             r2 = await daily_analysis_repo.upsert(
                 stock_code="001896.SZ", analysis_date=date(2026, 8, 4),
                 score_avg="102.00", dimension_avg={}, top_issues=[],
-                ai_view="bearish", ai_summary="v2",
+                ai_view="bearish", ai_summary="v2", ai_advice_json=None,
                 current_price="101", latest_kline_date=date(2026, 8, 4),
             )
             return r1.id, r2.id, r2.ai_summary, r2.ai_view
@@ -159,7 +160,7 @@ class TestDailyAnalysisRepo:
                 await daily_analysis_repo.upsert(
                     stock_code="001896.SZ", analysis_date=today - timedelta(days=d),
                     score_avg=f"100.{d}", dimension_avg={}, top_issues=[],
-                    ai_view="neutral", ai_summary=f"day-{d}",
+                    ai_view="neutral", ai_summary=f"day-{d}", ai_advice_json=None,
                     current_price="100", latest_kline_date=today - timedelta(days=d),
                 )
             rows = await daily_analysis_repo.list_by_stock("001896.SZ", limit=10)
@@ -211,6 +212,83 @@ class TestDailyAnalysisService:
         assert rid is not None  # fallback 到 result.latest_kline_date
 
 
+    def test_legacy_row_invalid_view_normalized(self):
+        """v2.5.4:历史行 ai_json 里 view 非标准枚举 → 回显归一为 neutral(防前端崩溃)"""
+        from datetime import date
+        from app.services.daily_analysis_service import get_latest_as_analysis_result
+
+        async def _seed():
+            async with async_session() as session:
+                session.add(DailyAnalysis(
+                    stock_code="001896.SZ",
+                    analysis_date=date(2026, 8, 4),
+                    score_avg="0.00",
+                    dimension_avg="{}",
+                    top_issues="[]",
+                    ai_view=None,
+                    ai_summary="旧数据",
+                    ai_json=json.dumps({
+                        "view": "strongly_bullish",
+                        "view_reason": "x",
+                        "trend": "y",
+                        "volume_note": "z",
+                        "key_levels": [],
+                        "position_status": "empty",
+                        "advice_role": "建仓参考",
+                        "advice": {"rationale": "r"},
+                        "risk_warning": "",
+                    }, ensure_ascii=False),
+                    current_price="105.500",
+                    latest_kline_date=date(2026, 8, 4),
+                ))
+                await session.commit()
+
+        async def _get():
+            await _seed()
+            return await get_latest_as_analysis_result("001896.SZ")
+
+        result = asyncio.run(_get())
+        assert result is not None
+        assert result["ai"]["view"] == "neutral"
+
+    def test_legal_view_untouched(self):
+        """合法 view 原样保留(不误改)"""
+        from datetime import date
+        from app.services.daily_analysis_service import get_latest_as_analysis_result
+
+        async def _seed():
+            async with async_session() as session:
+                session.add(DailyAnalysis(
+                    stock_code="001897.SZ",
+                    analysis_date=date(2026, 8, 4),
+                    score_avg="0.00",
+                    dimension_avg="{}",
+                    top_issues="[]",
+                    ai_view="bearish",
+                    ai_json=json.dumps({
+                        "view": "bearish",
+                        "view_reason": "x",
+                        "trend": "y",
+                        "volume_note": "z",
+                        "key_levels": [],
+                        "position_status": "empty",
+                        "advice_role": "建仓参考",
+                        "advice": {"rationale": "r"},
+                        "risk_warning": "",
+                    }, ensure_ascii=False),
+                    latest_kline_date=date(2026, 8, 4),
+                ))
+                await session.commit()
+
+        async def _get():
+            await _seed()
+            return await get_latest_as_analysis_result("001897.SZ")
+
+        result = asyncio.run(_get())
+        assert result is not None
+        assert result["ai"]["view"] == "bearish"
+
+
 # ============================================================
 # API: GET /daily-analyses
 # ============================================================
@@ -230,7 +308,7 @@ class TestDailyAnalysisAPI:
                     stock_code="001896.SZ", analysis_date=today - timedelta(days=d),
                     score_avg="101.00", dimension_avg={}, top_issues=[],
                     ai_view="bullish" if d == 0 else "neutral",
-                    ai_summary=f"day-{d}",
+                    ai_summary=f"day-{d}", ai_advice_json=None,
                     current_price="105.500", latest_kline_date=today - timedelta(days=d),
                 )
 
@@ -464,7 +542,7 @@ class TestWinrateAPI:
                     stock_code="001896.SZ",
                     analysis_date=today - timedelta(days=i + 5),
                     score_avg="100.00", dimension_avg={}, top_issues=[],
-                    ai_view=view, ai_summary=f"day-{i}",
+                    ai_view=view, ai_summary=f"day-{i}", ai_advice_json=None,
                     current_price="100.00",
                     latest_kline_date=today - timedelta(days=i + 5),
                 )
@@ -510,7 +588,7 @@ class TestWinrateAPI:
                 stock_code="001896.SZ",
                 analysis_date=today - timedelta(days=5),
                 score_avg="100.00", dimension_avg={}, top_issues=[],
-                ai_view="bullish", ai_summary="only one",
+                ai_view="bullish", ai_summary="only one", ai_advice_json=None,
                 current_price="100.00",
                 latest_kline_date=today - timedelta(days=5),
             )
@@ -555,7 +633,7 @@ class TestWinrateAPI:
                     stock_code="001896.SZ",
                     analysis_date=today - timedelta(days=i + 5),
                     score_avg="100.00", dimension_avg={}, top_issues=[],
-                    ai_view=view, ai_summary=f"day-{i}",
+                    ai_view=view, ai_summary=f"day-{i}", ai_advice_json=None,
                     current_price="100.00",
                     latest_kline_date=today - timedelta(days=i + 5),
                 )
@@ -592,7 +670,7 @@ class TestWinrateAPI:
                     stock_code="001896.SZ",
                     analysis_date=today - timedelta(days=i + 5),
                     score_avg="100.00", dimension_avg={}, top_issues=[],
-                    ai_view="bullish", ai_summary=f"day-{i}",
+                    ai_view="bullish", ai_summary=f"day-{i}", ai_advice_json=None,
                     current_price="100.00",
                     latest_kline_date=today - timedelta(days=i + 5),
                 )

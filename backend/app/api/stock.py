@@ -22,6 +22,7 @@ from app.services.stock_advice_service import (
     check_llm_available,
     find_sector_context,
     get_stock_analysis,
+    stream_stock_analysis,
 )
 from app.services.industry_service import resolve_industry
 
@@ -154,7 +155,7 @@ def _check_question(question: str) -> str:
 
 
 @router.get("/{code}/analysis")
-async def analysis(code: str) -> dict:
+async def analysis(code: str, force: bool = False) -> dict:
     """指标 + AI 解读;AI 不可用自动降级纯指标(200 返回,ai=null)
 
     v2.3:返回 current_price(实时盘中) + latest_kline_date(K线最新日),前端可据此:
@@ -166,6 +167,10 @@ async def analysis(code: str) -> dict:
 
     v2.5:返回 position_status / cost_basis_pct — 基于用户当前持仓判断 role,
     AI 按 role 输出对应角色的单段操作参考(建仓参考 / 止盈参考 / 解套参考)。
+
+    v2.5.3:节点缓存命中 — daily_analyses 当日行 + ai_json 非空 → 直接返回(from_cache=true),
+    免重复调 LLM。节点代表日 == K 线最新日(与"昨日 19:00 ~ 今日 19:00"窗口等价)。
+    ?force=true 跳过缓存,强制重算 LLM(用户主动「重试」场景)。
     """
     await _check_code(code)
     klines, quote = await asyncio.gather(
@@ -175,22 +180,57 @@ async def analysis(code: str) -> dict:
     current_price, current_price_date = _sanitize_current_price(quote, klines)
     position = await get_position(code)
     position_status, cost_basis_pct = _resolve_position_status(position, current_price)
+    latest_kline_date = klines[-1]["date"] if klines else None
+
+    # v2.5.3:节点缓存命中(仅当 force=false 且 K 线日期有效)
+    if not force and latest_kline_date:
+        from app.services.daily_analysis_service import get_cached_analysis
+        cached = await get_cached_analysis(code, latest_kline_date)
+        if cached is not None:
+            # 注入本次实时的 current_price / quote_change_pct / position 字段
+            cached["latest_kline_date"] = latest_kline_date
+            cached["current_price"] = current_price
+            cached["quote_change_pct"] = (
+                float(quote.change_pct)
+                if quote is not None and quote.change_pct is not None
+                else None
+            )
+            cached["position_status"] = position_status
+            cached["cost_basis_pct"] = cost_basis_pct
+            cached["from_cache"] = True
+            # 同步 ai 子对象角色 — 防止 position 变化后旧 LLM 文案与新角色不一致
+            if isinstance(cached.get("ai"), dict):
+                cached["ai"]["positionStatus"] = position_status
+                cached["ai"]["adviceRole"] = {
+                    "empty": "建仓参考",
+                    "profit": "止盈参考",
+                    "loss": "解套参考",
+                }[position_status]
+                if position_status == "empty":
+                    advice = cached["ai"].get("advice") or {}
+                    if isinstance(advice, dict):
+                        advice["tStrategy"] = None
+                        cached["ai"]["advice"] = advice
+            return cached
+
     result = await get_stock_analysis(
         code, klines,
         current_price=current_price,
         position=position,
         position_status=position_status,
     )
-    result["latest_kline_date"] = klines[-1]["date"] if klines else None
+    result["latest_kline_date"] = latest_kline_date
     result["current_price"] = current_price
     result["quote_change_pct"] = (
         float(quote.change_pct) if quote is not None and quote.change_pct is not None else None
     )
     result["position_status"] = position_status
     result["cost_basis_pct"] = cost_basis_pct
-    # v2.4:后台 UPSERT 写入 daily_analyses(失败不抛)
-    from app.services.daily_analysis_service import save_from_analysis_result
-    await save_from_analysis_result(code, klines, result)
+    result["from_cache"] = False
+    # v2.5.4:仅 ai_source=="live"(本次 LLM 真成功)才落库;stale_cache / None 都不覆盖今日行
+    if result.get("ai") is not None and result.get("ai_source") == "live":
+        from app.services.daily_analysis_service import save_from_analysis_result
+        await save_from_analysis_result(code, klines, result)
     return result
 
 
@@ -199,6 +239,54 @@ async def industry(code: str) -> dict:
     """M2.1 行业归属(三级兜底:离线表→新浪排行→降级提示)"""
     await _check_code(code)
     return await resolve_industry(code)
+
+
+async def _sse_event(payload: dict) -> bytes:
+    """SSE 单事件编码:data: <json>\\n\\n"""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+@router.get("/{code}/analysis/stream")
+async def analysis_stream(code: str, force: bool = False) -> StreamingResponse:
+    """流式个股分析(v2.5.4):SSE 输出 indicators/cache/ai 进度/done 事件。
+
+    ?force=true 跳过节点缓存,强制重算 LLM(与同步 /analysis 同语义)。
+
+    事件序列见 stock_advice_service.stream_stock_analysis 注释。
+    旧 /analysis 同步端点保留(diagnose 等内部调用)。
+    """
+    await _check_code(code)
+    klines, quote = await asyncio.gather(
+        _load_klines(code),
+        _load_quote(code),
+    )
+    current_price, _ = _sanitize_current_price(quote, klines)
+    position = await get_position(code)
+    position_status, _ = _resolve_position_status(position, current_price)
+
+    async def gen():
+        try:
+            async for evt in stream_stock_analysis(
+                code, klines,
+                current_price=current_price,
+                position=position,
+                position_status=position_status,
+                force=force,
+            ):
+                yield await _sse_event(evt)
+        except asyncio.CancelledError:
+            logger.info("analysis_stream 客户端断开(code=%s)", code)
+            raise
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.post("/{code}/chat")

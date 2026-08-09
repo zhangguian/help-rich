@@ -48,12 +48,12 @@ class FakeLLM:
                 return
         self.last_prompt = None
 
-    async def chat(self, system, user, temperature=0.3, max_retries=3):
+    async def chat(self, system, user, temperature=0.3, max_retries=2, max_tokens=1500):
         return await self.chat_with_messages(
-            system, [{"role": "user", "content": user}], temperature, max_retries
+            system, [{"role": "user", "content": user}], temperature, max_retries, max_tokens
         )
 
-    async def chat_with_messages(self, system, messages, temperature=0.3, max_retries=3):
+    async def chat_with_messages(self, system, messages, temperature=0.3, max_retries=2, max_tokens=1500):
         self._record(system, messages)
         return self.reply
 
@@ -77,10 +77,10 @@ class FailStreamLLM:
 
     name = "failstream"
 
-    async def chat(self, system, user, temperature=0.3, max_retries=3):
+    async def chat(self, system, user, temperature=0.3, max_retries=2, max_tokens=1500):
         return ""
 
-    async def chat_with_messages(self, system, messages, temperature=0.3, max_retries=3):
+    async def chat_with_messages(self, system, messages, temperature=0.3, max_retries=2, max_tokens=1500):
         return ""
 
     async def chat_stream(self, system, user, temperature=0.3):
@@ -102,7 +102,7 @@ class SlowLLM:
     def __init__(self, delay: float = 5.0):
         self.delay = delay
 
-    async def chat(self, system, user, temperature=0.3, max_retries=3):
+    async def chat(self, system, user, temperature=0.3, max_retries=2, max_tokens=1500):
         await asyncio.sleep(self.delay)
         return "{}"
 
@@ -212,6 +212,205 @@ class TestAnalysisService:
         r = asyncio.run(stock_advice_service.get_stock_analysis("600519.SH", _kline([100] * 40)))
         assert r["ai"] is None
         assert r["indicators"]["latest_close"] == 100.0
+
+    def test_llm_timeout_no_cache_returns_none(self, monkeypatch):
+        """v2.5.4:超时 + 无 stale_cache → ai=None, ai_source=None, ai_error='timeout'"""
+        monkeypatch.setattr(stock_advice_service, "LLM_ANALYSIS_BUDGET", 0.05)
+        _mock_llm(monkeypatch, SlowLLM(delay=1.0))
+        # mock get_stale_ai_cache 返回 None
+        from app.services import daily_analysis_service
+        async def _no_cache(*args, **kwargs):
+            return None
+        monkeypatch.setattr(stock_advice_service, "get_stale_ai_cache", _no_cache, raising=False)
+        monkeypatch.setattr(daily_analysis_service, "get_stale_ai_cache", _no_cache, raising=False)
+        r = asyncio.run(stock_advice_service.get_stock_analysis("600519.SH", _kline([100] * 40)))
+        assert r["ai"] is None
+        assert r["ai_error"] == "timeout"
+        assert r["ai_source"] is None
+
+    def test_llm_timeout_falls_back_to_stale_cache(self, monkeypatch):
+        """v2.5.4:超时 + 有 stale_cache → ai=旧解读, ai_source='stale_cache'"""
+        monkeypatch.setattr(stock_advice_service, "LLM_ANALYSIS_BUDGET", 0.05)
+        _mock_llm(monkeypatch, SlowLLM(delay=1.0))
+
+        from app.services import daily_analysis_service
+        stale_payload = {
+            "ai": {
+                "view": "bullish", "viewReason": "旧解读",
+                "trend": "", "volumeNote": "", "keyLevels": [],
+                "positionStatus": "empty", "adviceRole": "建仓参考",
+                "advice": {}, "riskWarning": "",
+            },
+            "ai_source": "stale_cache",
+            "ai_error": "timeout",
+            "cached_at": "2026-08-07T10:00:00",
+            "stale_minutes": 1440,
+            "source_latest_kline_date": "2026-08-07",
+        }
+        async def _with_cache(*args, **kwargs):
+            return stale_payload
+        monkeypatch.setattr(daily_analysis_service, "get_stale_ai_cache", _with_cache, raising=False)
+
+        r = asyncio.run(stock_advice_service.get_stock_analysis("600519.SH", _kline([100] * 40)))
+        assert r["ai"] is not None
+        assert r["ai"]["view"] == "bullish"
+        assert r["ai_error"] == "timeout"
+        assert r["ai_source"] == "stale_cache"
+        assert r["stale_minutes"] == 1440
+        assert r["source_latest_kline_date"] == "2026-08-07"
+
+    def test_stale_cache_does_not_overwrite_today_row(self, monkeypatch):
+        """v2.5.4:stale_cache 兜底时不应触发 save_from_analysis_result(防止陈旧 ai 覆盖今日行)"""
+        from app.services.stock_advice_service import get_stock_analysis
+
+        monkeypatch.setattr(stock_advice_service, "LLM_ANALYSIS_BUDGET", 0.05)
+        _mock_llm(monkeypatch, SlowLLM(delay=1.0))
+
+        from app.services import daily_analysis_service
+        async def _with_cache(*args, **kwargs):
+            return {
+                "ai": {"view": "bullish", "viewReason": "", "trend": "", "volumeNote": "",
+                       "keyLevels": [], "positionStatus": "empty", "adviceRole": "建仓参考",
+                       "advice": {}, "riskWarning": ""},
+                "ai_source": "stale_cache", "ai_error": "timeout",
+                "cached_at": "2026-08-07T10:00:00", "stale_minutes": 1440,
+                "source_latest_kline_date": "2026-08-07",
+            }
+        monkeypatch.setattr(daily_analysis_service, "get_stale_ai_cache", _with_cache, raising=False)
+
+        called = {"save": 0}
+        async def _no_save(*args, **kwargs):
+            called["save"] += 1
+            return None
+        monkeypatch.setattr(daily_analysis_service, "save_from_analysis_result", _no_save, raising=False)
+
+        result = asyncio.run(get_stock_analysis("600519.SH", _kline([100] * 40)))
+        # stale_cache 路径不应触发 save
+        assert called["save"] == 0
+        assert result["ai_source"] == "stale_cache"
+        # 同时验证 api/stock.py 守卫:ai_source != "live" 时不落库
+        guard_should_save = (
+            result.get("ai") is not None and result.get("ai_source") == "live"
+        )
+        assert guard_should_save is False
+
+
+class TestStreamingAnalysis:
+    """v2.5.4 流式 /analysis/stream 行为"""
+
+    @pytest.mark.asyncio
+    async def test_emits_indicators_first(self, monkeypatch):
+        from app.services.stock_advice_service import stream_stock_analysis
+        _mock_llm(monkeypatch, FakeLLM(VALID_AI_JSON))
+        klines = _kline([100 + i * 0.5 for i in range(60)])
+        events = []
+        async for evt in stream_stock_analysis("600519.SH", klines):
+            events.append(evt)
+        # 第一事件必须是 indicators
+        assert events[0]["event"] == "indicators"
+        # v2.5.4:indicators/ai_complete 事件带最新 K 线日期(前端用于追平 latestKlineDate)
+        assert events[0]["latest_kline_date"] == klines[-1]["date"]
+        complete = [e for e in events if e["event"] == "ai_complete"]
+        assert complete and complete[0]["latest_kline_date"] == klines[-1]["date"]
+        # done 必在最后
+        assert events[-1]["event"] == "done"
+
+    @pytest.mark.asyncio
+    async def test_short_circuits_on_cache_hit(self, monkeypatch):
+        from app.services.daily_analysis_service import get_cached_analysis
+        from app.services.stock_advice_service import stream_stock_analysis
+
+        async def _hit(*args, **kwargs):
+            return {
+                "ai": {"view": "bullish", "viewReason": "cached", "trend": "", "volumeNote": "",
+                       "keyLevels": [], "positionStatus": "empty", "adviceRole": "建仓参考",
+                       "advice": {}, "riskWarning": ""},
+                "indicators": {},
+                "ai_source": "live",
+            }
+        monkeypatch.setattr(get_cached_analysis, "__wrapped__", _hit, raising=False)
+        # 用模块引用覆盖更直接
+        from app.services import daily_analysis_service
+        monkeypatch.setattr(daily_analysis_service, "get_cached_analysis", _hit)
+
+        _mock_llm(monkeypatch, SlowLLM(delay=0.05))
+        klines = _kline([100 + i * 0.5 for i in range(60)])
+        events = []
+        async for evt in stream_stock_analysis("600519.SH", klines):
+            events.append(evt)
+        # 命中应立即 done,不调 LLM
+        assert any(e["event"] == "cache_hit" for e in events)
+        assert events[-1]["event"] == "done"
+        # 不会有 ai_started
+        assert not any(e["event"] == "ai_started" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_force_skips_cache_hit(self, monkeypatch):
+        """v2.5.4:force=True 时节点缓存命中也被跳过,强制重算 LLM"""
+        from app.services.stock_advice_service import stream_stock_analysis
+        from app.services import daily_analysis_service
+
+        async def _hit(*args, **kwargs):
+            return {
+                "ai": {"view": "bullish", "viewReason": "cached", "trend": "", "volumeNote": "",
+                       "keyLevels": [], "positionStatus": "empty", "adviceRole": "建仓参考",
+                       "advice": {}, "riskWarning": ""},
+                "indicators": {},
+                "ai_source": "live",
+            }
+        monkeypatch.setattr(daily_analysis_service, "get_cached_analysis", _hit)
+
+        _mock_llm(monkeypatch, SlowLLM(delay=1.0))
+        monkeypatch.setattr(stock_advice_service, "LLM_ANALYSIS_BUDGET", 30.0)
+        klines = _kline([100 + i * 0.5 for i in range(60)])
+        events = []
+        async for evt in stream_stock_analysis("600519.SH", klines, force=True):
+            events.append(evt)
+
+        kinds = [e["event"] for e in events]
+        # force 下即使缓存可命中也不走 cache_hit,而是 cache_miss + 调 LLM
+        assert "cache_hit" not in kinds
+        assert "cache_miss" in kinds
+        assert "ai_started" in kinds
+        assert kinds[-1] == "done"
+
+    @pytest.mark.asyncio
+    async def test_yields_error_with_stale_cache_on_timeout(self, monkeypatch):
+        """v2.5.4:超时 → ai_error + stale_cache 兜底事件 + done"""
+        from app.services.stock_advice_service import stream_stock_analysis
+        from app.services import daily_analysis_service
+
+        # 短预算 → 必超时
+        monkeypatch.setattr(stock_advice_service, "LLM_ANALYSIS_BUDGET", 0.05)
+        # 缩短初次推送延迟 + 间隔,避免测试等 30s+
+        monkeypatch.setattr(stock_advice_service, "AI_PROGRESS_INITIAL_DELAY", 0.05)
+        monkeypatch.setattr(stock_advice_service, "AI_PROGRESS_INTERVAL", 0.05)
+        _mock_llm(monkeypatch, SlowLLM(delay=1.0))
+
+        async def _stale(*args, **kwargs):
+            return {
+                "ai": {"view": "bullish", "viewReason": "old", "trend": "", "volumeNote": "",
+                       "keyLevels": [], "positionStatus": "empty", "adviceRole": "建仓参考",
+                       "advice": {}, "riskWarning": ""},
+                "ai_source": "stale_cache", "cached_at": "2026-08-07T10:00:00",
+                "stale_minutes": 60, "source_latest_kline_date": "2026-08-07",
+            }
+        monkeypatch.setattr(daily_analysis_service, "get_stale_ai_cache", _stale)
+
+        klines = _kline([100 + i * 0.5 for i in range(60)])
+        events = []
+        async for evt in stream_stock_analysis("600519.SH", klines):
+            events.append(evt)
+
+        kinds = [e["event"] for e in events]
+        assert "indicators" in kinds
+        assert "cache_miss" in kinds
+        assert "ai_started" in kinds
+        assert "ai_error" in kinds
+        assert "stale_cache" in kinds
+        assert kinds[-1] == "done"
+        err = next(e for e in events if e["event"] == "ai_error")
+        assert err["code"] == "timeout"
 
 
 class TestSectorScope:
@@ -502,12 +701,13 @@ class TestStockAPI:
     @pytest.fixture(autouse=True)
     def _clean_kline_cache(self, client):
         from app.db import async_session
-        from app.models.orm import KlineCache
+        from app.models.orm import DailyAnalysis, KlineCache
         from sqlalchemy import delete
 
         async def _do():
             async with async_session() as session:
                 await session.execute(delete(KlineCache))
+                await session.execute(delete(DailyAnalysis))
                 await session.commit()
 
         asyncio.run(_do())
@@ -549,6 +749,46 @@ class TestStockAPI:
         r = client.get("/api/stock/600519.SH/analysis")
         assert r.status_code == 200
         assert r.json()["ai"] is None
+        assert r.json()["from_cache"] is False
+
+    def test_analysis_cache_hit_skips_llm(self, client, monkeypatch):
+        """v2.5.3:第一次成功写入 daily_analyses 后,第二次请求走缓存(from_cache=true,不再调 LLM)"""
+        sina_text = f"cb({json.dumps(_sina_rows())});"
+        fake = make_fake_client_class([
+            httpx.Response(200, text=sina_text),
+            httpx.Response(200, text=sina_text),
+            httpx.Response(200, text=sina_text),
+        ])
+        monkeypatch.setattr(kline_service.httpx, "AsyncClient", fake)
+        _mock_llm(monkeypatch, FakeLLM(VALID_AI_JSON))
+        _stub_quote(monkeypatch)
+        # 1) 首次:走 LLM,落库
+        r1 = client.get("/api/stock/600519.SH/analysis")
+        assert r1.status_code == 200
+        assert r1.json()["from_cache"] is False
+        assert r1.json()["ai"]["view"] == "bullish"
+
+        # 2) 第二次:换 LLM(若被调用),返回新内容;若走缓存仍返回首次的 bullish
+        called = {"n": 0}
+
+        class CountLLM(FakeLLM):
+            async def chat_with_messages(self, system, messages, temperature=0.3, max_retries=2, max_tokens=1500):
+                called["n"] += 1
+                return self.reply
+
+        _mock_llm(monkeypatch, CountLLM("不应被调用"))
+        r2 = client.get("/api/stock/600519.SH/analysis")
+        assert r2.status_code == 200
+        assert r2.json()["from_cache"] is True
+        assert r2.json()["ai"]["view"] == "bullish"
+        assert called["n"] == 0  # 关键:LLM 未被调用
+
+        # 3) force=true:跳过缓存,调 LLM
+        _mock_llm(monkeypatch, CountLLM(VALID_AI_JSON))
+        r3 = client.get("/api/stock/600519.SH/analysis?force=true")
+        assert r3.status_code == 200
+        assert r3.json()["from_cache"] is False
+        assert called["n"] == 1  # LLM 被调用了
 
     def test_analysis_quote_unavailable_still_200(self, client, monkeypatch):
         """行情源不可用时,实时价字段为 None 但不阻断分析(降级)"""

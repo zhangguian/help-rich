@@ -62,12 +62,19 @@ export function AnalysisPanel({
   analysis,
   started,
   loading,
+  aiProgress,
   onRefresh,
+  onForceRefresh,
+  onRetry,
 }: {
   analysis: AnalysisResult | null;
   started: boolean;
   loading: boolean;
+  /** 流式进度秒数(LLM 启动后 ≥ 30s 才有);用于「思考中…Ns」展示 */
+  aiProgress?: number | null;
   onRefresh: () => void;
+  onForceRefresh?: () => void;
+  onRetry?: () => void;
 }) {
   const ind = analysis?.indicators;
 
@@ -89,13 +96,29 @@ export function AnalysisPanel({
       <GlassCard padding="md" className="space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-xs text-text-ter uppercase tracking-wide">AI 分析</span>
-          <Button variant="ghost" onClick={onRefresh} disabled={loading}>
-            {loading
-              ? '分析中…'
-              : started
-                ? '🔄 重新分析'
-                : '✨ 开始分析'}
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" onClick={onRefresh} disabled={loading} className='text-xs'>
+              {loading
+                ? aiProgress != null
+                  ? `⏳ AI 思考中…(${aiProgress}s)`
+                  : '分析中…'
+                : started
+                  ? '🔄 重新分析'
+                  : '✨ 开始分析'}
+            </Button>
+            {started && onForceRefresh && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className='text-xs'
+                onClick={onForceRefresh}
+                disabled={loading}
+                title="清空本地缓存 + 后端节点缓存,强制 LLM 重新解读(会消耗 token)"
+              >
+                ⚡ 强制重算
+              </Button>
+            )}
+          </div>
         </div>
 
         {/* 数据截至 + 现价(盘中实时 vs K 线收盘) */}
@@ -132,10 +155,10 @@ export function AnalysisPanel({
                 <span
                   className={clsx(
                     'px-3 py-1 rounded-full text-sm font-semibold border',
-                    VIEW_META[analysis.ai.view].cls,
+                    (VIEW_META[analysis.ai.view] ?? VIEW_META.neutral).cls,
                   )}
                 >
-                  {VIEW_META[analysis.ai.view].label}
+                  {(VIEW_META[analysis.ai.view] ?? VIEW_META.neutral).label}
                 </span>
                 <span className="text-sm text-text-sec">{analysis.ai.viewReason}</span>
               </div>
@@ -169,17 +192,31 @@ export function AnalysisPanel({
               exit={{ opacity: 0 }}
               className="space-y-2"
             >
-              <p className="text-sm text-text-ter">
-                {analysis?.aiError === 'timeout'
-                  ? 'AI 解读超时降级'
-                  : analysis?.aiError === 'unconfigured'
-                    ? '未配置 LLM Key'
-                    : analysis?.aiError === 'failed'
-                      ? 'AI 服务调用失败'
-                      : 'AI 暂不可用'}
-                ,以下为纯技术指标。
-              </p>
-              <Button variant="ghost" size="sm" onClick={onRefresh} disabled={loading}>
+              {analysis?.aiSource === 'stale_cache' ? (
+                <p className="text-sm text-text-ter">
+                  📦 本次 AI 超时,展示{' '}
+                  <span className="font-mono text-text-sec">
+                    {analysis.staleMinutes != null
+                      ? analysis.staleMinutes < 60
+                        ? `${analysis.staleMinutes} 分钟前`
+                        : `${Math.floor(analysis.staleMinutes / 60)} 小时前`
+                      : '历史'}
+                  </span>{' '}
+                  的解读。下方为该次缓存 + 当前纯技术指标。
+                </p>
+              ) : (
+                <p className="text-sm text-text-ter">
+                  {analysis?.aiError === 'timeout'
+                    ? 'AI 解读超时降级'
+                    : analysis?.aiError === 'unconfigured'
+                      ? '未配置 LLM Key'
+                      : analysis?.aiError === 'failed'
+                        ? 'AI 服务调用失败'
+                        : 'AI 暂不可用'}
+                  ,以下为纯技术指标。
+                </p>
+              )}
+              <Button variant="ghost" size="sm" onClick={onRetry ?? onRefresh} disabled={loading}>
                 🔄 重试
               </Button>
             </motion.div>
@@ -415,8 +452,8 @@ function SignalPanel({
       </GlassCard>
     );
   }
-  const view = SIGNAL_VIEW_META[signal.view];
-  const conf = CONFIDENCE_META[signal.confidence];
+  const view = SIGNAL_VIEW_META[signal.view] ?? SIGNAL_VIEW_META.neutral;
+  const conf = CONFIDENCE_META[signal.confidence] ?? CONFIDENCE_META.medium;
 
   return (
     <GlassCard padding="md" className="space-y-3 border border-accent/20">
@@ -853,7 +890,9 @@ const T_CARD_UNSUITABLE_CLS =
 function OperationAdviceBlock({ analysis }: { analysis: AnalysisResult }) {
   const ai = analysis.ai;
   if (!ai) return null;
-  const ps = ai.positionStatus;
+  // 兜底:旧缓存/异常数据可能缺 positionStatus 或不是枚举值 → fallback 'empty'
+  const ps: 'empty' | 'profit' | 'loss' =
+    ai.positionStatus === 'profit' || ai.positionStatus === 'loss' ? ai.positionStatus : 'empty';
   const palette = ROLE_COLOR[ps];
   const pctTxt =
     analysis.costBasisPct != null && ps !== 'empty'

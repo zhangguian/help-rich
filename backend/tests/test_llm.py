@@ -134,6 +134,44 @@ class TestDeepSeekClient:
         assert out == "评语内容"
 
     @pytest.mark.asyncio
+    async def test_chat_passes_max_tokens(self, monkeypatch):
+        """v2.5.4:chat 请求体必须带 max_tokens(默认 1500),避免慢模型 ramble 撞预算"""
+        captured = {"body": None}
+
+        class FakeResp:
+            status_code = 200
+            text = "{}"
+            def json(self):
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        async def fake_post(self, url, headers=None, json=None):
+            captured["body"] = json
+            return FakeResp()
+
+        monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
+        client = DeepSeekClient("sk-test")
+        await client.chat("system", "user")
+        assert captured["body"]["max_tokens"] == 1500
+
+    @pytest.mark.asyncio
+    async def test_chat_explicit_max_tokens_override(self, monkeypatch):
+        captured = {"body": None}
+
+        class FakeResp:
+            status_code = 200
+            text = "{}"
+            def json(self):
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        async def fake_post(self, url, headers=None, json=None):
+            captured["body"] = json
+            return FakeResp()
+
+        monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
+        await DeepSeekClient("sk-test").chat("system", "user", max_tokens=2000)
+        assert captured["body"]["max_tokens"] == 2000
+
+    @pytest.mark.asyncio
     async def test_retry_then_success(self, monkeypatch):
         calls = {"n": 0}
 

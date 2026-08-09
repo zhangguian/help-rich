@@ -53,10 +53,11 @@ class MiniMaxClient(BaseLLM):
         system: str,
         user: str,
         temperature: float = 0.3,
-        max_retries: int = 3,
+        max_retries: int = 2,
+        max_tokens: int = 1500,
     ) -> str:
         return await self.chat_with_messages(
-            system, [{"role": "user", "content": user}], temperature, max_retries
+            system, [{"role": "user", "content": user}], temperature, max_retries, max_tokens
         )
 
     async def chat_with_messages(
@@ -64,7 +65,8 @@ class MiniMaxClient(BaseLLM):
         system: str,
         messages: list[dict[str, str]],
         temperature: float = 0.3,
-        max_retries: int = 3,
+        max_retries: int = 2,
+        max_tokens: int = 1500,
     ) -> str:
         """纯文本 chat(走当前 _model,支持多轮 messages)"""
         last_err: Exception | None = None
@@ -83,6 +85,7 @@ class MiniMaxClient(BaseLLM):
                             "messages": payload_messages,
                             "temperature": temperature,
                             "reasoning_split": True,
+                            "max_tokens": max_tokens,
                         },
                     )
                 except (httpx.TimeoutException, httpx.NetworkError) as e:
@@ -202,7 +205,8 @@ class MiniMaxClient(BaseLLM):
         user_prompt: str,
         image_data_url: str,
         temperature: float = 0.3,
-        max_retries: int = 3,
+        max_retries: int = 2,
+        max_tokens: int = 2000,
     ) -> str:
         """多模态 chat:文本 + 图片(base64 data URL)
 
@@ -237,6 +241,7 @@ class MiniMaxClient(BaseLLM):
                             "messages": messages,
                             "temperature": temperature,
                             "reasoning_split": True,
+                            "max_tokens": max_tokens,
                         },
                     )
                 except (httpx.TimeoutException, httpx.NetworkError) as e:

@@ -53,17 +53,29 @@ def _dedupe_asc(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _is_post_close(now: datetime | None = None) -> bool:
-    """当前是否已收盘(A 股 15:00 后;工作日口径)
+def _last_trading_day(now: datetime | None = None) -> date:
+    """最近一个交易日(简化口径:仅跳过周六日;未接入法定假日历)
 
-    盘前 / 盘中 / 周末返回 False——这些时段新浪日 K 本来就拿不到当日,
-    无意义重拉。简化口径:未维护法定假日历,节假日落在工作日时会被误判
-    为"收盘后"触发一次无效新浪请求(返回旧数据落库,下次自我修复,无
-    功能性错误)。如需严谨,后续可接入交易日历。
+    周末(周六/周日)返回上周五,工作日返回当天。节假日落在工作日时不在此
+    处理:与 _is_post_close 注释一致,最多触发一次无效重拉,数据相同,无碍。
+    """
+    now = now or datetime.now()
+    d = now.date()
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def _is_post_close(now: datetime | None = None) -> bool:
+    """当前是否已收盘(允许拉取最新日 K 的时段)
+
+    工作日 15:00 后已收盘;周末视为"上周五已收盘"(新浪日 K 已含周五数据),
+    同样允许拉新。盘中(工作日 <15:00)返回 False——日内日 K 尚未定格,
+    拉取会把未定 bar 落库,前端按"截至昨日收盘"口径展示即可。
     """
     now = now or datetime.now()
     if now.weekday() >= 5:
-        return False
+        return True
     return now.hour >= 15
 
 
@@ -234,12 +246,13 @@ async def fetch_klines(
         cached = list((await session.execute(stmt)).scalars().all())
 
     # 1.1 陈旧检测:
-    #     - 收盘后(工作日 >= 15:00)且最新缓存不是今天 → 视为过期,强制重拉
-    #     - 盘前/盘中/周末/节假日 → 容忍陈旧(今日日 K 还未生成,无意义重拉)
+    #     - 已收盘时段(工作日 >= 15:00 或周末)且最新缓存 < 最近交易日 → 视为过期,强制重拉
+    #     - 盘中(工作日 < 15:00) → 容忍陈旧(今日日 K 未定格,无意义重拉)
     if len(cached) >= count:
         latest_date = cached[0].trade_date
         post_close = _is_post_close()
-        is_stale = post_close and latest_date < date.today()
+        expected = _last_trading_day()
+        is_stale = post_close and latest_date < expected
         if not is_stale:
             logger.debug("K 线缓存命中: %s %s (%d 根, 最新 %s)",
                          stock_code, period, len(cached), latest_date)
@@ -255,8 +268,8 @@ async def fetch_klines(
                 for r in reversed(cached)
             ]
             return _dedupe_asc(rows)
-        logger.info("K 线收盘后陈旧: %s %s (最新 %s, today=%s), 强制重拉",
-                    stock_code, period, latest_date, date.today())
+        logger.info("K 线收盘后陈旧: %s %s (最新 %s, 最近交易日 %s), 强制重拉",
+                    stock_code, period, latest_date, expected)
 
     # 2. 真实接口(失败抛 KLineSourceUnavailable,无 mock)
     rows = await _fetch_sina_kline(stock_code, period, count)

@@ -32,8 +32,18 @@ class DailyAnalysisRepository:
         ai_advice_json: str | None,
         current_price: str | None,
         latest_kline_date: date | None,
+        indicators_json: str | None = None,
+        ai_json: str | None = None,
+        signal_winrate_json: str | None = None,
+        quote_change_pct: str | None = None,
+        position_status: str | None = None,
+        cost_basis_pct: str | None = None,
     ) -> DailyAnalysis:
-        """同 (stock_code, analysis_date) UPSERT 覆盖最新内容"""
+        """同 (stock_code, analysis_date) UPSERT 覆盖最新内容
+
+        v2.5.2:加 6 个 snapshot 字段(indicators / ai / signal_winrate / quote_change_pct /
+        position_status / cost_basis_pct)供 analysis-latest 端点回显。
+        """
         async with async_session() as session:
             stmt = select(DailyAnalysis).where(
                 DailyAnalysis.stock_code == stock_code,
@@ -51,6 +61,12 @@ class DailyAnalysisRepository:
                 existing.ai_advice_json = ai_advice_json
                 existing.current_price = current_price
                 existing.latest_kline_date = latest_kline_date
+                existing.indicators_json = indicators_json
+                existing.ai_json = ai_json
+                existing.signal_winrate_json = signal_winrate_json
+                existing.quote_change_pct = quote_change_pct
+                existing.position_status = position_status
+                existing.cost_basis_pct = cost_basis_pct
                 # updated_at 由 onupdate 自动更新;created_at 保留首写时间
                 row = existing
             else:
@@ -65,10 +81,62 @@ class DailyAnalysisRepository:
                     ai_advice_json=ai_advice_json,
                     current_price=current_price,
                     latest_kline_date=latest_kline_date,
+                    indicators_json=indicators_json,
+                    ai_json=ai_json,
+                    signal_winrate_json=signal_winrate_json,
+                    quote_change_pct=quote_change_pct,
+                    position_status=position_status,
+                    cost_basis_pct=cost_basis_pct,
                 )
                 session.add(row)
             await session.commit()
             await session.refresh(row)
+            return row
+
+    async def get_latest_by_stock(self, stock_code: str) -> Optional[DailyAnalysis]:
+        """取该股票最新一条 daily_analysis(按 analysis_date 倒序 LIMIT 1)
+
+        防御:#1 双校验 — 返回的 row.stock_code 必须等于请求的 stock_code
+        不等 → raise RuntimeError(防止 ORM/DB 异常导致 stock_code 字段被污染)
+        """
+        async with async_session() as session:
+            stmt = (
+                select(DailyAnalysis)
+                .where(DailyAnalysis.stock_code == stock_code)
+                .order_by(DailyAnalysis.analysis_date.desc())
+                .limit(1)
+            )
+            row = (await session.execute(stmt)).scalar_one_or_none()
+            if row is not None and row.stock_code != stock_code:
+                raise RuntimeError(
+                    f"[isolation] repo stock_code mismatch: row.stock_code={row.stock_code} != requested={stock_code}"
+                )
+            return row
+
+    async def get_most_recent_with_ai(self, stock_code: str) -> Optional[DailyAnalysis]:
+        """取该股票最近一条带 AI 解读的 daily_analysis(analysis_date 倒序 LIMIT 1,
+        过滤 ai_json IS NOT NULL AND ai_view IS NOT NULL)。
+
+        用途:v2.5.4 兜底 — 当前 LLM 超时时,从历史成功解读里挑一条返回给前端,
+        避免用户白等。返回的可能是当日行(若 ai_json 已写入),也可能是历史行。
+        调用方负责按 latest_kline_date 判断"是否当日"以决定 ai_source 取值。
+        """
+        async with async_session() as session:
+            stmt = (
+                select(DailyAnalysis)
+                .where(
+                    DailyAnalysis.stock_code == stock_code,
+                    DailyAnalysis.ai_json.isnot(None),
+                    DailyAnalysis.ai_view.isnot(None),
+                )
+                .order_by(DailyAnalysis.analysis_date.desc())
+                .limit(1)
+            )
+            row = (await session.execute(stmt)).scalar_one_or_none()
+            if row is not None and row.stock_code != stock_code:
+                raise RuntimeError(
+                    f"[isolation] repo stock_code mismatch: row.stock_code={row.stock_code} != requested={stock_code}"
+                )
             return row
 
     async def get(

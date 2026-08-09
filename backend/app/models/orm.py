@@ -395,6 +395,19 @@ class DailyAnalysis(Base):
     # v2.5:LLM 操作参考结构化 JSON 全文(6 字段 + 可选 t_strategy);
     # 老行 nullable=True → 前端读不到时降级为空对象
     ai_advice_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # v2.5.2:完整技术指标 JSON(compute_indicators 输出)— 支持换浏览器/换设备时回显
+    indicators_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # v2.5.2:LLM 解读完整对象 JSON(view / viewReason / trend / volumeNote / keyLevels /
+    # positionStatus / adviceRole / advice / riskWarning)— 供 analysis-latest 端点回显
+    ai_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # v2.5.2:信号胜率 JSON(compute_signal_winrate 输出)— 可空(K 线不足时 None)
+    signal_winrate_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # v2.5.2:当时实时报价相对昨收涨跌幅(百分比小数)— 0.005 = +0.5%
+    quote_change_pct: Mapped[str | None] = mapped_column(String, nullable=True)
+    # v2.5.2:用户持仓角色 empty/profit/loss
+    position_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    # v2.5.2:基于持仓成本的盈亏百分比(0.05=+5%)— Decimal-as-string
+    cost_basis_pct: Mapped[str | None] = mapped_column(String, nullable=True)
     # 当时实时报价(精度保护)
     current_price: Mapped[str | None] = mapped_column(String, nullable=True)
     # K 线最新交易日(冗余便于查询;与 analysis_date 相同)

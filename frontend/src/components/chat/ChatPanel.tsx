@@ -244,7 +244,7 @@ const listRef = useRef<HTMLDivElement | null>(null);
 
     const history = buildHistory();
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 90000);
+    const timer = setTimeout(() => controller.abort(), 305000);
     try {
       const res = await fetch(
         `${apiBaseUrl()}/stock/${encodeURIComponent(stockCode)}/chat/stream`,

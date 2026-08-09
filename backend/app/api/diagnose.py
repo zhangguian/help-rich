@@ -11,11 +11,14 @@
 
 每日 AI 分析持久化(v2.4):
 - GET  /api/diagnose/stock/{stock_code}/daily-analyses?days=N → 列最近 N 天分析
+- GET  /api/diagnose/stock/{stock_code}/analysis-latest → 取最新一条完整 snapshot
+  (v2.5.2;供换浏览器/换设备时回显使用;不影响正常 /stock/{code}/analysis 流程)
 """
 import json
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
+from app.api.stock import _resolve_position_status, _sanitize_current_price
 from app.core.db_lock import safe_write
 from app.core.stock_code import normalize_code
 from app.models.schemas import DiagnoseOut, FeedbackUpdate, ReplaySummaryOut
@@ -23,9 +26,13 @@ from app.repositories.trade_score_repo import trade_score_repo
 from app.repositories.transaction_repo import transaction_repo
 from app.services.daily_analysis_service import (
     compute_view_winrate,
+    get_latest_as_analysis_result,
     list_history,
 )
 from app.services.diagnose_service import diagnose_service
+from app.services.kline_service import KLineSourceUnavailable, fetch_klines
+from app.services.position_service import get_position
+from app.services.quote_service import QuoteService
 from app.services.replay_service import (
     WINDOWS,
     force_replay,
@@ -181,6 +188,81 @@ async def list_daily_analyses(
         "items": items,
         "total": len(items),
     }
+
+
+@router.get("/stock/{stock_code}/analysis-latest")
+async def get_latest_analysis(stock_code: str) -> dict:
+    """取该股票最新一条 daily_analysis 完整 snapshot,重组为 AnalysisResult 兼容 dict
+
+    用于换浏览器/换设备时回显 AI 解读存档。
+    - 有存档 → 返回 200 + AnalysisResult 形状
+    - 无存档 → 返回 200 + 空 AnalysisResult(ai=null, indicators=null)— 前端按空数据处理
+    - 不返回 404(避免前端需要处理 not found)
+
+    实时计算当前用户持仓角色(position_status / cost_basis_pct),与 stock.py 缓存
+    命中分支语义一致:统一 ai.positionStatus / ai.adviceRole / tStrategy,防止
+    "DB 里是空仓时代的 ai,用户已加仓"的角色漂移。
+
+    防御:#3 双校验 — 返回 dict 的 stockCode 必须等于 URL 上的 stock_code
+    """
+    norm = normalize_code(stock_code) or stock_code
+    # 实时计算当前持仓角色(与 stock.py /analysis 端点同语义)
+    try:
+        klines = await fetch_klines(norm, period="daily", count=300)
+    except KLineSourceUnavailable:
+        klines = []
+    latest_kline_date = klines[-1]["date"] if klines else None
+    try:
+        qs = await QuoteService().get_quotes([norm])
+        quote = qs[0] if qs else None
+    except Exception:
+        quote = None
+    current_price, _ = _sanitize_current_price(quote, klines)
+    position = await get_position(norm)
+    position_status, cost_basis_pct = _resolve_position_status(position, current_price)
+
+    payload = await get_latest_as_analysis_result(
+        norm,
+        override_position_status=position_status,
+        override_cost_basis_pct=cost_basis_pct,
+    )
+    if payload is None:
+        payload = {
+            "stockCode": norm,
+            "stock_code": norm,
+            "indicators": None,
+            "ai": None,
+            "signal_winrate": None,
+            "signalWinrate": None,
+            "latest_kline_date": latest_kline_date,
+            "latestKlineDate": latest_kline_date,
+            "current_price": None,
+            "currentPrice": None,
+            "quote_change_pct": None,
+            "quoteChangePct": None,
+            "position_status": None,
+            "positionStatus": None,
+            "cost_basis_pct": None,
+            "costBasisPct": None,
+            "ai_error": None,
+            "aiError": None,
+        }
+    # 双校验:确保返回值归属正确股票
+    if payload.get("stockCode") != norm or payload.get("stock_code") != norm:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "STOCK_CODE_MISMATCH",
+                "message": (
+                    f"[isolation] endpoint stock_code mismatch: "
+                    f"payload.stockCode={payload.get('stockCode')} != requested={norm}"
+                ),
+            },
+        )
+    # 追平当前 K 线日期:回显展示的是"最新 K 线所处交易日",而非存档写入日
+    payload["latest_kline_date"] = latest_kline_date
+    payload["latestKlineDate"] = latest_kline_date
+    return payload
 
 
 @router.get("/stock/{stock_code}/daily-analyses/winrate")

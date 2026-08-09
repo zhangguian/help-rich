@@ -3,9 +3,11 @@
 - save_from_analysis_result:从 /analysis 端点结果 UPSERT 入库
 - list_history:列出某股票最近 N 天的分析
 - 失败不阻断主流程(返回 None)
+- get_cached_analysis:节点命中读 DB 当作持久化缓存(v2.5.3,免重复调 LLM)
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from datetime import date, datetime
@@ -70,6 +72,26 @@ async def save_from_analysis_result(
         summary_snapshot = result.get("summary_snapshot") or {}
         current_price = _to_decimal_str(result.get("current_price"))
 
+        # v2.5.2:snapshot 字段(供 analysis-latest 端点回显)
+        indicators_json = json.dumps(indicators, ensure_ascii=False) if indicators else None
+        ai_json = json.dumps(ai, ensure_ascii=False) if ai else None
+        signal_winrate = result.get("signal_winrate")
+        signal_winrate_json = (
+            json.dumps(signal_winrate, ensure_ascii=False)
+            if isinstance(signal_winrate, dict)
+            else None
+        )
+        qcp = result.get("quote_change_pct")
+        quote_change_pct = _to_decimal_str(qcp) if qcp is not None else None
+        position_status_raw = result.get("position_status")
+        position_status = (
+            position_status_raw
+            if position_status_raw in {"empty", "profit", "loss"}
+            else None
+        )
+        cbp = result.get("cost_basis_pct")
+        cost_basis_pct = _to_decimal_str(cbp) if cbp is not None else None
+
         row = await daily_analysis_repo.upsert(
             stock_code=norm,
             analysis_date=analysis_date,
@@ -81,15 +103,175 @@ async def save_from_analysis_result(
             ai_advice_json=ai_advice_json,
             current_price=current_price,
             latest_kline_date=analysis_date,
+            indicators_json=indicators_json,
+            ai_json=ai_json,
+            signal_winrate_json=signal_winrate_json,
+            quote_change_pct=quote_change_pct,
+            position_status=position_status,
+            cost_basis_pct=cost_basis_pct,
         )
         logger.info(
-            "daily_analysis upsert: %s %s view=%s score=%s",
+            "daily_analysis upsert: %s %s view=%s score=%s snapshot=%s",
             norm, analysis_date, ai_view, score_avg,
+            "yes" if indicators_json else "no",
         )
         return row.id
     except Exception as e:  # noqa: BLE001
         logger.warning("daily_analysis upsert 失败(%s): %s", stock_code, e)
         return None
+
+
+def _safe_json_load(raw: str | None) -> Any:
+    """安全反序列化 JSON 字符串(用于 snapshot 字段)— 解析失败返回 None"""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _to_float_str_or_none(v: Any) -> Optional[str]:
+    """Decimal-as-string(0.01 精度)转 None 保护"""
+    if v is None:
+        return None
+    try:
+        return str(Decimal(str(v)).quantize(Decimal("0.01")))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+async def get_cached_analysis(
+    stock_code: str, latest_kline_date: str
+) -> Optional[dict[str, Any]]:
+    """直接读 daily_analyses 当作持久化缓存(v2.5.3)
+
+    节点归属:节点的代表日 == latest_kline_date(与"昨日 19:00 ~ 今日 19:00"窗口等价 —
+    K 线新交易日触发节点切换)。
+    命中条件:row.ai_json 非空 AND row.ai_view 非空 AND row.latest_kline_date == latest_kline_date。
+
+    命中 → 返回与 /analysis 端点兼容的 dict(便于 analysis 路由直接 return);
+    未命中 → 返回 None(让调用方走 LLM)。
+
+    失败/无行 → 不抛,返回 None(等同 LLM 不可用降级)。
+    """
+    try:
+        norm = normalize_code(stock_code) or stock_code
+        row = await daily_analysis_repo.get_latest_by_stock(norm)
+        if row is None:
+            return None
+        # 节点匹配:row.latest_kline_date == 当前 K 线最新日
+        if row.latest_kline_date is None:
+            return None
+        if row.latest_kline_date.isoformat() != latest_kline_date:
+            return None  # 节点过期(K 线新一天)
+        # AI 必须真有内容(避免上次 LLM 超时写入的空 ai 行被命中)
+        if not row.ai_json or not row.ai_view:
+            return None
+        return await get_latest_as_analysis_result(norm)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("get_cached_analysis 跳过(%s): %s", stock_code, e)
+        return None
+
+
+async def get_latest_as_analysis_result(
+    stock_code: str,
+    override_position_status: str | None = None,
+    override_cost_basis_pct: float | None = None,
+) -> Optional[dict[str, Any]]:
+    """取该股票最新一条 daily_analysis,重组为 AnalysisResult 兼容 dict
+
+    用于 /diagnose/stock/{code}/analysis-latest 端点,支持换浏览器/换设备时回显存档。
+    各 JSON 字段缺失或解析失败时降级为 None(前端按空数据渲染)。
+
+    override_position_status / override_cost_basis_pct:
+      调用方(analysis-latest 端点)实时计算的当前用户持仓角色与盈亏比,
+      用于统一 ai.positionStatus / ai.adviceRole / tStrategy,与 stock.py
+      缓存命中分支语义一致。None 表示不覆盖,沿用 DB 行原值。
+
+    防御:#2 双校验 — ORM 行的 stock_code 必须等于请求的 norm
+    """
+    norm = normalize_code(stock_code) or stock_code
+    row = await daily_analysis_repo.get_latest_by_stock(norm)
+    if row is None:
+        return None
+    if row.stock_code != norm:
+        raise RuntimeError(
+            f"[isolation] service stock_code mismatch: row.stock_code={row.stock_code} != requested={norm}"
+        )
+    indicators = _safe_json_load(row.indicators_json)
+    ai = _safe_json_load(row.ai_json)
+    signal_winrate = _safe_json_load(row.signal_winrate_json)
+    ai_advice = _safe_json_load(row.ai_advice_json) if ai is None else None
+    # 规范化 positionStatus 为合法枚举(None / 非法值 → 'empty',前端不再 undefined)
+    raw_ps = row.position_status
+    ps_norm = raw_ps if raw_ps in {"empty", "profit", "loss"} else "empty"
+    # 调用方传入的实时值覆盖(用 None 表示"不覆盖,沿用 DB")
+    if override_position_status in {"empty", "profit", "loss"}:
+        ps_norm = override_position_status
+    _ADVICE_ROLE_BY_STATUS = {
+        "empty": "建仓参考",
+        "profit": "止盈参考",
+        "loss": "解套参考",
+    }
+    # 兼容老数据:ai_json 缺失时,用 ai_view + ai_summary + ai_advice_json 重建最小 ai
+    if ai is None:
+        ai = {
+            "view": row.ai_view,
+            "viewReason": "",
+            "trend": "",
+            "volumeNote": "",
+            "keyLevels": [],
+            "positionStatus": ps_norm,
+            "adviceRole": _ADVICE_ROLE_BY_STATUS[ps_norm],
+            "advice": ai_advice if isinstance(ai_advice, dict) else (
+                {"rationale": row.ai_summary} if row.ai_summary else {}
+            ),
+            "riskWarning": "",
+        }
+    else:
+        # ai_json 存在:优先用 override,否则规范化 DB 旧值
+        if override_position_status in {"empty", "profit", "loss"}:
+            ai["positionStatus"] = override_position_status
+        elif ai.get("positionStatus") not in {"empty", "profit", "loss"}:
+            ai["positionStatus"] = ps_norm
+        # 同步 adviceRole,与 positionStatus 保持一致
+        ai["adviceRole"] = _ADVICE_ROLE_BY_STATUS[ai["positionStatus"]]
+        # empty → 清空旧 tStrategy,防止前端误显示做 T 卡片
+        if ai["positionStatus"] == "empty":
+            advice = ai.get("advice") or {}
+            if isinstance(advice, dict):
+                advice["tStrategy"] = None
+                ai["advice"] = advice
+    # view 归一化:历史行/旧版本 LLM 输出可能非标准枚举,兜底为 neutral(两个分支产物统一处理)
+    if ai.get("view") not in {"bullish", "bearish", "neutral"}:
+        ai["view"] = "neutral"
+    # 顶层 position_status / cost_basis_pct 也用 override 覆盖
+    top_ps = ps_norm if override_position_status else row.position_status
+    top_cbp = (
+        f"{override_cost_basis_pct:.2f}"
+        if override_cost_basis_pct is not None
+        else _to_float_str_or_none(row.cost_basis_pct)
+    )
+    return {
+        "stockCode": row.stock_code,
+        "stock_code": row.stock_code,  # 下划线键(供 diagnose 双校验 / 老接口兼容)
+        "indicators": indicators,
+        "ai": ai,
+        "signal_winrate": signal_winrate,
+        "signalWinrate": signal_winrate,  # 驼峰兼容
+        "latest_kline_date": row.latest_kline_date.isoformat() if row.latest_kline_date else None,
+        "latestKlineDate": row.latest_kline_date.isoformat() if row.latest_kline_date else None,
+        "current_price": row.current_price,
+        "currentPrice": row.current_price,
+        "quote_change_pct": _to_float_str_or_none(row.quote_change_pct),
+        "quoteChangePct": _to_float_str_or_none(row.quote_change_pct),
+        "position_status": top_ps,
+        "positionStatus": top_ps,
+        "cost_basis_pct": top_cbp,
+        "costBasisPct": top_cbp,
+        "ai_error": None,
+    }
 
 
 async def list_history(
@@ -148,7 +330,59 @@ def _row_to_dict(r) -> dict[str, Any]:
     }
 
 
-__all__ = ["save_from_analysis_result", "list_history", "compute_view_winrate"]
+__all__ = [
+    "save_from_analysis_result",
+    "list_history",
+    "compute_view_winrate",
+    "get_latest_as_analysis_result",
+    "get_cached_analysis",
+    "get_stale_ai_cache",
+]
+
+
+async def get_stale_ai_cache(
+    stock_code: str,
+    current_latest_kline_date: str | None,
+    override_position_status: str | None = None,
+) -> Optional[dict[str, Any]]:
+    """v2.5.4:AI 超时兜底 — 取最近一次成功的 AI 解读作为 stale_cache 返回
+
+    策略:
+    - 找该股票最近一条 ai_json 非空的 daily_analysis
+    - 若该行 latest_kline_date == current_latest_kline_date(节点同日):说明是当日 ai,
+      但用户当前请求 LLM 失败 → 仍可作为兜底
+    - 若节点不同日:是历史行的 ai,前端需展示陈旧时长
+    - 返回字典里带 stale_minutes(从 updated_at 计算)和 source_latest_kline_date,
+      便于前端判断新鲜度
+    - 复用 get_latest_as_analysis_result 的逻辑把 row 转 dict
+    """
+    try:
+        norm = normalize_code(stock_code) or stock_code
+        row = await daily_analysis_repo.get_most_recent_with_ai(norm)
+        if row is None:
+            return None
+        result = await get_latest_as_analysis_result(
+            norm, override_position_status=override_position_status
+        )
+        if result is None:
+            return None
+        # 计算陈旧时长(从 row.updated_at 起算)
+        stale_minutes: int | None = None
+        if row.updated_at is not None:
+            delta = datetime.utcnow() - row.updated_at
+            stale_minutes = int(delta.total_seconds() // 60)
+        result["ai_source"] = "stale_cache"
+        result["cached_at"] = (
+            row.updated_at.isoformat() if row.updated_at else None
+        )
+        result["stale_minutes"] = stale_minutes
+        result["source_latest_kline_date"] = (
+            row.latest_kline_date.isoformat() if row.latest_kline_date else None
+        )
+        return result
+    except Exception as e:  # noqa: BLE001
+        logger.warning("get_stale_ai_cache 跳过(%s): %s", stock_code, e)
+        return None
 
 
 # ============================================================
