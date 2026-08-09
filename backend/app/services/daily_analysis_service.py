@@ -243,9 +243,7 @@ async def get_latest_as_analysis_result(
             if isinstance(advice, dict):
                 advice["tStrategy"] = None
                 ai["advice"] = advice
-    # view 归一化:历史行/旧版本 LLM 输出可能非标准枚举,兜底为 neutral(两个分支产物统一处理)
-    if ai.get("view") not in {"bullish", "bearish", "neutral"}:
-        ai["view"] = "neutral"
+    # 取消 view 归一化:不再静默把非法 view 改成 neutral,直接返回原值(由前端按未知处理)
     # 顶层 position_status / cost_basis_pct 也用 override 覆盖
     top_ps = ps_norm if override_position_status else row.position_status
     top_cbp = (
@@ -335,56 +333,12 @@ __all__ = [
     "list_history",
     "compute_view_winrate",
     "get_latest_as_analysis_result",
-    "get_cached_analysis",
-    "get_stale_ai_cache",
+"get_cached_analysis",
 ]
 
 
-async def get_stale_ai_cache(
-    stock_code: str,
-    current_latest_kline_date: str | None,
-    override_position_status: str | None = None,
-) -> Optional[dict[str, Any]]:
-    """v2.5.4:AI 超时兜底 — 取最近一次成功的 AI 解读作为 stale_cache 返回
-
-    策略:
-    - 找该股票最近一条 ai_json 非空的 daily_analysis
-    - 若该行 latest_kline_date == current_latest_kline_date(节点同日):说明是当日 ai,
-      但用户当前请求 LLM 失败 → 仍可作为兜底
-    - 若节点不同日:是历史行的 ai,前端需展示陈旧时长
-    - 返回字典里带 stale_minutes(从 updated_at 计算)和 source_latest_kline_date,
-      便于前端判断新鲜度
-    - 复用 get_latest_as_analysis_result 的逻辑把 row 转 dict
-    """
-    try:
-        norm = normalize_code(stock_code) or stock_code
-        row = await daily_analysis_repo.get_most_recent_with_ai(norm)
-        if row is None:
-            return None
-        result = await get_latest_as_analysis_result(
-            norm, override_position_status=override_position_status
-        )
-        if result is None:
-            return None
-        # 计算陈旧时长(从 row.updated_at 起算)
-        stale_minutes: int | None = None
-        if row.updated_at is not None:
-            delta = datetime.utcnow() - row.updated_at
-            stale_minutes = int(delta.total_seconds() // 60)
-        result["ai_source"] = "stale_cache"
-        result["cached_at"] = (
-            row.updated_at.isoformat() if row.updated_at else None
-        )
-        result["stale_minutes"] = stale_minutes
-        result["source_latest_kline_date"] = (
-            row.latest_kline_date.isoformat() if row.latest_kline_date else None
-        )
-        return result
-    except Exception as e:  # noqa: BLE001
-        logger.warning("get_stale_ai_cache 跳过(%s): %s", stock_code, e)
-        return None
-
-
+# ============================================================
+# P1:分析方向胜率(view vs N 天后真实涨跌)
 # ============================================================
 # P1:分析方向胜率(view vs N 天后真实涨跌)
 # ============================================================

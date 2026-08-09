@@ -213,86 +213,14 @@ class TestAnalysisService:
         assert r["ai"] is None
         assert r["indicators"]["latest_close"] == 100.0
 
-    def test_llm_timeout_no_cache_returns_none(self, monkeypatch):
-        """v2.5.4:超时 + 无 stale_cache → ai=None, ai_source=None, ai_error='timeout'"""
+    def test_llm_timeout_returns_error_no_stale_cache(self, monkeypatch):
+        """超时 → ai=None, ai_source=None, ai_error='timeout',不再走 stale_cache 兜底"""
         monkeypatch.setattr(stock_advice_service, "LLM_ANALYSIS_BUDGET", 0.05)
         _mock_llm(monkeypatch, SlowLLM(delay=1.0))
-        # mock get_stale_ai_cache 返回 None
-        from app.services import daily_analysis_service
-        async def _no_cache(*args, **kwargs):
-            return None
-        monkeypatch.setattr(stock_advice_service, "get_stale_ai_cache", _no_cache, raising=False)
-        monkeypatch.setattr(daily_analysis_service, "get_stale_ai_cache", _no_cache, raising=False)
         r = asyncio.run(stock_advice_service.get_stock_analysis("600519.SH", _kline([100] * 40)))
         assert r["ai"] is None
         assert r["ai_error"] == "timeout"
         assert r["ai_source"] is None
-
-    def test_llm_timeout_falls_back_to_stale_cache(self, monkeypatch):
-        """v2.5.4:超时 + 有 stale_cache → ai=旧解读, ai_source='stale_cache'"""
-        monkeypatch.setattr(stock_advice_service, "LLM_ANALYSIS_BUDGET", 0.05)
-        _mock_llm(monkeypatch, SlowLLM(delay=1.0))
-
-        from app.services import daily_analysis_service
-        stale_payload = {
-            "ai": {
-                "view": "bullish", "viewReason": "旧解读",
-                "trend": "", "volumeNote": "", "keyLevels": [],
-                "positionStatus": "empty", "adviceRole": "建仓参考",
-                "advice": {}, "riskWarning": "",
-            },
-            "ai_source": "stale_cache",
-            "ai_error": "timeout",
-            "cached_at": "2026-08-07T10:00:00",
-            "stale_minutes": 1440,
-            "source_latest_kline_date": "2026-08-07",
-        }
-        async def _with_cache(*args, **kwargs):
-            return stale_payload
-        monkeypatch.setattr(daily_analysis_service, "get_stale_ai_cache", _with_cache, raising=False)
-
-        r = asyncio.run(stock_advice_service.get_stock_analysis("600519.SH", _kline([100] * 40)))
-        assert r["ai"] is not None
-        assert r["ai"]["view"] == "bullish"
-        assert r["ai_error"] == "timeout"
-        assert r["ai_source"] == "stale_cache"
-        assert r["stale_minutes"] == 1440
-        assert r["source_latest_kline_date"] == "2026-08-07"
-
-    def test_stale_cache_does_not_overwrite_today_row(self, monkeypatch):
-        """v2.5.4:stale_cache 兜底时不应触发 save_from_analysis_result(防止陈旧 ai 覆盖今日行)"""
-        from app.services.stock_advice_service import get_stock_analysis
-
-        monkeypatch.setattr(stock_advice_service, "LLM_ANALYSIS_BUDGET", 0.05)
-        _mock_llm(monkeypatch, SlowLLM(delay=1.0))
-
-        from app.services import daily_analysis_service
-        async def _with_cache(*args, **kwargs):
-            return {
-                "ai": {"view": "bullish", "viewReason": "", "trend": "", "volumeNote": "",
-                       "keyLevels": [], "positionStatus": "empty", "adviceRole": "建仓参考",
-                       "advice": {}, "riskWarning": ""},
-                "ai_source": "stale_cache", "ai_error": "timeout",
-                "cached_at": "2026-08-07T10:00:00", "stale_minutes": 1440,
-                "source_latest_kline_date": "2026-08-07",
-            }
-        monkeypatch.setattr(daily_analysis_service, "get_stale_ai_cache", _with_cache, raising=False)
-
-        called = {"save": 0}
-        async def _no_save(*args, **kwargs):
-            called["save"] += 1
-            return None
-        monkeypatch.setattr(daily_analysis_service, "save_from_analysis_result", _no_save, raising=False)
-
-        result = asyncio.run(get_stock_analysis("600519.SH", _kline([100] * 40)))
-        # stale_cache 路径不应触发 save
-        assert called["save"] == 0
-        assert result["ai_source"] == "stale_cache"
-        # 同时验证 api/stock.py 守卫:ai_source != "live" 时不落库
-        guard_should_save = (
-            result.get("ai") is not None and result.get("ai_source") == "live"
-        )
-        assert guard_should_save is False
 
 
 class TestStreamingAnalysis:
@@ -375,10 +303,9 @@ class TestStreamingAnalysis:
         assert kinds[-1] == "done"
 
     @pytest.mark.asyncio
-    async def test_yields_error_with_stale_cache_on_timeout(self, monkeypatch):
-        """v2.5.4:超时 → ai_error + stale_cache 兜底事件 + done"""
+    async def test_yields_error_no_stale_cache_on_timeout(self, monkeypatch):
+        """超时 → ai_error + done,不再产生 stale_cache 兜底事件"""
         from app.services.stock_advice_service import stream_stock_analysis
-        from app.services import daily_analysis_service
 
         # 短预算 → 必超时
         monkeypatch.setattr(stock_advice_service, "LLM_ANALYSIS_BUDGET", 0.05)
@@ -386,16 +313,6 @@ class TestStreamingAnalysis:
         monkeypatch.setattr(stock_advice_service, "AI_PROGRESS_INITIAL_DELAY", 0.05)
         monkeypatch.setattr(stock_advice_service, "AI_PROGRESS_INTERVAL", 0.05)
         _mock_llm(monkeypatch, SlowLLM(delay=1.0))
-
-        async def _stale(*args, **kwargs):
-            return {
-                "ai": {"view": "bullish", "viewReason": "old", "trend": "", "volumeNote": "",
-                       "keyLevels": [], "positionStatus": "empty", "adviceRole": "建仓参考",
-                       "advice": {}, "riskWarning": ""},
-                "ai_source": "stale_cache", "cached_at": "2026-08-07T10:00:00",
-                "stale_minutes": 60, "source_latest_kline_date": "2026-08-07",
-            }
-        monkeypatch.setattr(daily_analysis_service, "get_stale_ai_cache", _stale)
 
         klines = _kline([100 + i * 0.5 for i in range(60)])
         events = []
@@ -407,7 +324,9 @@ class TestStreamingAnalysis:
         assert "cache_miss" in kinds
         assert "ai_started" in kinds
         assert "ai_error" in kinds
-        assert "stale_cache" in kinds
+        # 关键断言:不再有 stale_cache 兜底事件
+        assert "stale_cache" not in kinds
+        assert "ai_complete" not in kinds
         assert kinds[-1] == "done"
         err = next(e for e in events if e["event"] == "ai_error")
         assert err["code"] == "timeout"
@@ -599,7 +518,10 @@ def test_history_stream_passes_messages(monkeypatch):
 
 
 class TestParseLlmJson:
-    """_parse_llm_json 鲁棒性:容忍 markdown 包裹 + 前置/后置自然语言 + 多个 JSON 块"""
+    """_parse_llm_json 严格解析:仅接受纯 JSON 或 ```json...``` 包裹
+
+    取消花括号配对提取 — LLM 输出"以下是分析:\\n{...}"这种前置自然语言的格式不再被静默修复。
+    """
 
     def test_pure_json(self):
         d = stock_advice_service._parse_llm_json('{"view": "bullish", "score": 80}')
@@ -615,49 +537,33 @@ class TestParseLlmJson:
         d = stock_advice_service._parse_llm_json(raw)
         assert d == {"view": "neutral"}
 
-    def test_natural_language_prefix(self):
-        """LLM 经常在 JSON 前面加"好的,以下是分析:"等自然语言"""
+    def test_natural_language_prefix_raises(self):
+        """前置自然语言不再被修复 → 抛 ValueError"""
         raw = '好的,以下是分析:\n{"view": "bullish", "advice": "持有"}'
-        d = stock_advice_service._parse_llm_json(raw)
-        assert d == {"view": "bullish", "advice": "持有"}
+        with pytest.raises(ValueError, match="非法 JSON"):
+            stock_advice_service._parse_llm_json(raw)
 
-    def test_natural_language_suffix(self):
+    def test_natural_language_suffix_raises(self):
+        """后置自然语言不再被修复 → 抛 ValueError"""
         raw = '{"view": "bullish"}\n希望对您有帮助'
-        d = stock_advice_service._parse_llm_json(raw)
-        assert d == {"view": "bullish"}
+        with pytest.raises(ValueError, match="非法 JSON"):
+            stock_advice_service._parse_llm_json(raw)
 
-    def test_multiple_json_blocks_picks_first(self):
+    def test_multiple_json_blocks_raises(self):
+        """多个 JSON 块不再"取首个",整体解析失败 → 抛 ValueError"""
         raw = '{"view": "bullish"}\n{"view": "bearish"}'
-        d = stock_advice_service._parse_llm_json(raw)
-        assert d == {"view": "bullish"}
+        with pytest.raises(ValueError, match="非法 JSON"):
+            stock_advice_service._parse_llm_json(raw)
 
-    def test_nested_braces_inside_string(self):
-        """字符串内的花括号不计入深度(防 LLM 输出 {"a": "b{c}d"} 时误截断)"""
-        raw = '{"view": "text with {curly} inside", "ok": true}'
-        d = stock_advice_service._parse_llm_json(raw)
-        assert d["view"] == "text with {curly} inside"
-        assert d["ok"] is True
-
-    def test_escaped_quote_in_string(self):
-        raw = '{"view": "he said \\"hi\\"", "ok": true}'
-        d = stock_advice_service._parse_llm_json(raw)
-        assert d["view"] == 'he said "hi"'
-
-    def test_no_json_raises(self):
-        with pytest.raises(ValueError, match="无 JSON 对象"):
+    def test_invalid_json_raises(self):
+        """非法 JSON 抛 ValueError"""
+        with pytest.raises(ValueError, match="非法 JSON"):
             stock_advice_service._parse_llm_json("这是纯文本,没有 JSON")
 
-    def test_bracket_unclosed_raises(self):
-        with pytest.raises(ValueError, match="未闭合"):
-            stock_advice_service._parse_llm_json('{"view": "bullish"')
-
     def test_array_not_object_rejected(self):
-        """纯数组(无对象)被拒;数组中含对象时提取首个对象"""
-        with pytest.raises(ValueError, match="无 JSON 对象"):
+        """顶层 JSON 不是 dict → 抛 ValueError"""
+        with pytest.raises(ValueError, match="非对象 JSON"):
             stock_advice_service._parse_llm_json('[1, 2, 3]')
-        # 数组包对象:提取首个对象 OK
-        d = stock_advice_service._parse_llm_json('[{"view": "x"}, {"view": "y"}]')
-        assert d == {"view": "x"}
 
 
 def make_fake_client_class(responses: list[httpx.Response]) -> type:

@@ -192,30 +192,16 @@ export function AnalysisPanel({
               exit={{ opacity: 0 }}
               className="space-y-2"
             >
-              {analysis?.aiSource === 'stale_cache' ? (
-                <p className="text-sm text-text-ter">
-                  📦 本次 AI 超时,展示{' '}
-                  <span className="font-mono text-text-sec">
-                    {analysis.staleMinutes != null
-                      ? analysis.staleMinutes < 60
-                        ? `${analysis.staleMinutes} 分钟前`
-                        : `${Math.floor(analysis.staleMinutes / 60)} 小时前`
-                      : '历史'}
-                  </span>{' '}
-                  的解读。下方为该次缓存 + 当前纯技术指标。
-                </p>
-              ) : (
-                <p className="text-sm text-text-ter">
-                  {analysis?.aiError === 'timeout'
-                    ? 'AI 解读超时降级'
-                    : analysis?.aiError === 'unconfigured'
-                      ? '未配置 LLM Key'
-                      : analysis?.aiError === 'failed'
-                        ? 'AI 服务调用失败'
-                        : 'AI 暂不可用'}
-                  ,以下为纯技术指标。
-                </p>
-              )}
+              <p className="text-sm font-medium text-red-500">
+                {analysis?.aiError === 'timeout'
+                  ? 'AI 解读超时,请点重试'
+                  : analysis?.aiError === 'unconfigured'
+                    ? '未配置 LLM Key,请联系管理员'
+                    : analysis?.aiError === 'failed'
+                      ? 'AI 解析失败,请点重试'
+                      : 'AI 暂不可用,请点重试'}
+              </p>
+              <p className="text-xs text-text-ter">以下为当前纯技术指标。</p>
               <Button variant="ghost" size="sm" onClick={onRetry ?? onRefresh} disabled={loading}>
                 🔄 重试
               </Button>

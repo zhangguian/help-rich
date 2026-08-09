@@ -165,55 +165,21 @@ async def check_llm_available() -> None:
 
 
 def _parse_llm_json(raw: str) -> dict:
-    """解析 LLM 返回 JSON(容忍 markdown 代码块 + 前置/后置自然语言 + 多个 JSON 块)
+    """解析 LLM 返回 JSON(只接受纯 JSON 或 ```json...``` markdown 包裹)
 
-    提取首个完整 {...} 子串再 json.loads,避免 LLM 在 JSON 前后加 "以下是分析:" /
-    "好的" 等自然语言前缀导致 Strict mode 失败。
+    取消花括号配对提取:LLM 输出 "以下是分析:\\n{...}" 这类带前置自然语言的格式
+    不再被静默修复,直接报错。这迫使 LLM 必须严格返回标准 JSON 或 markdown 代码块,
+    否则前端走"AI 解析失败,请重试"路径,不再用非法抽取的内容蒙混过关。
     """
     text = raw.strip()
-    # 优先尝试整体解析(纯 JSON 或 markdown 代码块)
+    # 仅容忍 markdown ```json...``` 包裹(LLM 结构化输出协议)
     if text.startswith("```"):
         fenced = text.strip("`").strip()
         if fenced.lower().startswith("json"):
             fenced = fenced[4:].strip()
-        try:
-            data = json.loads(fenced)
-            if isinstance(data, dict):
-                return data
-        except json.JSONDecodeError:
-            pass
-    # 退路:用花括号配对提取首个完整 JSON 对象
-    start = text.find("{")
-    if start == -1:
-        raise ValueError(f"LLM 返回无 JSON 对象: {raw[:80]!r}")
-    depth = 0
-    in_str = False
-    escape = False
-    end = -1
-    for i in range(start, len(text)):
-        ch = text[i]
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if ch == '"':
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-    if end == -1:
-        raise ValueError(f"LLM JSON 花括号未闭合: {raw[:80]!r}")
+        text = fenced
     try:
-        data = json.loads(text[start:end])
+        data = json.loads(text)
     except json.JSONDecodeError as e:
         raise ValueError(f"LLM 返回非法 JSON: {e}") from e
     if not isinstance(data, dict):
@@ -347,10 +313,9 @@ async def get_stock_analysis(
     """指标 + AI 解读;LLM 失败 / K 线不足 → ai=None / signal_winrate=None(纯指标降级)
 
     ai_error: 字符串描述降级原因(unconfigured / timeout / failed / insufficient_klines);None 表示 AI 成功
-    ai_source: "live" / "stale_cache" / None
+    ai_source: "live" / None
       - "live":本次 LLM 调用成功
-      - "stale_cache":本次 LLM 超时/失败,从 daily_analysis 历史兜底
-      - None:AI 完全不可用(无 LLM 或超时且无旧解读)
+      - None:AI 完全不可用(无 LLM 或本次失败)
     signal_winrate: K 线不足时为 None(K线 < 23 根时回检样本为零)
 
     current_price: 实时盘中价(None 时 LLM 仅看 K 线 latest_close)
@@ -395,28 +360,8 @@ async def get_stock_analysis(
         result["ai"] = _validate_analysis(parsed)
         result["ai_source"] = "live"
     except asyncio.TimeoutError:
-        logger.warning("个股分析 LLM 超时(>%ss),尝试 stale_cache 兜底: %s", LLM_ANALYSIS_BUDGET, stock_code)
+        logger.warning("个股分析 LLM 超时(>%ss): %s", LLM_ANALYSIS_BUDGET, stock_code)
         result["ai_error"] = "timeout"
-        # v2.5.4:从历史成功 AI 兜底
-        from app.services.daily_analysis_service import get_stale_ai_cache
-        latest_kline_date_str = klines[-1]["date"] if klines else None
-        stale = await get_stale_ai_cache(
-            stock_code,
-            current_latest_kline_date=latest_kline_date_str,
-            override_position_status=position_status,
-        )
-        if stale and stale.get("ai") is not None:
-            result["ai"] = stale["ai"]
-            result["ai_source"] = "stale_cache"
-            result["cached_at"] = stale.get("cached_at")
-            result["stale_minutes"] = stale.get("stale_minutes")
-            result["source_latest_kline_date"] = stale.get("source_latest_kline_date")
-            logger.info(
-                "个股分析 stale_cache 命中(%s): stale_minutes=%s source_date=%s",
-                stock_code, result.get("stale_minutes"), result.get("source_latest_kline_date"),
-            )
-        else:
-            logger.warning("个股分析 stale_cache 未命中,降级纯指标: %s", stock_code)
     except Exception as e:
         logger.warning("个股分析 LLM 失败,降级纯指标(%s): %s", stock_code, e)
         result["ai_error"] = "failed"
@@ -591,7 +536,7 @@ async def ask_stock_question_stream(
 #   {event:"ai_started", at:<ts>}                  ← 进入 LLM
 #   {event:"ai_progress", elapsed_s:N}             ← LLM 启动 30s 后每 10s 推
 #   {event:"ai_complete", ai:{...}}                ← 成功
-#   {event:"ai_error", code, message, ai_source, ai?}  ← 失败/超时(stale_cache 兜底)
+#   {event:"ai_error", code, message}                 ← 失败/超时(取消 stale_cache 兜底)
 #   {event:"done"}                                 ← 始终最后
 # ============================================================
 
@@ -610,7 +555,7 @@ async def stream_stock_analysis(
     """流式个股分析:先吐 indicators/cache_check,再吐 ai 进度,最后 done。
 
     force=True 跳过节点缓存,强制重算 LLM(「强制重算 ⚡」入口)。
-    超时与 stale_cache 兜底复用 get_stock_analysis 的语义;调用方拿到的是
+    失败/超时直接抛 ai_error,不再走 stale_cache 兜底;调用方拿到的是
     dict 列表,SSE 包装在 api 层完成。
     """
     indicators = compute_indicators(klines)
@@ -690,17 +635,6 @@ async def stream_stock_analysis(
     except asyncio.TimeoutError:
         # task 已自动抛 TimeoutError,这里再补一条 error 事件
         yield {"event": "ai_error", "code": "timeout", "message": f"LLM 超时(>{LLM_ANALYSIS_BUDGET}s)"}
-        # stale_cache 兜底
-        from app.services.daily_analysis_service import get_stale_ai_cache
-        latest_kline_date_str = klines[-1]["date"] if klines else None
-        stale = await get_stale_ai_cache(
-            stock_code,
-            current_latest_kline_date=latest_kline_date_str,
-            override_position_status=position_status,
-        )
-        if stale and stale.get("ai") is not None:
-            stale["ai_source"] = "stale_cache"
-            yield {"event": "stale_cache", "data": stale}
         yield {"event": "done"}
         return
     except Exception as e:

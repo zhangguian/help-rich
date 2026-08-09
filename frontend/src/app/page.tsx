@@ -260,9 +260,6 @@ export default function Workbench() {
                 }
               : prev,
           );
-        } else if (evt.event === 'stale_cache') {
-          const r = snakeToCamel(evt.data) as AnalysisResult;
-          setAnalysis(r);
         } else if (evt.event === 'ai_error') {
           setAnalysis((prev) => {
             if (!prev) return prev;
@@ -288,7 +285,7 @@ export default function Workbench() {
   }, [activeCode]);
 
   /** 强制重算:调流式端点 ?force=true,后端跳过节点缓存强制重算 LLM。
-   *  后端 save_from_analysis_result 仅在 ai_source=="live" 时落库,符合 stale_cache 不污染今日行 的约束。 */
+   *  后端 save_from_analysis_result 仅在 ai_source=="live" 时落库,失败/超时结果不污染今日行。 */
   const forceRefreshAnalysis = useCallback(() => {
     if (!activeCode) return;
     refreshAnalysis(true);

@@ -212,8 +212,11 @@ class TestDailyAnalysisService:
         assert rid is not None  # fallback 到 result.latest_kline_date
 
 
-    def test_legacy_row_invalid_view_normalized(self):
-        """v2.5.4:历史行 ai_json 里 view 非标准枚举 → 回显归一为 neutral(防前端崩溃)"""
+    def test_legacy_row_invalid_view_not_silently_modified(self):
+        """取消 view 归一化:历史行 ai_json 里 view 非标准枚举 → 原样保留,不再静默改成 neutral
+
+        由前端按未知 view 处理(不再兜底为 neutral)。
+        """
         from datetime import date
         from app.services.daily_analysis_service import get_latest_as_analysis_result
 
@@ -249,44 +252,8 @@ class TestDailyAnalysisService:
 
         result = asyncio.run(_get())
         assert result is not None
-        assert result["ai"]["view"] == "neutral"
-
-    def test_legal_view_untouched(self):
-        """合法 view 原样保留(不误改)"""
-        from datetime import date
-        from app.services.daily_analysis_service import get_latest_as_analysis_result
-
-        async def _seed():
-            async with async_session() as session:
-                session.add(DailyAnalysis(
-                    stock_code="001897.SZ",
-                    analysis_date=date(2026, 8, 4),
-                    score_avg="0.00",
-                    dimension_avg="{}",
-                    top_issues="[]",
-                    ai_view="bearish",
-                    ai_json=json.dumps({
-                        "view": "bearish",
-                        "view_reason": "x",
-                        "trend": "y",
-                        "volume_note": "z",
-                        "key_levels": [],
-                        "position_status": "empty",
-                        "advice_role": "建仓参考",
-                        "advice": {"rationale": "r"},
-                        "risk_warning": "",
-                    }, ensure_ascii=False),
-                    latest_kline_date=date(2026, 8, 4),
-                ))
-                await session.commit()
-
-        async def _get():
-            await _seed()
-            return await get_latest_as_analysis_result("001897.SZ")
-
-        result = asyncio.run(_get())
-        assert result is not None
-        assert result["ai"]["view"] == "bearish"
+        # 非法 view 原样保留(取消归一化)
+        assert result["ai"]["view"] == "strongly_bullish"
 
 
 # ============================================================

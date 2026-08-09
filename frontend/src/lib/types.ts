@@ -678,12 +678,8 @@ export interface AnalysisResult {
   } | null;
   /** ai=null 时的原因:'unconfigured' | 'timeout' | 'failed' | null(ai 成功) */
   aiError?: 'unconfigured' | 'timeout' | 'failed' | null;
-  /** v2.5.4:AI 来源 — 'live' 本次成功 / 'stale_cache' 历史兜底 / undefined 完全不可用 */
-  aiSource?: 'live' | 'stale_cache' | null;
-  /** v2.5.4:陈旧兜底的 AI 写入时间(ISO),前端展示新鲜度 */
-  cachedAt?: string | null;
-  /** v2.5.4:陈旧分钟数(从 cached_at 起算) */
-  staleMinutes?: number | null;
+  /** v2.5.4:AI 来源 — 'live' 本次成功 / null 完全不可用(取消 stale_cache 兜底) */
+  aiSource?: 'live' | null;
   /** v2.5.3:K 线缓存最新一根的 trade_date(YYYY-MM-DD),前端用作缓存失效键 */
   latestKlineDate?: string | null;
   /** v2.3:实时盘中报价(盘中为实时价,盘后/停牌 = latest_close) */

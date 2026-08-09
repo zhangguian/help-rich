@@ -17,7 +17,6 @@ export type AnalysisStreamEvent =
   | { event: 'ai_started'; at: number }
   | { event: 'ai_progress'; elapsed_s: number }
   | { event: 'ai_complete'; ai: unknown; ai_source: 'live'; latest_kline_date: string | null }
-  | { event: 'stale_cache'; data: unknown }
   | { event: 'ai_error'; code: string; message: string }
   | { event: 'done' };
 

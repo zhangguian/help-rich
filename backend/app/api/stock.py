@@ -227,7 +227,7 @@ async def analysis(code: str, force: bool = False) -> dict:
     result["position_status"] = position_status
     result["cost_basis_pct"] = cost_basis_pct
     result["from_cache"] = False
-    # v2.5.4:仅 ai_source=="live"(本次 LLM 真成功)才落库;stale_cache / None 都不覆盖今日行
+    # 仅 ai_source=="live"(本次 LLM 真成功)才落库;None / 其他都不覆盖今日行
     if result.get("ai") is not None and result.get("ai_source") == "live":
         from app.services.daily_analysis_service import save_from_analysis_result
         await save_from_analysis_result(code, klines, result)
