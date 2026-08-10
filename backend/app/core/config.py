@@ -40,3 +40,52 @@ settings = Settings()
 
 # 确保 logs 目录存在
 Path(settings.log_dir).mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================
+# === v2.6:盘后选股(screener)模块常量(集中可调) ===
+# ============================================================
+
+# 候选池:沪深 300 + 中证 500
+SCREENER_POOL_INDEX_CODES = ("000300.SH", "000905.SH")
+
+# 跑批调度时间(每个交易日 15:30 收盘后启动;周末/节假日不跑)
+SCREENER_RUN_HOUR = 15
+SCREENER_RUN_MINUTE = 30
+
+# Top N 入库数
+SCREENER_TOP_N = 20
+
+# 评分公式版本(版本变更时落 screener_runs.scoring_version,便于回溯)
+SCREENER_SCORING_VERSION = "v1.0"
+
+# === 评分阈值(纯函数;调整后改 SCREENER_SCORING_VERSION 即可重算) ===
+
+# main_net_inflow_score: 板块主力净流入(亿元) → 0..60
+#   每 0.5 亿 +5 分,1.0 亿起 30 分,3.0 亿封顶 60 分
+SCREENER_MAIN_INFLOW_THRESHOLD_YI = 1.0
+SCREENER_MAIN_INFLOW_STEP_YI = 0.5
+SCREENER_MAIN_INFLOW_POINTS_STEP = 5
+SCREENER_MAIN_INFLOW_MAX = 60
+
+# volume_ratio_score: 量比 → 0..40
+SCREENER_VOLUME_RATIO_BREAKPOINTS = (1.5, 2.0, 3.0)  # 三档:20 + 10 + 10
+SCREENER_VOLUME_RATIO_MAX = 40
+
+# momentum_score: 涨幅 + 连涨 → 0..30
+SCREENER_CHANGE_PCT_RANGE = (3.0, 7.0)  # [low, high] 内拿满分 20
+SCREENER_MOMENTUM_BASELINE = 20
+SCREENER_CONSECUTIVE_UP_BONUS = 10  # 连涨 ≥2 天 +10
+SCREENER_MOMENTUM_MAX = 30
+
+# sector_strength_score: 板块资金榜排名 → 0..25
+SCREENER_SECTOR_TOP5_POINTS = 15
+SCREENER_SECTOR_TOP6_20_POINTS = 8
+SCREENER_SECTOR_CLUSTER_BONUS = 5  # 同板块多只入榜 +5
+SCREENER_SECTOR_MAX = 25
+
+# === 入库过滤(过不了连 Top N 都进不了) ===
+
+SCREENER_MIN_AMOUNT_YI = 1.0        # 最小成交额(亿元),过滤流动性极差
+SCREENER_MIN_SCORE = 30             # 综合分门槛
+SCREENER_MAX_DROP_PCT_5D = -15.0    # 近 5 日跌幅超过 -15% 一律剔除(避雷)

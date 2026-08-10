@@ -1,3 +1,133 @@
+# Release Notes v2.6.1(2026-08-09)
+
+## 🎯 v2.6.1 新增:观察池(Watchlist)— 标选 + 周/月胜率
+
+> 经济学家注:发现 → 标记 → 跟踪 → 验证胜率 → 优化策略。补足选股闭环的后三个环节。
+
+### 核心功能
+
+- **从选股页标记 Top 20 候选** — 每张卡片右上 ⭐ 按钮,点击即加入观察池(乐观更新 UI)
+- **逐日 K 线记录** — 标记后首次访问观察池时拉 KlineCache 60 日,逐日 upsert `pct_from_marked`(相对标记日的累计涨跌幅)
+- **按周/月分桶胜率表** — ISO 周 + 自然月 两种粒度;每桶展示:股数 / 平均涨跌幅 / hit 数 / miss 数 / 胜率
+- **主页新 tab「⭐ 观察池」** — 与「📈 选股」并列;点击进入周/月胜率表
+- **🔄 刷新每日走势按钮** — 手动触发 refresh=true,后台重新拉 K 线入库
+
+### 数据流
+
+```
+选股页 Top 卡片点 ⭐
+  → POST /api/screener/watchlist (幂等)
+  → 后端拿标记日 close + change_pct → 落 screener_watchlist (UNIQUE stock_code)
+  → 后台异步 upsert screener_watchlist_daily (拉 60 日 K 线,过滤 marked_at 之后,算 pct_from_marked)
+
+观察池页
+  → GET /api/screener/watchlist
+  → 拉所有 active 标选股 + daily records
+  → 按 (label, watchlist_id) 分桶:
+     - 周:ISO 周(YYYY-Www,周一~周日)
+     - 月:自然月(YYYY-MM)
+  → 每桶聚合:股数 / 平均涨跌 / hit 数 / miss 数 / 胜率
+```
+
+### 新增 API 端点(3 个)
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/screener/watchlist` | 加入观察池(幂等:已存在返 already_existed) |
+| DELETE | `/api/screener/watchlist/{stock_code}` | 取消标记(物理删除 daily records) |
+| GET | `/api/screener/watchlist?refresh=true` | 观察池周/月胜率表(可选刷新每日走势) |
+
+`GET /api/screener/latest` picks 现带 `is_watched` 字段,前端 ⭐ 按钮据此亮/灭。
+
+### 数据模型
+
+- `screener_watchlist` — 标选主表(UNIQUE stock_code)
+- `screener_watchlist_daily` — 标选后逐日 K 线记录(UNIQUE watchlist_id + trade_date)
+
+### 决策记录
+
+参见 [ADR-0007](./dev-log/ADR-0007-screener-watchlist.md)。
+
+### 后续路线
+
+- v2.7:N 天后胜率(复用 P1 view winrate 模式)
+- v2.7:定时任务每天 16:00 自动 refresh
+- v2.8:行业分组胜率
+
+---
+
+# Release Notes v2.6(2026-08-09)
+
+## 🎯 v2.6 新增:盘后选股(screener)模块
+
+> 经济学家注:小白散户的最大痛点之一是"该买哪只"。本项目已有"看一只"的深度,但缺"看一片"的工具。新模块填补这一空缺。
+
+### 核心功能
+
+- **每日 15:30 后台自动跑批**:扫描沪深 300 + 中证 500(约 800 只),按资金驱动评分取 Top 20
+- **资金驱动评分 v1.0**(满分 155):
+  - 主力净流入代理(板块口径) 0~60
+  - 量比三档 0~40
+  - 涨幅 + 连涨 0~30
+  - 板块资金榜排名 0~25
+- **过滤门槛**:成交额 ≥ 1 亿、近 5 日跌幅不超 -15%、综合分 ≥ 30
+- **触发规则 chip**:每只候选股展示"主力净流入≥1.0亿""量比≥2.0"等具体命中条件
+- **LLM 评选**(用户主动按钮):从 Top 20 选 5 只"明日重点关注",每只 2 句话亮点 + 1 句话风险 + action 标签(可关注/轻仓/观望)
+- **幂等保护**:同一 run_id 重复 LLM 请求直接返缓存,不重复烧 API
+
+### 数据流
+
+```
+每日 15:30 (工作日)
+  ↓ APScheduler
+  screener_service.run_daily_pick(target_date)
+  ├─ 拉候选池(沪深300 + 中证500 去重)
+  ├─ 并发拉行情(32 协程) + K线(16 协程)
+  ├─ 拉板块资金榜(行业 Top 20)
+  ├─ 计算 StockFeatures + score_stock() 纯函数评分
+  ├─ 排序 → Top 20 落 screener_runs + screener_picks
+  ↓
+GET /api/screener/latest → 列表展示
+  ↓ 用户点按钮
+POST /api/screener/latest/llm-pick → 调 LLM → 落 screener_llm_picks
+```
+
+### 新增 API 端点(5 个)
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/screener/latest` | 最新一批 Top 20 |
+| GET | `/api/screener/runs?days=10` | 历史 N 天批次 |
+| GET | `/api/screener/pool` | 看候选池大小 |
+| POST | `/api/screener/latest/llm-pick?force=true` | 用户主动触发 LLM 评选(幂等) |
+| POST | `/api/screener/trigger-now` | 手动立刻重跑(需 `SCREENER_ALLOW_TRIGGER=1`) |
+
+### 新增文件
+
+- 后端 8 个(模型 + 迁移 + repo + service + scoring + LLM 集成 + API + 初始化脚本)
+- 前端 2 个(`lib/screener.ts` + `app/screener/page.tsx`)
+- 测试 39 个(`test_scoring.py` 22 + `test_screener.py` 17)
+
+### 数据初始化
+
+```bash
+# 初始化沪深 300 + 中证 500 成分股(首次部署)
+python -m scripts.init_index_constituents                # 在线 + 增量
+python -m scripts.init_index_constituents --seed-only     # 仅种子(offline 兜底)
+```
+
+### 决策记录
+
+参见 [ADR-0006](./dev-log/ADR-0006-screener-stock-picker.md)。
+
+### 后续路线
+
+- v2.7:个股资金流数据源探活 + 替换板块代理
+- v2.8:回测接口 `GET /api/screener/backtest?days=90`
+- v0.3:用户自定义选股条件编辑器(产品决策 D11 推迟)
+
+---
+
 # Release Notes v0.4.2(2026-08-02)
 
 ## 🎯 v0.4 产品转型:从"记账工具"到"买股看股工具"

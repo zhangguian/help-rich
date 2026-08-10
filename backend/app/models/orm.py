@@ -8,11 +8,13 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -431,3 +433,211 @@ class DailyAnalysis(Base):
 
     def __repr__(self) -> str:
         return f"<DailyAnalysis {self.stock_code} {self.analysis_date} view={self.ai_view}>"
+
+
+# ============================================================
+# === v2.6:盘后选股(screener)模块 ===
+# ============================================================
+
+
+class IndexConstituent(Base):
+    """沪深300 / 中证500 成分股静态表(v2.6 选股模块)
+
+    初始化脚本:`scripts/init_index_constituents.py`(可重复执行)。
+    数据源:东方财富 / 新浪公开接口(guide data-source §5)。
+    """
+    __tablename__ = "index_constituents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    index_code: Mapped[str] = mapped_column(String, nullable=False)  # "000300.SH" / "000905.SH"
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)  # "600519.SH"
+    stock_name: Mapped[str] = mapped_column(String, nullable=False)
+    added_at: Mapped[date] = mapped_column(Date, default=date.today)
+
+    __table_args__ = (
+        # 同一股票在同一指数中只出现一次
+        UniqueConstraint("index_code", "stock_code", name="uq_index_stock"),
+        Index("idx_index_code", "index_code"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<IndexConstituent {self.index_code} {self.stock_code} {self.stock_name}>"
+
+
+class ScreenerRun(Base):
+    """一次盘后选股批次(v2.6)
+
+    每日(交易日)15:30 后由后台调度器跑一次,落库一批 ScreenerPick。
+    run_date 唯一(同一天最多 1 个批次,可手动重跑覆盖)。
+    """
+    __tablename__ = "screener_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_date: Mapped[date] = mapped_column(Date, nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now
+    )
+    # 评分公式版本(便于回溯 + 阈值变更后追溯)
+    scoring_version: Mapped[str] = mapped_column(String, default="v1.0")
+    # 候选池大小(沪深300 + 中证500 去重)
+    pool_size: Mapped[int] = mapped_column(Integer, default=0)
+    # Top N 入库数(默认 20)
+    total_picks: Mapped[int] = mapped_column(Integer, default=0)
+    # 跑批耗时(秒)— 调优参考
+    elapsed_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 备注(失败原因 / 降级提示)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("run_date", name="uq_screener_run_date"),
+        Index("idx_screener_runs_date", "run_date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ScreenerRun {self.run_date} picks={self.total_picks} pool={self.pool_size}>"
+
+
+class ScreenerPick(Base):
+    """选股 Top N 中的一条(v2.6)
+
+    每条记录该候选股的综合分 + 各因子明细,供前端展示与 LLM 喂入。
+    """
+    __tablename__ = "screener_picks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("screener_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)  # 1..N
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
+    stock_name: Mapped[str] = mapped_column(String, nullable=False)
+    # 综合得分(0~100)
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+    # 各因子明细(便于前端"为什么被选中"展示 + LLM 喂入)
+    main_net_inflow_yi: Mapped[float | None] = mapped_column(Float, nullable=True)  # 板块主力净流入(亿元)
+    volume_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)  # 量比(今日量 / 5日均量)
+    change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # 当日涨跌幅(%)
+    turnover_proxy: Mapped[float | None] = mapped_column(Float, nullable=True)  # 成交额(亿元)
+    consecutive_up_days: Mapped[int] = mapped_column(Integer, default=0)  # 连涨天数
+    sector: Mapped[str | None] = mapped_column(String, nullable=True)  # 所属行业
+    sector_inflow_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 板块资金榜排名
+    # 触发条件 chip(JSON list,供前端展示"为什么被选中")
+    triggered_rules: Mapped[str] = mapped_column(Text, default="[]")
+    # v2.6.1:本地规则拼接的入选理由(1-2 句中文)— 跑批时生成,NULL 表示旧 run 未补算
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("idx_screener_picks_run", "run_id"),
+        # 历史查询某只股票历次入选
+        Index("idx_screener_picks_code_date", "stock_code"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ScreenerPick run={self.run_id} rank={self.rank} {self.stock_code} score={self.score:.1f}>"
+
+
+class ScreenerLlmPick(Base):
+    """用户主动触发的 LLM 评选结果(v2.6)
+
+    同一 run_id 一天只允许 1 次评选(幂等保护,防重复烧 LLM)。
+    picks_json 存 [{rank, stock_code, view, highlights, risks, action}, ...] 共 5 只。
+    """
+    __tablename__ = "screener_llm_picks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("screener_runs.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now
+    )
+    # LLM 标识
+    model: Mapped[str] = mapped_column(String, nullable=False)
+    # 5 只标的的完整结果(JSON 字符串)
+    picks_json: Mapped[str] = mapped_column(Text, nullable=False)
+    # 摘要(整体一句话总结)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # token 用量 + 估算成本(便于限额)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_estimate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 失败时存错误
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 状态:success / failed
+    status: Mapped[str] = mapped_column(String, default="success")
+
+    def __repr__(self) -> str:
+        return f"<ScreenerLlmPick run={self.run_id} model={self.model} status={self.status}>"
+
+
+# ============================================================
+# === v2.6:盘后选股 — 观察池(watchlist) ===
+# ============================================================
+
+
+class ScreenerWatchlist(Base):
+    """观察池(v2.6)— 用户从选股页标记的标的
+
+    UNIQUE(stock_code) — 同一只股只能标一次(重复点击 = 取消)
+    标选后由后台/懒加载补全 screener_watchlist_daily 逐日 K 线记录。
+    """
+    __tablename__ = "screener_watchlist"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_code: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    stock_name: Mapped[str] = mapped_column(String, nullable=False)
+    marked_at: Mapped[date] = mapped_column(Date, nullable=False)
+    # 标记日收盘价(精度保护 Decimal-as-string)
+    marked_close: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 标记日涨跌幅(字符串,小数表示:0.05 = +5%)
+    marked_change_pct: Mapped[str | None] = mapped_column(String, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="active")  # active / closed
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    # 关联 daily records(级联删除)
+    daily_records: Mapped[list["ScreenerWatchlistDaily"]] = relationship(
+        "ScreenerWatchlistDaily",
+        back_populates="watchlist",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self) -> str:
+        return f"<ScreenerWatchlist {self.stock_code} marked={self.marked_at} status={self.status}>"
+
+
+class ScreenerWatchlistDaily(Base):
+    """观察池逐日 K 线记录(v2.6)— 标记后每天的股价快照
+
+    数据来源:首次访问观察池时按需拉 KlineCache 60 日 K 线,逐日入库。
+    pct_from_marked = (close - marked_close) / marked_close,小数表示
+    UNIQUE(watchlist_id, trade_date)— 同一天只有一条
+    """
+    __tablename__ = "screener_watchlist_daily"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    watchlist_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("screener_watchlist.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    open_price: Mapped[str] = mapped_column(String, nullable=False)
+    high_price: Mapped[str] = mapped_column(String, nullable=False)
+    low_price: Mapped[str] = mapped_column(String, nullable=False)
+    close_price: Mapped[str] = mapped_column(String, nullable=False)
+    volume: Mapped[int] = mapped_column(Integer, default=0)
+    # 相对标记日的累计涨跌幅(小数:0.05 = +5%);NULL 表示标记日当日无 close
+    pct_from_marked: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    watchlist: Mapped["ScreenerWatchlist"] = relationship(
+        "ScreenerWatchlist", back_populates="daily_records"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("watchlist_id", "trade_date", name="uq_watchlist_trade_date"),
+        Index("idx_watchlist_daily_date", "watchlist_id", "trade_date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ScreenerWatchlistDaily {self.watchlist_id} {self.trade_date} pct={self.pct_from_marked}>"

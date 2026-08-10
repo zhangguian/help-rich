@@ -26,6 +26,7 @@ from app.api.rebalance import router as rebalance_router
 from app.api.risk_report import router as risk_report_router
 from app.api.score_calibration import router as score_calibration_router
 from app.api.screenshot import router as screenshot_router
+from app.api.screener import router as screener_router
 from app.api.stock import router as stock_router
 from app.api.stop_losses import router as stop_losses_router
 from app.api.transactions import router as transactions_router
@@ -95,6 +96,9 @@ async def lifespan(app: FastAPI):
         _asyncio.create_task(start_sina_scheduler(interval_sec=60))
         # v0.4.1:板块资金异动检测(60s 拉一次,异动 publish)
         _asyncio.create_task(start_sector_scheduler(interval_sec=60))
+        # v2.6:盘后选股调度器(每日 15:30 工作日自动跑批)
+        from app.services.screener_service import start_screener_scheduler
+        _asyncio.create_task(start_screener_scheduler())
 
     logger.info(f"买股工具室后端启动 — v0.2.0,数据库={settings.database_url}")
     yield
@@ -140,4 +144,5 @@ app.include_router(rebalance_router, prefix="/api")
 app.include_router(risk_report_router, prefix="/api")
 app.include_router(score_calibration_router, prefix="/api")
 app.include_router(screenshot_router, prefix="/api")
+app.include_router(screener_router, prefix="/api")
 app.include_router(stock_router, prefix="/api")

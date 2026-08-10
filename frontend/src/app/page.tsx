@@ -22,6 +22,8 @@ import { NewsFeed } from '@/components/news/NewsFeed';
 import { PositionStatsCards } from '@/components/positions/PositionStatsCards';
 import { PositionSummaryTable } from '@/components/positions/PositionSummaryTable';
 import { StockFlowTab } from '@/components/positions/StockFlowTab';
+import { ScreenerPanel } from '@/components/screener/ScreenerPanel';
+import { WatchlistPanel } from '@/components/screener/WatchlistPanel';
 import { SectorBoard } from '@/components/sector/SectorBoard';
 import { SettingsPanel } from '@/components/settings/SettingsPanel';
 import { Button } from '@/components/ui/Button';
@@ -29,7 +31,7 @@ import { GlassCard } from '@/components/ui/GlassCard';
 import { LiquidModal } from '@/components/ui/LiquidModal';
 import { WatchList, type WatchItem } from '@/components/watch/WatchList';
 
-type TabKey = 'watch' | 'favorite' | 'position' | 'market' | 'sector' | 'news' | 'settings';
+type TabKey = 'watch' | 'favorite' | 'position' | 'market' | 'sector' | 'news' | 'settings' | 'screener' | 'watchlist';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'watch', label: '自选' },
@@ -38,6 +40,8 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'market', label: '大盘' },
   { key: 'sector', label: '板块资金' },
   { key: 'news', label: '快讯' },
+  { key: 'screener', label: '📈 选股' },
+  { key: 'watchlist', label: '⭐ 观察池' },
   { key: 'settings', label: '设置' },
 ];
 
@@ -383,8 +387,8 @@ export default function Workbench() {
 
       {/* 三区主体 */}
       <div className="flex flex-1 gap-4 min-h-0">
-        {/* 左 aside:大盘 / 设置 Tab 时收起,中间区占满宽度 */}
-        {tab !== 'market' && tab !== 'settings' && (
+        {/* 左 aside:大盘 / 设置 / 选股 / 观察池 Tab 时收起,中间区占满宽度 */}
+        {tab !== 'market' && tab !== 'settings' && tab !== 'screener' && tab !== 'watchlist' && (
           <aside className="w-72 shrink-0 min-h-0">
             <WatchList
               items={visibleItems}
@@ -407,7 +411,11 @@ export default function Workbench() {
               transition={{ duration: 0.26, ease: 'easeOut' }}
               className="flex-1 min-h-0 flex flex-col gap-3"
             >
-              {tab === 'sector' ? (
+              {tab === 'screener' ? (
+                <ScreenerPanel />
+              ) : tab === 'watchlist' ? (
+                <WatchlistPanel />
+              ) : tab === 'sector' ? (
                 <SectorBoard />
               ) : tab === 'news' ? (
                 <NewsFeed />
@@ -602,8 +610,8 @@ export default function Workbench() {
           </AnimatePresence>
         </section>
 
-        {/* 右侧:上操作提示 / 下 AI 对话 — 大盘 / 设置 Tab 时收起 */}
-        {tab !== 'market' && tab !== 'settings' && (
+        {/* 右侧:上操作提示 / 下 AI 对话 — 大盘 / 设置 / 选股 / 观察池 Tab 时收起 */}
+        {tab !== 'market' && tab !== 'settings' && tab !== 'screener' && tab !== 'watchlist' && (
           <aside className="w-[22rem] shrink-0 flex flex-col gap-3 min-h-0">
             <div className="flex-1 min-h-0 overflow-y-auto pr-1">
 <AnalysisPanel
