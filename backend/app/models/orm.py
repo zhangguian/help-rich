@@ -643,3 +643,34 @@ class EventFactorCache(Base):
 
     def __repr__(self) -> str:
         return f"<EventFactorCache {self.trade_date} calls={self.ifind_calls}>"
+
+
+# ============================================================
+# === 改动 C:reflection 当日上下文缓存 (22:00 消息面) ===
+# ============================================================
+
+class ReflectionContextCache(Base):
+    """ReflectionCard 22:00 消息面提示当日缓存 (改动 C)
+
+    - key: fetch_date (当日 1 次, 跨日失效)
+    - context_json 存 22:00 ifind news/notice 跑批结果,供 22:00 推送 + 历史回看
+    - 写表条件: ifind 拉取成功 (失败不写, 调用方降级)
+    """
+    __tablename__ = "reflection_context_cache"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fetch_date: Mapped[date] = mapped_column(Date, nullable=False, unique=True)
+    context_json: Mapped[str] = mapped_column(Text, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    ifind_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    __table_args__ = (
+        Index("idx_reflection_context_cache_fetch_date", "fetch_date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ReflectionContextCache {self.fetch_date} calls={self.ifind_calls}>"
