@@ -89,3 +89,7 @@ SCREENER_SECTOR_MAX = 25
 SCREENER_MIN_AMOUNT_YI = 1.0        # 最小成交额(亿元),过滤流动性极差
 SCREENER_MIN_SCORE = 30             # 综合分门槛
 SCREENER_MAX_DROP_PCT_5D = -15.0    # 近 5 日跌幅超过 -15% 一律剔除(避雷)
+
+# 改动 A: screener 事件因子加权 (iFinD 驱动)
+SCREENER_EVENT_FACTOR_WEIGHT: int = 15
+SCREENER_EVENT_KEYWORD_BLACKLIST: list[str] = ["ST", "*ST", "退市"]

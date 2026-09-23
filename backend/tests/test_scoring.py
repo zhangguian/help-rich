@@ -289,3 +289,32 @@ def test_build_reason_negative_change_warning():
     """回调涨幅 → 含「注意回调」"""
     r = build_reason(_features(change_pct=-2.5))
     assert "注意回调" in r
+
+
+# === event_score(改动 A: 事件命中分) ===
+
+from app.services.scoring import event_score
+
+
+def test_event_score_hit_returns_full():
+    """命中事件相关股 → SCREENER_EVENT_FACTOR_WEIGHT (15)"""
+    codes = {"600519.SH", "300750.SZ"}
+    assert event_score("600519.SH", codes, {"AI"}) == 15
+
+
+def test_event_score_miss_returns_zero():
+    """未命中事件相关股 → 0"""
+    codes = {"600519.SH"}
+    assert event_score("000001.SZ", codes, {"AI"}) == 0
+
+
+def test_event_score_case_insensitive():
+    """代码大小写不敏感: 集合中 '600519.sh' 小写也能命中 '600519.SH'"""
+    codes = {"600519.sh"}  # 小写
+    assert event_score("600519.SH", codes, set()) == 15
+
+
+def test_event_score_empty_inputs():
+    """空 stock_code 或空 event_stock_codes → 0(安全边界)"""
+    assert event_score("600519.SH", set(), set()) == 0
+    assert event_score("", set(), set()) == 0

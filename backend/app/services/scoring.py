@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from app.core.config import (
     SCREENER_CHANGE_PCT_RANGE,
     SCREENER_CONSECUTIVE_UP_BONUS,
+    SCREENER_EVENT_FACTOR_WEIGHT,
     SCREENER_MAIN_INFLOW_MAX,
     SCREENER_MAIN_INFLOW_POINTS_STEP,
     SCREENER_MAIN_INFLOW_STEP_YI,
@@ -259,3 +260,24 @@ def build_reason(features: StockFeatures, bd: ScoreBreakdown | None = None) -> s
     if len(truncated) <= 100:
         return truncated
     return truncated[:97] + "..."
+
+
+def event_score(stock_code: str, event_stock_codes: set[str], event_keywords: set[str]) -> int:
+    """事件命中分 (改动 A)
+
+    命中热门事件相关股: SCREENER_EVENT_FACTOR_WEIGHT (默认 15)
+    未命中: 0
+
+    Args:
+        stock_code: 当前候选股票代码(规整后)
+        event_stock_codes: 当日热门事件相关股代码集合 (来自 event_factor_cache)
+        event_keywords: 当日热门事件关键词 (保留参数, 未来扩展用)
+
+    Returns:
+        int: 0 或 SCREENER_EVENT_FACTOR_WEIGHT
+    """
+    if not stock_code or not event_stock_codes:
+        return 0
+    if stock_code.upper() in {c.upper() for c in event_stock_codes}:
+        return SCREENER_EVENT_FACTOR_WEIGHT
+    return 0
