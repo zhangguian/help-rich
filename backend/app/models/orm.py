@@ -264,37 +264,6 @@ class FundFlow(Base):
 
 
 # ============================================================
-# === v0.2.1:K 线缓存表(D) ===
-# ============================================================
-
-class KlineCache(Base):
-    """单只股票日 K 线缓存(D,TradingView Lightweight Charts)
-
-    MVP:首次请求时 mock 生成 + 落库;v0.2.2 接 akshare/yahoo 真实数据源替换 mock。
-    """
-    __tablename__ = "kline_cache"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    stock_code: Mapped[str] = mapped_column(String, nullable=False)
-    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
-    period: Mapped[str] = mapped_column(String, nullable=False, default="daily")  # daily/weekly/60min
-    open_price: Mapped[str] = mapped_column(String, nullable=False)
-    high_price: Mapped[str] = mapped_column(String, nullable=False)
-    low_price: Mapped[str] = mapped_column(String, nullable=False)
-    close_price: Mapped[str] = mapped_column(String, nullable=False)
-    volume: Mapped[int] = mapped_column(Integer, default=0)
-    source: Mapped[str] = mapped_column(String, default="mock")  # mock/akshare/yahoo
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
-
-    __table_args__ = (
-        Index("idx_kline_code_period_date", "stock_code", "period", "trade_date"),
-    )
-
-    def __repr__(self) -> str:
-        return f"<KlineCache {self.stock_code} {self.period} {self.trade_date}>"
-
-
-# ============================================================
 # === v2.3:复盘记录表(一键复盘持久化,per (股票, 窗口) UPSERT) ===
 # ============================================================
 
@@ -397,10 +366,10 @@ class DailyAnalysis(Base):
     # v2.5:LLM 操作参考结构化 JSON 全文(6 字段 + 可选 t_strategy);
     # 老行 nullable=True → 前端读不到时降级为空对象
     ai_advice_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # v2.5.2:完整技术指标 JSON(compute_indicators 输出)— 支持换浏览器/换设备时回显
+    # v2.5.2:完整技术指标 JSON(compute_indicators 输出)— 历史存档/复盘
     indicators_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # v2.5.2:LLM 解读完整对象 JSON(view / viewReason / trend / volumeNote / keyLevels /
-    # positionStatus / adviceRole / advice / riskWarning)— 供 analysis-latest 端点回显
+    # positionStatus / adviceRole / advice / riskWarning)— 历史存档/复盘
     ai_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # v2.5.2:信号胜率 JSON(compute_signal_winrate 输出)— 可空(K 线不足时 None)
     signal_winrate_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -609,7 +578,7 @@ class ScreenerWatchlist(Base):
 class ScreenerWatchlistDaily(Base):
     """观察池逐日 K 线记录(v2.6)— 标记后每天的股价快照
 
-    数据来源:首次访问观察池时按需拉 KlineCache 60 日 K 线,逐日入库。
+    数据来源:首次访问观察池时按需拉 60 日 K 线(直连新浪),逐日入库。
     pct_from_marked = (close - marked_close) / marked_close,小数表示
     UNIQUE(watchlist_id, trade_date)— 同一天只有一条
     """
@@ -641,3 +610,34 @@ class ScreenerWatchlistDaily(Base):
 
     def __repr__(self) -> str:
         return f"<ScreenerWatchlistDaily {self.watchlist_id} {self.trade_date} pct={self.pct_from_marked}>"
+
+
+# ============================================================
+# === 改动 A:screener 事件因子当日缓存 ===
+# ============================================================
+
+class EventFactorCache(Base):
+    """screener 事件因子当日缓存 (改动 A)
+
+    - key: trade_date (当日 1 次, 跨日失效)
+    - 写表条件: ifind 拉取成功 (失败不写)
+    """
+    __tablename__ = "event_factor_cache"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False, unique=True)
+    event_keywords_json: Mapped[str] = mapped_column(Text, nullable=False)
+    stock_codes_json: Mapped[str] = mapped_column(Text, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    ifind_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    __table_args__ = (
+        Index("idx_event_factor_cache_trade_date", "trade_date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<EventFactorCache {self.trade_date} calls={self.ifind_calls}>"
