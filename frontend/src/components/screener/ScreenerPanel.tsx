@@ -397,6 +397,15 @@ export function ScreenerPanel() {
                     ))}
                   </div>
                 )}
+                {p.fundamental_filter_status && (
+                  <div className="text-xs mt-1">
+                    {p.fundamental_filter_status === 'passed' ? (
+                      <span className="text-up">✓ 基本面通过</span>
+                    ) : (
+                      <span className="text-down">⚠️ 基本面被过滤</span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </Card>

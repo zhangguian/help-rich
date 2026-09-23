@@ -29,6 +29,8 @@ export interface ScreenerPick {
   isWatched: boolean;
   /** v2.6.1:本地规则拼接的入选理由(1-2 句中文);NULL 表示旧 run 未补算 */
   reason: string | null;
+  /** v2.7 改动 B:基本面过滤结果。'passed'=通过, 'kicked'=被过滤;NULL=旧 run 或未启用过滤 */
+  fundamental_filter_status?: 'passed' | 'kicked' | null;
 }
 
 export interface LlmPickItem {
