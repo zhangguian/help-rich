@@ -33,11 +33,16 @@ from app.data.unified import UnifiedQuote
 from app.models.orm import IndexConstituent, ScreenerRun
 from app.repositories import screener_repo
 from app.services import kline_service, quote_service, sector_fund_flow_service
+from app.services.event_factor_service import (
+    build_event_factor_cache,
+    get_event_factor_codes,
+)
 from app.services.industry_service import resolve_industry
 from app.services.scoring import (
     StockFeatures,
     apply_sector_cluster_bonus,
     build_reason,
+    event_score,
     passes_filter,
     score_stock,
 )
@@ -269,6 +274,17 @@ async def run_daily_pick(target_date: date | None = None) -> ScreenerRun | None:
         pool, sector_rank_map, sector_inflow_yi, sector_name_map
     )
 
+    # 改动 A: 先构建当日事件因子缓存 (失败 fail-fast, 不跑评分)
+    try:
+        await build_event_factor_cache(target)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "screener event factor unavailable today, running with 4-factor score: %s", e,
+        )
+        # spec §4.1: A 失败时 screener 跑无事件因子版, 不抛错
+
+    event_codes = await get_event_factor_codes(target)
+
     # 评分 + 过滤
     scored: list[tuple[StockFeatures, object]] = []
     for feat, reason in features_with_reason:
@@ -282,6 +298,8 @@ async def run_daily_pick(target_date: date | None = None) -> ScreenerRun | None:
     for feat, bd in scored:
         if feat.sector:
             apply_sector_cluster_bonus(bd, sector_count.get(feat.sector, 0))
+        # 改动 A: 叠加事件因子分
+        bd.total += event_score(feat.stock_code, event_codes, set())
 
     # 按总分倒序
     scored.sort(key=lambda x: x[1].total, reverse=True)
@@ -380,7 +398,7 @@ __all__ = [
 
 
 async def _fetch_marked_close(stock_code: str, marked_at) -> tuple[str | None, str | None]:
-    """取标记日 close + change_pct(优先 KlineCache,失败 QuoteService,最后 None)
+    """取标记日 close + change_pct(走 fetch_klines 直连新浪,失败 QuoteService,最后 None)
 
     Returns: (marked_close:str, marked_change_pct:str) — 任一失败返 (None, None)
     """
