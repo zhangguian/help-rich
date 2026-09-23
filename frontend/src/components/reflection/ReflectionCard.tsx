@@ -9,6 +9,11 @@ import { useUIStore } from '@/stores/useUIStore';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 
+import {
+  fetchReflectionContext,
+  ReflectionContextSummary,
+} from '@/lib/api/reflection-context';
+
 /**
  * 今日反思卡(P7.5,ui-ux §4.1)
  *
@@ -33,6 +38,8 @@ export function ReflectionCard() {
   const [show, setShow] = useState(false);
   const [tradeCount, setTradeCount] = useState(0);
   const [realizedPnl, setRealizedPnl] = useState<string | null>(null);
+  const [contextSummary, setContextSummary] =
+    useState<ReflectionContextSummary | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -61,6 +68,17 @@ export function ReflectionCard() {
         /* ignore */
       }
     });
+
+    // 22:00 弹窗消息面提示行 (改动 C, v2.7) - 失败静黙
+    // 独立触发,不依赖 todayTrades(持仓/自选票 22:00 复盘消息面仍有意义)
+    import('@/lib/api/reflection-context').then(
+      async ({ fetchReflectionContext: fetchCtx }) => {
+        const ctx = await fetchCtx(todayKey());
+        if (ctx?.summary) {
+          setContextSummary(ctx.summary);
+        }
+      },
+    );
   }, []);
 
   const dismiss = () => {
@@ -99,6 +117,20 @@ export function ReflectionCard() {
               睡前 30 秒,看一眼持仓,问自己:今天是因为理性还是情绪做了决定?
             </span>
           </p>
+          {contextSummary &&
+            (contextSummary.newsCount > 0 ||
+              contextSummary.announcementsCount > 0) && (
+              <div className="mt-2 text-xs text-text-sec">
+                <span className="font-mono font-semibold">📰 今日</span>{' '}
+                {contextSummary.announcementsCount} 条公告 /{' '}
+                {contextSummary.newsCount} 条新闻
+                {contextSummary.topNewsTitle && (
+                  <span className="block text-text-ter mt-1">
+                    「{contextSummary.topNewsTitle}」
+                  </span>
+                )}
+              </div>
+            )}
           <div className="mt-3 flex gap-2">
             <Link href="/">
               <Button size="sm" variant="secondary">
