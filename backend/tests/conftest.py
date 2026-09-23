@@ -36,3 +36,77 @@ def _ensure_isolated() -> None:
 
 
 _ensure_isolated()
+
+
+from contextlib import contextmanager, ExitStack
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+@contextmanager
+def mock_thsifind(
+    trending_news: list[dict] | None = None,
+    news: list[dict] | None = None,
+    notices: list[dict] | None = None,
+    securities: list[dict] | None = None,
+    fail_on: set[str] | None = None,
+):
+    """Mock thsifind 工具栏, 用于所有 ifind 相关测试.
+
+    容错: Task 2 写入时, ifind_events/news/fundamentals 模块可能尚未存在
+    (Task 3/9/13 才创建). patch 路径不存在时静默跳过, 避免早跑 fixture 报错.
+
+    Args:
+        trending_news: search_trending_news 返回值(默认空 list)
+        news: search_news 返回值
+        notices: search_notice 返回值
+        securities: search_securities 返回值(默认 [{'stock_code': '600519.SH', 'hit': True}])
+        fail_on: 哪些工具名模拟失败, e.g. {'search_trending_news'}
+    """
+    fail_on = fail_on or set()
+    m = MagicMock()
+
+    def _maybe_fail(name):
+        def _raise(*a, **kw):
+            raise RuntimeError(f"mocked ifind failure: {name}")
+        return _raise
+
+    m.search_trending_news = (
+        _maybe_fail("search_trending_news")
+        if "search_trending_news" in fail_on
+        else AsyncMock(return_value=trending_news if trending_news is not None else [])
+    )
+    m.search_news = (
+        _maybe_fail("search_news")
+        if "search_news" in fail_on
+        else AsyncMock(return_value=news if news is not None else [])
+    )
+    m.search_notice = (
+        _maybe_fail("search_notice")
+        if "search_notice" in fail_on
+        else AsyncMock(return_value=notices if notices is not None else [])
+    )
+    m.search_securities = (
+        _maybe_fail("search_securities")
+        if "search_securities" in fail_on
+        else AsyncMock(return_value=securities if securities is not None else [
+            {"stock_code": "600519.SH", "hit": True, "name": "贵州茅台"},
+        ])
+    )
+    m.get_security_indicators = MagicMock(return_value={})
+    m.get_stock_summary = MagicMock(return_value={})
+
+    patches = [
+        ("app.data.ifind_events", "_search_trending_news", m.search_trending_news),
+        ("app.data.ifind_news", "_search_news", m.search_news),
+        ("app.data.ifind_news", "_search_notice", m.search_notice),
+        ("app.data.ifind_fundamentals", "_search_securities", m.search_securities),
+    ]
+
+    with ExitStack() as stack:
+        for module_path, attr, mock_obj in patches:
+            try:
+                stack.enter_context(patch(f"{module_path}.{attr}", mock_obj))
+            except (AttributeError, ModuleNotFoundError):
+                # 模块尚未创建 (Task 3/9/13 才落地), 跳过此 patch
+                pass
+        yield m
