@@ -103,7 +103,7 @@ SCREENER_EVENT_KEYWORD_BLACKLIST = ["ST", "*ST", "退市"]  # 防止 ST 加权
 
 # 新因子函数(在 app/services/scoring.py 新增)
 def event_score(stock_code: str, event_stock_codes: set[str], event_keywords: set[str]) -> int:
-    """事件命中分:0 / 8 / 15 三档"""
+    """事件命中分:0 / 15 两档"""
     if stock_code in event_stock_codes:
         return 15  # 出现在热门事件相关股列表里
     return 0
@@ -292,8 +292,8 @@ async def _apply_fundamental_filter(picks: list[ScreenerPick]) -> list[ScreenerP
 
 | 操作 | 文件 |
 |---|---|
-| 🆕 新增 | `docs/dev-log/ADR-0008-ifind-screener-reflection-optimization.md`（沿 ADR-0006/0007 风格：背景/决策/拒绝方案/数据模型/影响）|
-| ✏️ 修改 | `docs/dev-log/decisions-index.md` 追加 ADR-0008 条目 |
+| 🆕 新增 | `docs/dev-log/ADR-0010-ifind-screener-reflection-optimization.md`（沿 ADR-0006/0007 风格：背景/决策/拒绝方案/数据模型/影响；编号 0010 跳过 pre-existing decisions-index.md L14 占用的 0008）|
+| ✏️ 修改 | `docs/dev-log/decisions-index.md` 追加 ADR-0010 条目 |
 | ✏️ 修改 | `docs/dev-log/runbook.md` 追加"ifind 故障排查"小节 |
 | ✏️ 修改 | `docs/release-notes.md` 追加本次三项变更 |
 
@@ -332,7 +332,7 @@ async def _apply_fundamental_filter(picks: list[ScreenerPick]) -> list[ScreenerP
 3. **改动 A 事件因子权重** `SCREENER_EVENT_FACTOR_WEIGHT=15` 是否合适？占总分约 9%
 4. **改动 C 是否需要**新增 `/api/reflection-context` 后端端点？还是直接让前端从 `lib/api` 调外部 ifind（**不推荐**，破坏分层）
 5. **缓存策略**：A/C 用 SQL 表 vs 用进程内 LRU dict（参考现有 `app/services/event_bus.py` 风格）？spec 默认 SQL 表
-6. **ADR 命名** ADR-0008 是否合适（接续 0006 screener、0007 watchlist）
+6. **ADR 命名** ADR-0010（接续 0006 screener、0007 watchlist；跳过 0008 因为 pre-existing `decisions-index.md` L14 已占用 0008 编号且无对应文件）
 
 ---
 

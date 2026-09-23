@@ -2,11 +2,11 @@
 
 ## 🎯 v2.7 新增:iFinD 驱动现有模块优化（事件因子 / 基本面兜底 / 消息面提示）
 
-> 三项改动全部基于 iFinD（thsifind）数据接口,**接现有模块不开新功能**。screener 总分上限从 155 升至 170；ReflectionCard 22:00 弹窗增加消息面上下文。失败语义统一：**A/C 静默不阻断，B 失败不展示 Top N**。详见 [ADR-0008](./dev-log/ADR-0008-ifind-screener-reflection-optimization.md)。
+> 三项改动全部基于 iFinD（thsifind）数据接口,**接现有模块不开新功能**。screener 总分上限从 155 升至 170；ReflectionCard 22:00 弹窗增加消息面上下文。失败语义统一：**A/C 静默不阻断，B 失败不展示 Top N**。详见 [ADR-0010](./dev-log/ADR-0010-ifind-screener-reflection-optimization.md)。
 
 ### 新增功能
 
-- **改动 A：screener 加事件因子加权** — 第 5 因子 `event_score`（0/8/15 三档）。通过 iFinD `search_trending_news` 拉取 24 小时热门事件驱动资讯，归一出 `{event_keywords, stock_codes}`，候选股命中关键词 → 加分。失败时自动降级为 4 因子版（log WARNING），当日仍出 Top N。
+- **改动 A：screener 加事件因子加权** — 第 5 因子 `event_score`（0/15 两档）。通过 iFinD `search_trending_news` 拉取 24 小时热门事件驱动资讯，归一出 `{event_keywords, stock_codes}`，候选股命中关键词 → 加分。失败时自动降级为 4 因子版（log WARNING），当日仍出 Top N。
 - **改动 B：screener Top N 基本面兜底过滤** — 排序出 Top 20 后，对每只票调 iFinD `search_securities` 做单股基本面硬门槛（PE / 营收 / 行业地位等），过滤失败 → 不展示 Top N（fail-fast）。前端每张卡片显示基本面过滤状态 badge（passed / kicked）。
 - **改动 C：ReflectionCard 22:00 加消息面提示行** — 盘后弹窗顶部追加"📰 今日 X 条公告 / Y 条新闻" + "「最新头条标题」"摘要 + 跳转"→ 查看完整复盘上下文"链接。通过 iFinD `search_news` + `search_notice` 拉取，**当日 1 次缓存**，失败静默不打扰。
 
@@ -34,11 +34,11 @@
 
 - 后端 8 个：`ifind_events.py` / `ifind_fundamentals.py` / `ifind_news.py` + `event_factor_service.py` / `event_factor_cache_repo.py` / `reflection_context_service.py` / `reflection_context_cache_repo.py` / `api/reflection_context.py`
 - 前端 1 个：`lib/api/reflection-context.ts`
-- 测试 8 个：`test_ifind_scripts.py` / `test_ifind_fundamentals.py` / `test_ifind_news.py` / `test_event_factor_service.py` / `test_reflection_context_cache_repo.py` / `test_reflection_context_service.py` / `test_reflection_context_api.py` / `test_screener_pick_fundamental_status.py` + conftest mock_thsifind fixture
+- 测试 8 个：`test_ifind_events.py` / `test_ifind_fundamentals.py` / `test_ifind_news.py` / `test_event_factor_service.py` / `test_reflection_context_cache_repo.py` / `test_reflection_context_service.py` / `test_reflection_context_api.py` / `test_screener_pick_fundamental_status.py` + conftest mock_thsifind fixture
 
 ### 决策记录
 
-参见 [ADR-0008](./dev-log/ADR-0008-ifind-screener-reflection-optimization.md) + spec [`docs/superpowers/specs/2026-09-22-ifind-screener-reflection-optimization-design.md`](./superpowers/specs/2026-09-22-ifind-screener-reflection-optimization-design.md)。
+参见 [ADR-0010](./dev-log/ADR-0010-ifind-screener-reflection-optimization.md) + spec [`docs/superpowers/specs/2026-09-22-ifind-screener-reflection-optimization-design.md`](./superpowers/specs/2026-09-22-ifind-screener-reflection-optimization-design.md)。
 
 ### 后续路线
 

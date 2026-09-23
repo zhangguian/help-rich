@@ -143,7 +143,7 @@ git config --global http.sslCAInfo "D:\git\Git\mingw64\ssl\certs\ca-bundle.crt"
 
 路径错误时 push 仍会报 schannel 错(迷惑性)。
 
-## 7. iFinD 故障排查（2026-09-22，ADR-0008）
+## 7. iFinD 故障排查（2026-09-22，ADR-0010）
 
 > 覆盖改动 A (screener 事件因子)、改动 B (screener Top N 基本面兜底)、改动 C (ReflectionCard 消息面提示)。
 

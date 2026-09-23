@@ -22,26 +22,26 @@
 
 ---
 
-## Task 1: 写 ADR-0008 文档（先行定义术语）
+## Task 1: 写 ADR-0010 文档（先行定义术语）
 
 **Files:**
-- Create: `docs/dev-log/ADR-0008-ifind-screener-reflection-optimization.md`
-- Modify: `docs/dev-log/decisions-index.md`（追加 ADR-0008 条目）
+- Create: `docs/dev-log/ADR-0010-ifind-screener-reflection-optimization.md`
+- Modify: `docs/dev-log/decisions-index.md`（追加 ADR-0010 条目）
 
 **Interfaces:**
 - Consumes: 无
-- Produces: ADR-0008 文档 + decisions-index 条目
+- Produces: ADR-0010 文档 + decisions-index 条目
 
 - [ ] **Step 1: 读 ADR-0007 + decisions-index**
 
 读 `docs/dev-log/ADR-0007-screener-watchlist.md` 和 `docs/dev-log/decisions-index.md`，熟悉格式。
 
-- [ ] **Step 2: 写 ADR-0008**
+- [ ] **Step 2: 写 ADR-0010**
 
-新建 `docs/dev-log/ADR-0008-ifind-screener-reflection-optimization.md`，结构（仿 ADR-0006/0007）：
+新建 `docs/dev-log/ADR-0010-ifind-screener-reflection-optimization.md`，结构（仿 ADR-0006/0007）：
 
 ```markdown
-# ADR-0008: iFinD 驱动现有模块优化（事件因子 / 基本面兜底 / 消息面提示）
+# ADR-0010: iFinD 驱动现有模块优化（事件因子 / 基本面兜底 / 消息面提示）
 
 ## 状态：已采用（2026-09-22）
 
@@ -58,7 +58,7 @@ iFinD（thsifind 数据接口, 已接入工具栏）提供:
 
 ## 决策
 新增 3 项 ifind 数据接入, 全部走"接现有模块不开新功能"原则:
-1. screener 加事件因子加权(第 5 因子, 0/8/15 三档)
+1. screener 加事件因子加权(第 5 因子, 0/15 两档)
 2. screener Top N 末尾追加基本面兜底过滤(hard gate)
 3. ReflectionCard 22:00 加消息面提示行(失败静默)
 
@@ -86,14 +86,14 @@ screener 总分上限 155 → 170; 失败语义: A/C 静默不阻断, B 失败�
 编辑 `docs/dev-log/decisions-index.md`，按现有顺序追加：
 
 ```markdown
-- ADR-0008 — iFinD 驱动现有模块优化（事件因子 / 基本面兜底 / 消息面提示），2026-09-22
+- ADR-0010 — iFinD 驱动现有模块优化（事件因子 / 基本面兜底 / 消息面提示），2026-09-22
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/dev-log/ADR-0008-ifind-screener-reflection-optimization.md docs/dev-log/decisions-index.md
-git commit -m "docs(adr): ADR-0008 ifind 驱动现有模块优化"
+git add docs/dev-log/ADR-0010-ifind-screener-reflection-optimization.md docs/dev-log/decisions-index.md
+git commit -m "docs(adr): ADR-0010 ifind 驱动现有模块优化"
 ```
 
 ---
@@ -2510,7 +2510,7 @@ DELETE FROM reflection_context_cache WHERE fetch_date = '2026-09-22';
 在 release-notes.md 最新版本（v2.6.1 或最新）下追加（**或新建 v2.7 条目**，取决于项目习惯）：
 
 ```markdown
-## v2.7 - iFinD 驱动现有模块优化（2026-09-22, spec ADR-0008）
+## v2.7 - iFinD 驱动现有模块优化（2026-09-22, spec ADR-0010）
 
 ### 新增
 - screener 加事件因子加权 (改动 A, iFinD search_trending_news)
@@ -2529,7 +2529,7 @@ DELETE FROM reflection_context_cache WHERE fetch_date = '2026-09-22';
 - 2 个新 Alembic 迁移
 
 ### 文档
-- 新增 ADR-0008
+- 新增 ADR-0010
 - 更新 decisions-index + runbook
 ```
 
@@ -2545,11 +2545,11 @@ git commit -m "docs: runbook 加 ifind 故障排查 + release-notes v2.7"
 ## Task 20: 总收尾 — ADR 状态更新 + 最终验证
 
 **Files:**
-- Modify: `docs/dev-log/ADR-0008-ifind-screener-reflection-optimization.md`
+- Modify: `docs/dev-log/ADR-0010-ifind-screener-reflection-optimization.md`
 
 - [ ] **Step 1: 改 ADR 状态**
 
-编辑 `docs/dev-log/ADR-0008-ifind-screener-reflection-optimization.md`，把：
+编辑 `docs/dev-log/ADR-0010-ifind-screener-reflection-optimization.md`，把：
 
 ```markdown
 ## 状态：已采用（2026-09-22）
@@ -2573,12 +2573,12 @@ Expected: 全部通过
 - 总文件修改: 11 (6 backend + 1 frontend + 2 doc + 2 orm)
 - 总 commit 数: 11 (Task 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 12 + 13 + 14 + 15 + 16 + 17 + 19, Task 8/18/20 是验证节点无 commit)
 - 三项改动独立可测, 互不依赖
-- ADR-0008 已采用
+- ADR-0010 已采用
 - 失败即失败原则贯穿所有改动
 
 - [ ] **Step 4: 最终 commit (如有 amendment)**
 
-如有 ADR-0008 状态更新 / 最后微调, amend 或追加 commit。
+如有 ADR-0010 状态更新 / 最后微调, amend 或追加 commit。
 
 ---
 
