@@ -142,3 +142,45 @@ git config --global http.sslCAInfo "D:\git\Git\mingw64\ssl\certs\ca-bundle.crt"
 - `C:\Program Files\Git\` 安装 → `C:\Program Files\Git\mingw64\ssl\certs\ca-bundle.crt`
 
 路径错误时 push 仍会报 schannel 错(迷惑性)。
+
+## 7. iFinD 故障排查（2026-09-22，ADR-0008）
+
+> 覆盖改动 A (screener 事件因子)、改动 B (screener Top N 基本面兜底)、改动 C (ReflectionCard 消息面提示)。
+
+### 现象
+后端 log 出现以下之一:
+- `IfindUnavailable: search_trending_news 失败`（改动 A）
+- `IfindUnavailable: search_securities 失败`（改动 B）
+- `IfindUnavailable: search_news 失败` / `search_notice 失败`（改动 C）
+
+### 排查步骤
+1. 确认 mcode-tools connector 已安装且 thsifind 可用：
+   ```bash
+   mcode-tools connector tools --keyword thsifind
+   ```
+2. 单独测试工具是否响应：
+   ```bash
+   mcode-tools connector call thsifind__search_trending_news --args '{"time_scope":"24小时","size":5}'
+   ```
+3. connector 鉴权失败 → 检查 MiniMax Code 工具授权状态（设置页 → 工具授权）。
+4. HTTP 429 限流 → 等次日或降低调用频率（不要手动重试，会加重限流）。
+5. **改动 A 失败** → screener 自动降级为 4 因子版（log WARNING），当日仍能产出 Top N，只是没有事件因子加权。
+6. **改动 B 失败** → screener Top N 不展示（fail-fast），需修复 ifind 后手动 `POST /api/screener/trigger-now` 重跑。
+7. **改动 C 失败** → ReflectionCard 22:00 弹窗静默（按设计意图），不影响主体验。
+
+### 缓存清理
+改动 A / C 的当日缓存（每交易日 1 次）：
+```sql
+-- 清除事件因子缓存（改动 A）
+DELETE FROM event_factor_cache WHERE trade_date = 'YYYY-MM-DD';
+
+-- 清除消息面缓存（改动 C）
+DELETE FROM reflection_context_cache WHERE fetch_date = 'YYYY-MM-DD';
+```
+改动 B 不缓存（每次跑选股实时调用）。
+
+### 相关模块
+- `backend/app/data/ifind_events.py` / `ifind_fundamentals.py` / `ifind_news.py` — 三个包装层
+- `backend/app/services/event_factor_service.py` / `reflection_context_service.py` — A/C 服务
+- `backend/app/services/screener_service.py` — A/B 接入点
+- 完整设计: `docs/superpowers/specs/2026-09-22-ifind-screener-reflection-optimization-design.md`
