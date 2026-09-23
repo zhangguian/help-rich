@@ -6,6 +6,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
+    Column,
     Date,
     DateTime,
     Float,
@@ -494,6 +495,7 @@ class ScreenerPick(Base):
     triggered_rules: Mapped[str] = mapped_column(Text, default="[]")
     # v2.6.1:本地规则拼接的入选理由(1-2 句中文)— 跑批时生成,NULL 表示旧 run 未补算
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fundamental_filter_status = Column(String, nullable=True)  # 'passed' / 'kicked' / NULL
 
     __table_args__ = (
         Index("idx_screener_picks_run", "run_id"),
