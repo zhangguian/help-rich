@@ -20,6 +20,29 @@ def _create_tables():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _clear_today_cache():
+    """每个 test 前清掉 reflection_context_cache 的 today 行.
+
+    防御: 其他 file 测试(如 test_reflection_context_cache_repo)在 date.today() 写入
+    缓存会污染本 file 的 today 断言, 导致 service 直接返缓存而不调 mock.
+    """
+    import asyncio
+    from sqlalchemy import delete
+    from app.db import async_session
+    from app.models.orm import ReflectionContextCache
+
+    async def _cleanup():
+        async with async_session() as session:
+            await session.execute(
+                delete(ReflectionContextCache).where(ReflectionContextCache.fetch_date == date.today())
+            )
+            await session.commit()
+
+    asyncio.run(_cleanup())
+    yield
+
+
 @pytest.mark.asyncio
 async def test_build_reflection_context_aggregates_codes():
     from app.services.reflection_context_service import build_reflection_context

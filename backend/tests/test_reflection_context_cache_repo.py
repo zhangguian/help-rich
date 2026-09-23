@@ -1,6 +1,6 @@
 """reflection_context_cache 仓储测试 (改动 C)"""
 import pytest
-from datetime import date
+from datetime import date, timedelta
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -26,18 +26,20 @@ def _create_tables():
 async def test_upsert_and_get_today():
     from app.repositories.reflection_context_cache_repo import reflection_context_cache_repo
 
-    today = date.today()
+    # 用未来日期, 避免污染 test_reflection_context_service.py::test_build_*
+    # 用了 date.today() 的 cache(同日 cache 命中会让 service 直接返回, 断言失败)
+    future = date.today() + timedelta(days=100)
     row = await reflection_context_cache_repo.upsert(
-        fetch_date=today,
+        fetch_date=future,
         context_json='{"announcements_count": 1, "news_count": 2, "top_news_title": "test"}',
         fetched_at="2026-09-22T22:00:00+08:00",
         ifind_calls=2,
     )
     assert row.id is not None
 
-    got = await reflection_context_cache_repo.get_today(today)
+    got = await reflection_context_cache_repo.get_today(future)
     assert got is not None
-    assert got.fetch_date == today
+    assert got.fetch_date == future
     assert got.ifind_calls == 2
 
 
