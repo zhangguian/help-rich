@@ -29,6 +29,8 @@ from app.core.config import (
     SCREENER_SCORING_VERSION,
     SCREENER_TOP_N,
 )
+from app.data.ifind_events import IfindUnavailable
+from app.data.ifind_fundamentals import is_hit_fundamental_filter
 from app.data.unified import UnifiedQuote
 from app.models.orm import IndexConstituent, ScreenerRun
 from app.repositories import screener_repo
@@ -336,6 +338,19 @@ async def run_daily_pick(target_date: date | None = None) -> ScreenerRun | None:
             "triggered_rules": bd.triggered_rules,
             "reason": build_reason(feat, bd),
         })
+
+    # 改动 B: 基本面兜底过滤 (失败 fail-fast, 不持久化不展示 — spec §6)
+    try:
+        top_n_picks = [_PickProxy(p) for p in picks_payload]
+        await _apply_fundamental_filter(top_n_picks)
+    except IfindUnavailable as e:
+        logger.error("[screener] 基本面过滤失败, 不持久化 Top N: %s", e)
+        return None
+    for _p in top_n_picks:
+        _p.commit()
+    picks_payload.sort(key=lambda x: x["score"], reverse=True)
+    for _i, _p in enumerate(picks_payload, start=1):
+        _p["rank"] = _i
 
     run = await screener_repo.upsert_run(
         run_date=target,
@@ -737,3 +752,75 @@ async def compute_watchlist_summary() -> dict:
         "weeks": weeks,
         "months": months,
     }
+
+
+# ============================================================
+# 改动 B: Top N 基本面兜底过滤 (screener 落盘前 fail-fast)
+# ============================================================
+
+
+class _PickProxy:
+    """picks_payload dict 的薄包装, 让 filter 能以 object-API (stock_code/score/
+    fundamental_filter_status) 操作, 通过 commit() 把改动写回原 dict.
+
+    只在 run_daily_pick 集成处使用, 不暴露给外部.
+    """
+
+    __slots__ = ("stock_code", "score", "fundamental_filter_status", "_p")
+
+    def __init__(self, payload: dict) -> None:
+        self._p = payload
+        self.stock_code: str = payload["stock_code"]
+        self.score: float = payload["score"]
+        self.fundamental_filter_status: str | None = None
+
+    def commit(self) -> None:
+        self._p["score"] = self.score
+        self._p["fundamental_filter_status"] = self.fundamental_filter_status
+
+
+async def _apply_fundamental_filter(picks: list) -> list:
+    """对 Top N 跑一次基本面兜底过滤; 任一失败直接抛 IfindUnavailable.
+
+    行为:
+    - SCREENER_FUNDAMENTAL_FILTER_ENABLED=False → 原样返
+    - is_hit_fundamental_filter 返 True → fundamental_filter_status='passed', 分不变
+    - 返 False → fundamental_filter_status='kicked', 扣 SCREENER_FUNDAMENTAL_KICKOUT_PENALTY
+    - 任一票 ifind 调用失败 → 抛 IfindUnavailable, 不写库
+
+    Args:
+        picks: 列表, 元素需有 stock_code, score, fundamental_filter_status 属性
+            (SimpleNamespace / ScreenerPick / dataclass 均可)
+
+    Returns:
+        重新排序的 picks 列表 (in-place + return)
+    """
+    from app.core.config import (
+        SCREENER_FUNDAMENTAL_FILTER_ENABLED,
+        SCREENER_FUNDAMENTAL_FILTER_QUERY,
+        SCREENER_FUNDAMENTAL_KICKOUT_PENALTY,
+    )
+    if not SCREENER_FUNDAMENTAL_FILTER_ENABLED:
+        return picks
+
+    # 并发查 Top N
+    results = await asyncio.gather(
+        *[is_hit_fundamental_filter(p.stock_code, SCREENER_FUNDAMENTAL_FILTER_QUERY) for p in picks],
+        return_exceptions=True,
+    )
+    # 任一失败 → 整体抛
+    for i, r in enumerate(results):
+        if isinstance(r, Exception):
+            if isinstance(r, IfindUnavailable):
+                raise r
+            raise IfindUnavailable(f"基本面过滤异常: {picks[i].stock_code}: {r}") from r
+
+    for pick, hit in zip(picks, results):
+        if hit:
+            pick.fundamental_filter_status = "passed"
+        else:
+            pick.fundamental_filter_status = "kicked"
+            pick.score -= SCREENER_FUNDAMENTAL_KICKOUT_PENALTY
+
+    picks.sort(key=lambda p: p.score, reverse=True)
+    return picks

@@ -93,3 +93,8 @@ SCREENER_MAX_DROP_PCT_5D = -15.0    # 近 5 日跌幅超过 -15% 一律剔除(�
 # 改动 A: screener 事件因子加权 (iFinD 驱动)
 SCREENER_EVENT_FACTOR_WEIGHT: int = 15
 SCREENER_EVENT_KEYWORD_BLACKLIST: list[str] = ["ST", "*ST", "退市"]
+
+# 改动 B: screener Top N 基本面兜底过滤
+SCREENER_FUNDAMENTAL_FILTER_ENABLED: bool = True
+SCREENER_FUNDAMENTAL_FILTER_QUERY: str = "扣非ROE>0 PE<行业中位数 剔除ST"
+SCREENER_FUNDAMENTAL_KICKOUT_PENALTY: int = 30

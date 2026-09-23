@@ -146,6 +146,7 @@ async def replace_picks(run_id: int, picks: list[dict[str, Any]]) -> None:
                 sector_inflow_rank=p.get("sector_inflow_rank"),
                 triggered_rules=json.dumps(p.get("triggered_rules", []), ensure_ascii=False),
                 reason=p.get("reason"),
+                fundamental_filter_status=p.get("fundamental_filter_status"),
             ))
         await session.commit()
 
