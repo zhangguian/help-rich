@@ -23,13 +23,14 @@ async def _search_securities(market: str, query: str) -> list[dict[str, Any]]:
     )
 
 
-async def is_hit_fundamental_filter(stock_code: str, query: str, market: str = "A股") -> bool:
+async def is_hit_fundamental_filter(stock_code: str, query: str, market: str = "股票") -> bool:
     """单只票是否命中基本面筛条件.
 
     Args:
         stock_code: 6 位股票代码 (规整后)
         query: 筛条件字符串 (e.g. "扣非ROE>0 PE<行业中位数 剔除ST")
-        market: 默认 A 股
+        market: thsifind search_securities 的市场枚举, 合法值 = 股票 / 基金 / 港股 / 美股.
+            注意: 传 "A股" 会被 connector 校验拒绝 (enum 不含 A股), 必须用 "股票".
 
     Returns:
         True = 命中 (通过筛条件), False = 不命中 (踢出)
