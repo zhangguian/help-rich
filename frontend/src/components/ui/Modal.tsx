@@ -58,7 +58,7 @@ export function Modal({
             exit={{ opacity: 0, scale: 0.95, y: 16 }}
             transition={{ type: 'spring', stiffness: 340, damping: 28 }}
             className={clsx(
-              'liquid-glass w-full mx-4 p-6 space-y-4 max-h-[90vh] overflow-y-auto',
+              'panel w-full mx-4 p-6 space-y-4 max-h-[90vh] overflow-y-auto',
               widths[size],
             )}
           >

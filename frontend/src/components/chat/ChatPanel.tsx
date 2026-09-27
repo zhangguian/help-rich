@@ -345,7 +345,7 @@ const listRef = useRef<HTMLDivElement | null>(null);
 
   return (
     <GlassCard
-      variant="active"
+      variant="selected"
       padding="sm"
       className="h-full flex flex-col overflow-hidden gap-2 min-h-0"
       style={height ? { height: `${height}px` } : { height: '420px' }}

@@ -56,7 +56,7 @@ function ReplayHistoryInner() {
             onChange={(e) => setDraft(e.target.value.toUpperCase())}
             onKeyDown={(e) => e.key === 'Enter' && submit()}
             placeholder="股票代码,如 601899.SH 或 000001"
-            className="flex-1 px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 focus:border-accent outline-none text-text-pri placeholder:text-text-ter font-mono"
+            className="flex-1 px-3 py-2 text-sm rounded-lg bg-bg-subtle border border-border-def focus:border-accent outline-none text-text-pri placeholder:text-text-ter font-mono"
           />
           <Button onClick={submit} variant="secondary" size="sm">
             查看

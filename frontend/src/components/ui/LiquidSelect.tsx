@@ -70,9 +70,9 @@ export function LiquidSelect({
         type="button"
         onClick={() => setOpen((v) => !v)}
         className={clsx(
-          'liquid-pill flex items-center justify-between gap-2 px-4 py-2 text-sm text-text-pri',
-          'bg-white/5 border border-white/10 rounded-xl backdrop-blur-md',
-          'hover:bg-white/10 transition-colors',
+          'w-full panel flex items-center justify-between gap-2 px-4 py-2 text-sm text-text-pri',
+          'bg-bg-subtle border border-border-def rounded-xl backdrop-blur-md',
+          'hover:bg-bg-subtle transition-colors',
           className,
         )}
         aria-haspopup="listbox"
@@ -96,7 +96,7 @@ export function LiquidSelect({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.97, y: -4 }}
               transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-              className="liquid-glass fixed z-[60] overflow-hidden p-1.5"
+              className="panel fixed z-[60] overflow-hidden p-1.5"
               style={{ top: pos.top, left: pos.left, width: Math.max(pos.width, 160) }}
             >
               {options.map((o) => {
@@ -113,7 +113,7 @@ export function LiquidSelect({
                     }}
                     className={clsx(
                       'flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors',
-                      isActive ? 'text-accent bg-accent-subtle' : 'text-text-sec hover:text-text-pri hover:bg-white/5',
+                      isActive ? 'text-accent bg-accent-subtle' : 'text-text-sec hover:text-text-pri hover:bg-bg-subtle',
                     )}
                   >
                     {o.label}

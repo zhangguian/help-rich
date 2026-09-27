@@ -76,8 +76,8 @@ export function TermHint({ term, className }: { term: string; className?: string
         aria-label={`术语解释:${term}`}
         className={
           'inline-flex items-center justify-center w-3.5 h-3.5 rounded-full ' +
-          'text-[10px] text-text-ter border border-white/20 ' +
-          'hover:text-text-pri hover:border-accent/50 hover:bg-white/5 ' +
+          'text-[10px] text-text-ter border border-border-def ' +
+          'hover:text-text-pri hover:border-accent/50 hover:bg-bg-subtle ' +
           'transition-colors cursor-help leading-none align-middle ml-1 ' +
           (className ?? '')
         }
@@ -98,7 +98,7 @@ export function TermHint({ term, className }: { term: string; className?: string
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -4, scale: 0.97 }}
               transition={{ duration: 0.15 }}
-              className="liquid-glass fixed z-[60] rounded-lg p-3 text-xs text-text-sec leading-relaxed shadow-lg"
+              className="panel fixed z-[60] p-3 text-xs text-text-sec leading-relaxed shadow-lg"
               style={{ top: pos.top, left: pos.left, width: 280 }}
             >
               <div className="text-text-ter text-[10px] uppercase tracking-wide mb-1">

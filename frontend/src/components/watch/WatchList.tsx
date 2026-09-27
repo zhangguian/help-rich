@@ -15,6 +15,7 @@ import { GlassCard } from '@/components/ui/GlassCard';
 import { LiquidModal } from '@/components/ui/LiquidModal';
 import { Button } from '@/components/ui/Button';
 import { TransactionForm } from '@/components/transaction/TransactionForm';
+import { pctClass, chipColor } from '@/lib/format';
 
 export interface WatchItem {
   code: string;
@@ -23,20 +24,6 @@ export interface WatchItem {
   quote: Quote | null;
   isFavorite: boolean;  // v0.5 特别关注
 }
-
-/** Logo 章渐变色(按代码哈希取色,稳定不变) */
-const CHIP_COLORS = [
-  'from-blue-500 to-sky-400',
-  'from-violet-500 to-purple-400',
-  'from-cyan-500 to-teal-400',
-  'from-amber-500 to-orange-400',
-  'from-rose-500 to-pink-400',
-];
-const chipColor = (code: string) => {
-  let h = 0;
-  for (let i = 0; i < code.length; i++) h = (h * 31 + code.charCodeAt(i)) >>> 0;
-  return CHIP_COLORS[h % CHIP_COLORS.length];
-};
 
 /**
  * 左侧盯盘 aside(roadmap 功能1)
@@ -95,11 +82,6 @@ export function WatchList({
     });
     return arr;
   }, [items, sortDir]);
-
-  const pctClass = (v: number | null | undefined) => {
-    if (v == null) return 'text-text-ter';
-    return v > 0 ? 'text-up' : v < 0 ? 'text-down' : 'text-text-ter';
-  };
 
   // 渲染弹窗到 body:绕开 GlassCard.backdrop-filter 创建的 containing block,
   // 否则 fixed 定位相对 aside 收缩,无法在全宽显示
@@ -415,7 +397,7 @@ export function WatchList({
               <Button variant="secondary" onClick={() => setShowAdd(false)} className=" rounded-xl">
                 取消
               </Button>
-              <Button onClick={submitAdd} className="liquid-glass rounded-xl">添加</Button>
+              <Button onClick={submitAdd} className="panel">添加</Button>
             </>
           }
         >
@@ -567,7 +549,7 @@ export function WatchList({
                   className="w-full px-2 py-1.5 text-sm rounded-lg bg-bg-surface border border-border-str focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
                 />
                 </div>
-                <Button onClick={submitSetPosition} className="liquid-glass rounded-xl" size="sm">
+                <Button onClick={submitSetPosition} className="panel" size="sm">
                   保存
                 </Button>
               </div>

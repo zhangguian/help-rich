@@ -81,7 +81,7 @@ export function WinrateCard({ stockCode }: { stockCode: string }) {
                 'px-3 py-1 text-xs rounded-lg transition-colors',
                 days === w.key
                   ? 'bg-accent-subtle text-accent border border-accent/30'
-                  : 'bg-white/5 text-text-sec hover:text-text-pri border border-white/5',
+                  : 'bg-bg-subtle text-text-sec hover:text-text-pri border border-border-def',
               )}
             >
               {w.label}
@@ -132,7 +132,7 @@ export function WinrateCard({ stockCode }: { stockCode: string }) {
               </div>
 
               {/* 同向模拟 */}
-              <div className="flex items-center justify-between gap-2 pt-2 border-t border-white/5">
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-border-def">
                 <label className="flex items-center gap-1.5 text-xs text-text-sec cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -197,7 +197,7 @@ function DirectionBar({
         </span>
         <span className="font-mono text-text-pri">{wrPct}</span>
       </div>
-      <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
+      <div className="flex-1 h-2 bg-bg-subtle rounded-full overflow-hidden">
         <div
           className={clsx('h-full transition-all', barCls)}
           style={{ width: `${barW}%` }}

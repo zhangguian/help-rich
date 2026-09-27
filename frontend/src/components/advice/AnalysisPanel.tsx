@@ -22,7 +22,7 @@ import type {
 const VIEW_META = {
   bullish: { label: '看多', cls: 'text-up border-up/40 bg-up-bg' },
   bearish: { label: '看空', cls: 'text-down border-down/40 bg-down-bg' },
-  neutral: { label: '中性', cls: 'text-text-sec border-white/20 bg-white/5' },
+  neutral: { label: '中性', cls: 'text-text-sec border-border-def bg-bg-subtle' },
 };
 
 const CHANNEL_META = {
@@ -40,7 +40,7 @@ const VOLUME_META = {
 const SIGNAL_VIEW_META = {
   bullish: { label: '看多', cls: 'text-up border-up/40 bg-up-bg' },
   bearish: { label: '看空', cls: 'text-down border-down/40 bg-down-bg' },
-  neutral: { label: '中性', cls: 'text-text-sec border-white/20 bg-white/5' },
+  neutral: { label: '中性', cls: 'text-text-sec border-border-def bg-bg-subtle' },
 };
 
 const CONFIDENCE_META = {
@@ -79,7 +79,7 @@ export function AnalysisPanel({
   const ind = analysis?.indicators;
 
   return (
-    <div className="space-y-3 overflow-y-auto min-h-0">
+    <div className="space-y-3">
       {/* 顶部置顶:机械信号卡(确定性引擎,与 AI 卡并存) */}
       {ind && (
         <SignalPanel
@@ -95,7 +95,7 @@ export function AnalysisPanel({
       {/* AI 分析卡(LLM 白话解读) */}
       <GlassCard padding="md" className="space-y-3">
         <div className="flex items-center justify-between">
-          <span className="text-xs text-text-ter uppercase tracking-wide">AI 分析</span>
+          <span className="text-sm font-semibold text-text-pri">✨ AI 分析</span>
           <div className="flex items-center gap-1">
             <Button variant="ghost" onClick={onRefresh} disabled={loading} className='text-xs'>
               {loading
@@ -138,9 +138,9 @@ export function AnalysisPanel({
         <AnimatePresence mode="wait">
           {loading ? (
             <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              <div className="h-4 w-24 rounded bg-white/10 animate-pulse" />
-              <div className="h-3 w-full rounded bg-white/5 animate-pulse mt-3" />
-              <div className="h-3 w-5/6 rounded bg-white/5 animate-pulse mt-2" />
+              <div className="h-4 w-24 rounded bg-border-def animate-pulse" />
+              <div className="h-3 w-full rounded bg-bg-subtle animate-pulse mt-3" />
+              <div className="h-3 w-5/6 rounded bg-bg-subtle animate-pulse mt-2" />
             </motion.div>
           ) : analysis?.ai ? (
             <motion.div
@@ -169,7 +169,7 @@ export function AnalysisPanel({
                   {analysis.ai.keyLevels.map((lvl, i) => (
                     <span
                       key={i}
-                      className="text-xs px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-text-sec font-mono"
+                      className="text-xs px-2 py-1 rounded-lg bg-bg-subtle border border-border-def text-text-sec font-mono"
                       title={lvl.note}
                     >
                       {lvl.type === 'support' ? '支撑' : lvl.type === 'pressure' ? '压力' : '企稳'}{' '}
@@ -222,7 +222,7 @@ export function AnalysisPanel({
 
       {/* 技术指标面板 */}
       <GlassCard padding="md" className="space-y-4">
-        <span className="text-xs text-text-ter uppercase tracking-wide">技术指标</span>
+        <span className="text-sm font-semibold text-text-pri">📊 技术指标</span>
         {!ind ? (
           <p className="text-sm text-text-ter">选择左侧股票后显示指标</p>
         ) : (
@@ -272,7 +272,7 @@ export function AnalysisPanel({
               </div>
               <div className="grid grid-cols-2 gap-1.5">
                 {(['ma5', 'ma10', 'ma20', 'ma60'] as const).map((k) => (
-                  <div key={k} className="rounded-lg bg-white/5 px-2 py-1.5">
+                  <div key={k} className="rounded-lg bg-bg-subtle px-2 py-1.5">
                     <div className="text-[10px] text-text-ter uppercase">{k}</div>
                     <div className="text-sm font-mono text-text-pri">{ind.ma[k] ?? '--'}</div>
                   </div>
@@ -337,7 +337,7 @@ export function AnalysisPanel({
             </div>
 
             {/* 企稳 */}
-            <div className="rounded-xl bg-white/5 p-3 space-y-2">
+            <div className="rounded-xl bg-bg-subtle p-3 space-y-2">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-text-sec inline-flex items-center">
                   企稳点<TermHint term="stabilize" />
@@ -386,14 +386,14 @@ function SignalWinrateBlock({ winrate }: { winrate: SignalWinrate }) {
   const tone = (v: number) => (v >= 0.6 ? 'text-up' : v <= 0.4 ? 'text-down' : 'text-text-sec');
   if (winrate.insufficient) {
     return (
-      <div className="rounded-lg bg-white/5 px-3 py-2 text-xs text-text-ter">
+      <div className="rounded-lg bg-bg-subtle px-3 py-2 text-xs text-text-ter">
         {winrate.signalLabel}信号出现过 {winrate.count} 次,样本太少,暂不统计胜率
         (至少 3 次才有参考价值)
       </div>
     );
   }
   return (
-    <div className="rounded-lg bg-white/5 px-3 py-2 space-y-1">
+    <div className="rounded-lg bg-bg-subtle px-3 py-2 space-y-1">
       <div className="text-xs text-text-ter">
         历史回测:近 120 个交易日内,「{winrate.signalLabel}」信号共出现 {winrate.sample5} 次
       </div>
@@ -431,7 +431,7 @@ function SignalPanel({
   if (!signal) {
     return (
       <GlassCard padding="md" className="space-y-3 border border-accent/20">
-        <span className="text-xs text-text-ter uppercase tracking-wide">机械信号 · 确定性引擎</span>
+        <span className="text-sm font-semibold text-text-pri">🤖 机械信号 · 确定性引擎</span>
         <p className="text-sm text-text-ter">
           旧缓存数据(不含机械信号),点击下方「✨ 开始分析」刷新即可看到
         </p>
@@ -444,7 +444,7 @@ function SignalPanel({
   return (
     <GlassCard padding="md" className="space-y-3 border border-accent/20">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-text-ter uppercase tracking-wide">机械信号 · 确定性引擎</span>
+        <span className="text-sm font-semibold text-text-pri">🤖 机械信号 · 确定性引擎</span>
         <span className={clsx('text-xs', conf.cls)}>{conf.label}</span>
       </div>
 
@@ -489,7 +489,7 @@ function SignalPanel({
       </div>
 
       {/* 量价 + 诱多诱空 + 位置 + 形态 紧凑摘要 */}
-      <div className="flex flex-wrap gap-1.5 pt-1 border-t border-white/10">
+      <div className="flex flex-wrap gap-1.5 pt-1 border-t border-border-def">
         {volumePrice.label && (
           <span
             className={clsx(
@@ -498,19 +498,19 @@ function SignalPanel({
                 ? 'text-up border-up/30'
                 : volumePrice.direction === 'liar_up_suspect' || volumePrice.direction === 'panic_sell'
                   ? 'text-down border-down/30'
-                  : 'text-text-sec border-white/20',
+                  : 'text-text-sec border-border-def',
             )}
           >
             {volumePrice.emoji} {volumePrice.label}
           </span>
         )}
         {liar.bullLiars.length > 0 && (
-          <span className="text-xs px-2 py-0.5 rounded-full border border-yellow-400/40 text-yellow-300">
+          <span className="text-xs px-2 py-0.5 rounded-full border border-yellow-400/40 text-yellow-600">
             ⚠️ 诱多 {liar.bullLiars.length} 类
           </span>
         )}
         {liar.bearLiars.length > 0 && (
-          <span className="text-xs px-2 py-0.5 rounded-full border border-blue-400/40 text-blue-300">
+          <span className="text-xs px-2 py-0.5 rounded-full border border-blue-400/40 text-blue-600">
             🪤 诱空 {liar.bearLiars.length} 类
           </span>
         )}
@@ -535,7 +535,7 @@ function SignalPanel({
                 ? 'text-up border-up/30'
                 : p.type === 'bear'
                   ? 'text-down border-down/30'
-                  : 'text-text-sec border-white/20',
+                  : 'text-text-sec border-border-def',
             )}
           >
             {p.emoji} {p.name}
@@ -619,9 +619,9 @@ function BollCard({ boll }: { boll: BollIndicator | undefined }) {
   if (!boll) return <MissingHint label="BOLL (20,2)" />;
   const posMeta =
     boll.position === 'touching_upper'
-      ? { label: '触上轨', cls: 'text-yellow-300' }
+      ? { label: '触上轨', cls: 'text-yellow-600' }
       : boll.position === 'touching_lower'
-        ? { label: '触下轨', cls: 'text-blue-300' }
+        ? { label: '触下轨', cls: 'text-blue-600' }
         : { label: '中轨', cls: 'text-text-sec' };
   return (
     <div>
@@ -707,7 +707,7 @@ function PatternsCard({ patterns }: { patterns: PatternMatch[] | undefined }) {
                 ? 'text-up border-up/30'
                 : p.type === 'bear'
                   ? 'text-down border-down/30'
-                  : 'text-text-sec border-white/20',
+                  : 'text-text-sec border-border-def',
             )}
           >
             {p.emoji} {p.name}
@@ -746,7 +746,7 @@ function LiarCard({ liar }: { liar: LiarIndicator | undefined }) {
             key={`b${i}`}
             className="rounded-lg bg-yellow-500/10 border border-yellow-500/20 p-2 text-xs"
           >
-            <div className="font-semibold text-yellow-300 mb-0.5">⚠️ {p.name}</div>
+            <div className="font-semibold text-yellow-600 mb-0.5">⚠️ {p.name}</div>
             <div className="text-text-sec font-mono">{p.note}</div>
           </div>
         ))}
@@ -755,7 +755,7 @@ function LiarCard({ liar }: { liar: LiarIndicator | undefined }) {
             key={`B${i}`}
             className="rounded-lg bg-blue-500/10 border border-blue-500/20 p-2 text-xs"
           >
-            <div className="font-semibold text-blue-300 mb-0.5">🪤 {p.name}</div>
+            <div className="font-semibold text-blue-600 mb-0.5">🪤 {p.name}</div>
             <div className="text-text-sec font-mono">{p.note}</div>
           </div>
         ))}
@@ -788,7 +788,7 @@ function PositionCard({ position }: { position: PositionIndicator | undefined })
           }
         : {
             label: '中位观察区',
-            cls: 'text-text-sec border-white/20 bg-white/5',
+            cls: 'text-text-sec border-border-def bg-bg-subtle',
             hint: '当前处于近 120 日中位区间,结合量价与信号再做判断',
           };
   return (
@@ -812,7 +812,7 @@ function PositionCard({ position }: { position: PositionIndicator | undefined })
 
       {/* v0.5 M1.2 买卖位置参考卡(P80/P20 风险带 + 参考支撑 + 止损) */}
       {position.riskBand && (
-        <div className="mt-2 border-t border-white/10 pt-2">
+        <div className="mt-2 border-t border-border-def pt-2">
           <div className="flex items-center gap-2">
             <span
               className={clsx(
@@ -839,7 +839,7 @@ function PositionCard({ position }: { position: PositionIndicator | undefined })
 
 function Mini({ label, value, suffix }: { label: string; value: number | null; suffix?: string }) {
   return (
-    <div className="rounded-lg bg-white/5 px-2 py-1.5">
+    <div className="rounded-lg bg-bg-subtle px-2 py-1.5">
       <div className="text-[10px] text-text-ter uppercase">{label}</div>
       <div className="text-sm font-mono text-text-pri">
         {value != null ? `${value.toFixed(label === 'HIST' || label === 'MACD' || label.includes('DIF') || label.includes('DEA') ? 4 : 2)}${suffix ?? ''}` : '--'}
@@ -857,16 +857,16 @@ type RoleColor = {
 
 const ROLE_COLOR: Record<'empty' | 'profit' | 'loss', RoleColor> = {
   empty: {
-    cardCls: 'rounded-xl bg-accent-subtle/60 border border-accent/20 p-3',
+    cardCls: 'rounded bg-accent-subtle/60 border border-accent/20 p-3',
     labelCls: 'text-xs text-accent font-semibold',
   },
   profit: {
-    cardCls: 'rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-3',
-    labelCls: 'text-xs text-emerald-600 dark:text-emerald-400 font-semibold',
+    cardCls: 'rounded bg-success-bg border border-success/30 p-3',
+    labelCls: 'text-xs text-success font-semibold',
   },
   loss: {
-    cardCls: 'rounded-xl bg-red-500/10 border border-red-500/30 p-3',
-    labelCls: 'text-xs text-red-500 dark:text-red-400 font-semibold',
+    cardCls: 'rounded bg-danger-bg border border-danger/30 p-3',
+    labelCls: 'text-xs text-danger font-semibold',
   },
 };
 

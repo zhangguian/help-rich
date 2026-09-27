@@ -12,8 +12,6 @@
  */
 export type AnalysisStreamEvent =
   | { event: 'indicators'; data: unknown; latest_kline_date: string | null }
-  | { event: 'cache_hit'; data: unknown }
-  | { event: 'cache_miss' }
   | { event: 'ai_started'; at: number }
   | { event: 'ai_progress'; elapsed_s: number }
   | { event: 'ai_complete'; ai: unknown; ai_source: 'live'; latest_kline_date: string | null }

@@ -107,7 +107,7 @@ export function SectorBoard() {
             className={`px-3 py-1 text-xs rounded-xl border transition-colors ${
               subscribed
                 ? 'bg-accent-subtle text-accent border-accent/25'
-                : 'bg-white/5 text-text-sec hover:text-text-pri border-white/10'
+                : 'bg-bg-subtle text-text-sec hover:text-text-pri border-border-def'
             }`}
           >
             {subscribed ? '🔔 订阅中' : '🔕 订阅异动'}
@@ -121,7 +121,7 @@ export function SectorBoard() {
           {items.map((it, i) => (
             <li
               key={it.name}
-              className="flex items-center justify-between rounded-xl px-3 py-2 hover:bg-white/5 transition-colors"
+              className="flex items-center justify-between rounded-xl px-3 py-2 hover:bg-bg-subtle transition-colors"
             >
               <div className="min-w-0 flex items-center gap-2">
                 <span className="text-xs text-text-ter font-mono w-5">{i + 1}</span>

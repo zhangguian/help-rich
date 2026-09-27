@@ -109,7 +109,7 @@ export function MarketOverviewPage() {
       </section>
 
       {/* 行情中心 */}
-      <section className="liquid-glass rounded-2xl p-4 space-y-3">
+      <section className="panel p-4 space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-text-pri">行情中心</h2>
           <div className="flex items-center gap-2 text-xs text-text-ter">
@@ -123,7 +123,7 @@ export function MarketOverviewPage() {
               disabled={loading}
               className={clsx(
                 'inline-flex items-center justify-center w-6 h-6 rounded-full',
-                'text-text-ter hover:text-text-pri hover:bg-white/5 transition-colors',
+                'text-text-ter hover:text-text-pri hover:bg-bg-subtle transition-colors',
                 loading && 'animate-spin text-accent',
               )}
               aria-label="刷新行情中心"
@@ -164,13 +164,13 @@ function IndexCard({
 }) {
   if (loading || !idx) {
     return (
-      <div className="liquid-glass rounded-2xl p-4 space-y-2">
+      <div className="panel p-4 space-y-2">
         <div className="flex items-center justify-between">
-          <div className="h-5 w-16 rounded bg-white/10 animate-pulse" />
-          <div className="h-8 w-24 rounded bg-white/5 animate-pulse" />
+          <div className="h-5 w-16 rounded bg-border-def animate-pulse" />
+          <div className="h-8 w-24 rounded bg-bg-subtle animate-pulse" />
         </div>
-        <div className="h-8 w-32 rounded bg-white/10 animate-pulse" />
-        <div className="h-4 w-20 rounded bg-white/5 animate-pulse" />
+        <div className="h-8 w-32 rounded bg-border-def animate-pulse" />
+        <div className="h-4 w-20 rounded bg-bg-subtle animate-pulse" />
       </div>
     );
   }
@@ -180,7 +180,7 @@ function IndexCard({
   const sign = pct > 0 ? '+' : '';
   const initial = idx.name.replace(/[^A-Z]/g, '').charAt(0) || idx.name.charAt(0);
   return (
-    <div className="liquid-glass rounded-2xl p-4">
+    <div className="panel p-4">
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <div
@@ -235,7 +235,13 @@ function Sparkline({
       return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
     })
     .join(' ');
-  const color = pct > 0 ? '#f43f5e' : pct < 0 ? '#4ade80' : 'rgba(148,163,184,0.7)';
+  // 行情色走 CSS 变量,与全站 token 同源
+  const color =
+    pct > 0
+      ? 'rgb(var(--up-rgb) / 0.9)'
+      : pct < 0
+        ? 'rgb(var(--down-rgb) / 0.9)'
+        : 'rgb(var(--text-ter-rgb) / 0.7)';
   return (
     <svg
       width={SPARK_W}
@@ -327,7 +333,7 @@ function SentimentPanel({
               <span className="text-down font-mono shrink-0">{sentiment.downTotal}只</span>
             </div>
             {/* M2.5:涨停/跌停家数(小白第一眼) */}
-            <div className="flex items-center justify-around text-xs border-t border-white/5 pt-2">
+            <div className="flex items-center justify-around text-xs border-t border-border-def pt-2">
               <span className="inline-flex items-center gap-1">
                 <span className="text-up font-semibold">涨停</span>
                 <span className="font-mono text-text-pri">
@@ -387,8 +393,8 @@ function SkeletonBars() {
     <div className="flex items-end gap-1.5 h-32">
       {[0, 1, 2, 3, 4, 5, 6].map((i) => (
         <div key={i} className="flex-1 h-full flex flex-col justify-end">
-          <div className="w-full h-1/3 rounded-t-sm bg-white/5 animate-pulse" />
-          <div className="mt-1 h-2 w-full rounded bg-white/5 animate-pulse" />
+          <div className="w-full h-1/3 rounded-t-sm bg-bg-subtle animate-pulse" />
+          <div className="mt-1 h-2 w-full rounded bg-bg-subtle animate-pulse" />
         </div>
       ))}
     </div>
@@ -452,7 +458,7 @@ function MainFundFlowChart({ items }: { items: { code: string; name: string; net
             </span>
             <div className="flex-1 min-w-0 flex items-center gap-1.5">
               <span className="text-text-pri truncate max-w-[4rem]">{it.name}</span>
-              <div className="flex-1 h-3 rounded-sm overflow-hidden bg-white/5 flex items-center">
+              <div className="flex-1 h-3 rounded-sm overflow-hidden bg-bg-subtle flex items-center">
                 <div
                   className={clsx('h-full', isUp ? 'bg-up' : 'bg-down')}
                   style={{ width: `${Math.max(wPct, 4)}%` }}

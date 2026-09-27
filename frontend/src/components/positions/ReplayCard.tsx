@@ -113,7 +113,7 @@ export function ReplayCard({
                 'px-3 py-1 text-xs rounded-lg transition-colors',
                 window === w.key
                   ? 'bg-accent-subtle text-accent border border-accent/30'
-                  : 'bg-white/5 text-text-sec hover:text-text-pri border border-white/5',
+                  : 'bg-bg-subtle text-text-sec hover:text-text-pri border border-border-def',
               )}
             >
               {w.label}
@@ -166,7 +166,7 @@ export function ReplayCard({
             {Object.entries(data.dimensionAvg).map(([dim, score]) => (
               <div key={dim} className="flex items-center gap-2 text-xs">
                 <span className="w-24 shrink-0 text-text-sec">{dim}</span>
-                <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
+                <div className="flex-1 h-2 bg-bg-subtle rounded-full overflow-hidden">
                   <div
                     className={clsx('h-full transition-all', dimColor(score))}
                     style={{ width: `${Math.min(100, (score / 20) * 100)}%` }}
@@ -181,7 +181,7 @@ export function ReplayCard({
 
           {/* Top 3 问题 */}
           {data.topIssues.length > 0 && (
-            <div className="space-y-1 border-t border-white/10 pt-2">
+            <div className="space-y-1 border-t border-border-def pt-2">
               <div className="text-xs text-text-sec">Top 3 问题(低分优先)</div>
               {data.topIssues.map((it, idx) => (
                 <div key={idx} className="flex items-start gap-2 text-xs">
@@ -196,7 +196,7 @@ export function ReplayCard({
           )}
 
           {/* AI 评语 */}
-          <div className="border-t border-white/10 pt-2">
+          <div className="border-t border-border-def pt-2">
             {data.aiStatus === 'no_key' && (
               <div className="text-xs text-warn">
                 ⚠ LLM 未配置 Key — 请到「设置」页填写
@@ -215,7 +215,7 @@ export function ReplayCard({
           </div>
 
           {/* 流水概要 */}
-          <div className="text-xs text-text-ter border-t border-white/10 pt-2">
+          <div className="text-xs text-text-ter border-t border-border-def pt-2">
             窗口内 {data.summarySnapshot.txCount} 笔流水
             (买 {data.summarySnapshot.buyCount} / 卖 {data.summarySnapshot.sellCount})
             · 已实现盈亏 ¥{data.summarySnapshot.realizedPnl}

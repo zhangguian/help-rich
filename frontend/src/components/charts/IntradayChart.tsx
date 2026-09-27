@@ -15,6 +15,7 @@ import {
 } from 'lightweight-charts';
 
 import { apiGet } from '@/lib/api';
+import { useChartTheme } from '@/lib/chartTheme';
 
 /** 分时点(后端 /kline/{code}/intraday) */
 interface IntradayPoint {
@@ -53,6 +54,7 @@ export function IntradayChart({
   height?: number;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const COLOR = useChartTheme();
   const chartRef = useRef<IChartApi | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<IntradayResponse | null>(null);
@@ -74,19 +76,19 @@ export function IntradayChart({
       height,
       layout: {
         background: { color: 'transparent' },
-        textColor: 'rgba(255, 255, 255, 0.68)',
+        textColor: COLOR.text,
       },
       grid: {
-        vertLines: { color: 'rgba(255, 255, 255, 0.06)' },
-        horzLines: { color: 'rgba(255, 255, 255, 0.06)' },
+        vertLines: { color: COLOR.grid },
+        horzLines: { color: COLOR.grid },
       },
       timeScale: {
-        borderColor: 'rgba(255, 255, 255, 0.12)',
+        borderColor: COLOR.axis,
         timeVisible: true,
         secondsVisible: false,
       },
       rightPriceScale: {
-        borderColor: 'rgba(255, 255, 255, 0.12)',
+        borderColor: COLOR.axis,
         scaleMargins: { top: 0.1, bottom: 0.26 },
       },
       crosshair: { mode: 0 },
@@ -94,20 +96,20 @@ export function IntradayChart({
     chartRef.current = chart;
 
     const priceSeries = chart.addLineSeries({
-      color: '#f43f5e',
+      color: COLOR.up,
       lineWidth: 2,
       priceLineVisible: false,
       lastValueVisible: true,
     });
     const avgSeries: ISeriesApi<'Line'> = chart.addLineSeries({
-      color: '#facc15',
+      color: COLOR.macdDif,
       lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: false,
     });
     const volSeries = chart.addHistogramSeries({
       priceScaleId: 'volume',
-      color: 'rgba(255, 255, 255, 0.35)',
+      color: COLOR.grid,
     });
     chart.priceScale('volume').applyOptions({
       scaleMargins: { top: 0.78, bottom: 0 },
@@ -164,9 +166,9 @@ export function IntradayChart({
             color:
               prevClose != null
                 ? p.price >= prevClose
-                  ? 'rgba(244, 63, 94, 0.5)'
-                  : 'rgba(74, 222, 128, 0.5)'
-                : 'rgba(255, 255, 255, 0.35)',
+                  ? COLOR.macdHistPos
+                  : COLOR.macdHistNeg
+                : COLOR.grid,
           })),
         );
 
@@ -174,7 +176,7 @@ export function IntradayChart({
           try {
             priceSeries.createPriceLine({
               price: prevClose,
-              color: 'rgba(255, 255, 255, 0.5)',
+              color: COLOR.axis,
               lineWidth: 1,
               lineStyle: 2,
               axisLabelVisible: true,

@@ -13,6 +13,7 @@ import {
 } from 'lightweight-charts';
 
 import { apiGet } from '@/lib/api';
+import { useChartTheme } from '@/lib/chartTheme';
 
 /** 三线叠加数据(/api/kline/{code}/overview) */
 interface OverviewPoint {
@@ -27,8 +28,7 @@ interface OverviewResponse {
   sectorUnavailable: boolean;
 }
 
-const LINE_COLOR = { stock: '#3B82F6', index: '#F59E0B', sector: '#8B5CF6' } as const;
-type LineKey = keyof typeof LINE_COLOR;
+type LineKey = 'stock' | 'index' | 'sector';
 const LINE_LABEL: Record<LineKey, string> = { stock: '该股', index: '大盘', sector: '行业' };
 
 /**
@@ -40,6 +40,9 @@ const LINE_LABEL: Record<LineKey, string> = { stock: '该股', index: '大盘', 
  */
 export function CompareChart({ stockCode, height = 180 }: { stockCode: string; height?: number }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const COLOR = useChartTheme();
+  // 三线配色:与 K 线主图同源(个股=MA20 蓝,大盘=橙,行业=紫)
+  const LINE_COLOR = { stock: COLOR.ma20, index: COLOR.ma5, sector: COLOR.ma10 } as const;
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<Partial<Record<LineKey, ISeriesApi<'Line'>>>>({});
   const [data, setData] = useState<OverviewResponse | null>(null);
@@ -82,13 +85,13 @@ export function CompareChart({ stockCode, height = 180 }: { stockCode: string; h
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth,
       height,
-      layout: { background: { color: 'transparent' }, textColor: 'rgba(255,255,255,0.68)' },
+      layout: { background: { color: 'transparent' }, textColor: COLOR.text },
       grid: {
-        vertLines: { color: 'rgba(255,255,255,0.05)' },
-        horzLines: { color: 'rgba(255,255,255,0.05)' },
+        vertLines: { color: COLOR.grid },
+        horzLines: { color: COLOR.grid },
       },
-      timeScale: { borderColor: 'rgba(255,255,255,0.12)', timeVisible: false, rightOffset: 3 },
-      rightPriceScale: { borderColor: 'rgba(255,255,255,0.12)', scaleMargins: { top: 0.1, bottom: 0.12 } },
+      timeScale: { borderColor: COLOR.axis, timeVisible: false, rightOffset: 3 },
+      rightPriceScale: { borderColor: COLOR.axis, scaleMargins: { top: 0.1, bottom: 0.12 } },
       crosshair: { mode: 0 },
     });
     chartRef.current = chart;

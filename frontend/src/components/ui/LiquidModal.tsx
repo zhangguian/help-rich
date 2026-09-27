@@ -65,7 +65,7 @@ export function LiquidModal({
           transition={{ duration: 0.2 }}
         >
           <motion.div
-            className="absolute inset-0 bg-black/60 backdrop-blur-md"
+            className="absolute inset-0 bg-slate-900/35 backdrop-blur-sm"
             onClick={(e) => {
               if (maskClosable && e.target === e.currentTarget) onClose();
             }}
@@ -76,7 +76,7 @@ export function LiquidModal({
             exit={{ opacity: 0, scale: 0.95, y: 16 }}
             transition={{ type: 'spring', stiffness: 340, damping: 28 }}
             className={clsx(
-              'liquid-glass relative w-full mx-4 p-6 space-y-4 max-h-[90vh] overflow-y-auto',
+              'panel relative w-full mx-4 p-6 space-y-4 max-h-[90vh] overflow-y-auto',
               widths[size],
             )}
           >

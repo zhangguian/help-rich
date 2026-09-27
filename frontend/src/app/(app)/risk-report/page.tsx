@@ -170,7 +170,7 @@ export default function RiskReportPage() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="text-text-ter text-xs border-b border-white/10">
+                      <tr className="text-text-ter text-xs border-b border-border-def">
                         <th className="text-left py-2 font-medium">分数段</th>
                         <th className="text-right py-2 font-medium">样本数</th>
                         <th className="text-right py-2 font-medium">平均收益</th>
@@ -180,7 +180,7 @@ export default function RiskReportPage() {
                     </thead>
                     <tbody>
                       {calibration.buckets.map((b) => (
-                        <tr key={b.label} className="border-b border-white/5">
+                        <tr key={b.label} className="border-b border-border-def">
                           <td className="py-2 font-mono">{b.label}</td>
                           <td className="py-2 text-right font-mono tabular-nums">{b.count}</td>
                           <td className={`py-2 text-right font-mono tabular-nums ${b.avgReturn != null ? (b.avgReturn >= 0 ? 'text-up' : 'text-down') : 'text-text-ter'}`}>

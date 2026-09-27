@@ -140,7 +140,7 @@ export function CalculatorPanel({
             <p className="text-down text-sm">⚠ {positionsError}</p>
             <button
               onClick={loadPositions}
-              className="text-xs px-3 py-1 rounded-sm bg-white/5 hover:bg-white/10 border border-white/10"
+              className="text-xs px-3 py-1 rounded-sm bg-bg-subtle hover:bg-bg-subtle border border-border-def"
             >
               重试
             </button>
@@ -177,7 +177,7 @@ export function CalculatorPanel({
                       'w-full text-left px-3 py-2 rounded-md transition-colors border',
                       selected
                         ? 'bg-accent-subtle border-accent/25'
-                        : 'border-transparent hover:bg-white/5',
+                        : 'border-transparent hover:bg-bg-subtle',
                     )}
                   >
                     <div className="flex items-center justify-between gap-2">

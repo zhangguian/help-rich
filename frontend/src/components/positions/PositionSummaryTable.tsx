@@ -4,6 +4,7 @@ import clsx from 'clsx';
 
 import { TermHint } from '@/components/ui/TermHint';
 import { decimalFormat } from '@/lib/decimalFormat';
+import { pctClass } from '@/lib/format';
 import type { Position } from '@/lib/types';
 
 /**
@@ -22,14 +23,6 @@ export function PositionSummaryTable({
   positions: Position[];
   onSelect?: (stockCode: string) => void;
 }) {
-  const pctClass = (v: number | null) =>
-    v == null
-      ? 'text-text-ter'
-      : v > 0
-        ? 'text-up'
-        : v < 0
-          ? 'text-down'
-          : 'text-text-ter';
 
   const changePctOf = (p: Position): number | null => {
     const cur = p.currentPrice != null ? Number(p.currentPrice) : null;
@@ -39,7 +32,7 @@ export function PositionSummaryTable({
   };
 
   return (
-    <div className="flex-1 min-h-0 liquid-glass rounded-2xl p-4 overflow-y-auto">
+    <div className="flex-1 min-h-0 panel p-4 overflow-y-auto">
       {positions.length === 0 ? (
         <div className="flex items-center justify-center h-full">
           <p className="text-text-ter text-sm">暂无持仓</p>
@@ -80,7 +73,7 @@ export function PositionSummaryTable({
                 <tr
                   key={p.stockCode}
                   onClick={() => onSelect?.(p.stockCode)}
-                  className="border-t border-white/5 hover:bg-white/3 cursor-pointer"
+                  className="border-t border-border-def hover:bg-bg-subtle cursor-pointer"
                 >
                   <td className="py-2 px-2">
                     <div className="text-text-pri font-semibold font-sans truncate max-w-[10rem]">

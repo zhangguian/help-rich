@@ -1,19 +1,24 @@
 'use client';
 
+import { AnimatePresence, motion } from 'framer-motion';
+
 import { useUIStore } from '@/stores/useUIStore';
 
 /**
- * 全局 Toast 渲染器(P7.x 收尾新增)
+ * 全局 Toast 渲染器
  *
  * - 监听 useUIStore.toasts,自动渲染所有 toast
- * - 4 种类型:success(绿)/ error(红)/ warning(黄)/ info(蓝)
+ * - 4 种类型走**语义色**(success/error/warning/info),不借用行情红绿
  * - 右下角堆叠,3s 自动消失
+ *
+ * v0.7:原用 `animate-in fade-in slide-in-from-right`,但该类来自 tailwindcss-animate,
+ * 而 tailwind.config plugins 为空 —— 一直静默不生效。改用项目已有的 framer-motion。
  */
 const variantClasses = {
-  success: 'bg-down-bg text-down border-down/40',
-  error: 'bg-up-bg text-up border-up/40',
+  success: 'bg-success-bg text-success border-success/40',
+  error: 'bg-danger-bg text-danger border-danger/40',
   warning: 'bg-warn-bg text-warn border-warn/40',
-  info: 'bg-accent-subtle text-accent border-accent/30',
+  info: 'bg-info-bg text-info border-info/30',
 };
 
 const variantIcons = {
@@ -32,23 +37,29 @@ export function Toaster() {
       aria-live="polite"
       className="fixed top-4 right-4 z-[60] flex flex-col gap-2 max-w-sm pointer-events-none"
     >
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          role="alert"
-          className={`pointer-events-auto flex items-start gap-2 px-4 py-3 rounded-sm border shadow-md text-sm animate-in fade-in slide-in-from-right ${variantClasses[t.type]}`}
-        >
-          <span className="font-bold flex-shrink-0">{variantIcons[t.type]}</span>
-          <span className="flex-1 leading-snug">{t.message}</span>
-          <button
-            onClick={() => dismiss(t.id)}
-            className="flex-shrink-0 opacity-60 hover:opacity-100 leading-none"
-            aria-label="关闭"
+      <AnimatePresence initial={false}>
+        {toasts.map((t) => (
+          <motion.div
+            key={t.id}
+            role="alert"
+            initial={{ opacity: 0, x: 24, scale: 0.98 }}
+            animate={{ opacity: 1, x: 0, scale: 1 }}
+            exit={{ opacity: 0, x: 24, scale: 0.98 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className={`pointer-events-auto flex items-start gap-2 px-3 py-2 rounded border shadow-pop text-[13px] ${variantClasses[t.type]}`}
           >
-            ×
-          </button>
-        </div>
-      ))}
+            <span className="font-bold flex-shrink-0">{variantIcons[t.type]}</span>
+            <span className="flex-1 leading-snug">{t.message}</span>
+            <button
+              onClick={() => dismiss(t.id)}
+              className="flex-shrink-0 opacity-60 hover:opacity-100 leading-none"
+              aria-label="关闭"
+            >
+              ×
+            </button>
+          </motion.div>
+        ))}
+      </AnimatePresence>
     </div>
   );
 }

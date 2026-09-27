@@ -8,6 +8,7 @@ import { apiGet, apiPost } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { SkeletonState } from '@/components/ui/States';
+import { pctClass } from '@/lib/format';
 import {
   fetchWatchlistSummary,
   removeFromWatchlist,
@@ -15,13 +16,7 @@ import {
   type WatchlistSummary,
 } from '@/lib/screener';
 
-/** 单元格着色:绿/红/灰 */
-function pctClass(v: number | null | undefined): string {
-  if (v == null) return 'text-text-ter';
-  if (v > 0) return 'text-up';
-  if (v < 0) return 'text-down';
-  return 'text-text-ter';
-}
+/** 比率(0.1234)→ 百分比文本;与 format.pct 入参语义不同,故不合并 */
 function pctFmt(v: number | null | undefined): string {
   if (v == null) return '—';
   const sign = v > 0 ? '+' : '';

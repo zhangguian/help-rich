@@ -1,48 +1,34 @@
-import { type HTMLAttributes, forwardRef } from 'react';
+import { Card, type CardProps } from './Card';
 
-import clsx from 'clsx';
+/** 旧 API 的 variant(映射见下方 LEGACY) */
+type LegacyCardVariant = 'hover' | 'active';
 
-interface GlassCardProps extends HTMLAttributes<HTMLDivElement> {
-  padding?: 'sm' | 'md' | 'lg';
-  variant?: 'default' | 'hover' | 'active';
-}
-
-const paddingClasses = {
-  sm: 'p-3',
-  md: 'p-6',
-  lg: 'p-8',
-};
-
-const variantClasses = {
-  default: 'liquid-glass',
-  hover: 'liquid-glass-hover',
-  active: 'liquid-glass',
+type GlassCardProps = Omit<CardProps, 'variant'> & {
+  variant?: CardProps['variant'] | LegacyCardVariant;
 };
 
 /**
- * Liquid Glass 材质卡片(v0.4-roadmap §3.2)
+ * @deprecated v0.7 Dark Terminal 起并入 Card。
+ * 保留一版薄转发以免打断 6 个引用方,下个版本删除。
  *
- * 半透明 + blur(40px)+ 顶缘高光 + emerald 选中态
- * - default:静态玻璃面板
- * - hover:悬停提亮
- * - active:emerald 描边选中态(用于列表选中/当前视图)
+ * 旧实现把 `variant="hover"` 映射到 `liquid-glass-hover` —— 那是个独立类,
+ * 不含基础材质(无背景/边框/圆角),一旦有人用该值卡片就会丢失全部外观。
+ * 新映射改为携带基础材质的 interactive / selected。
  */
-export const GlassCard = forwardRef<HTMLDivElement, GlassCardProps>(
-  ({ padding = 'md', variant = 'default', className, children, ...rest }, ref) => {
-    return (
-      <div
-        ref={ref}
-        className={clsx(
-          variantClasses[variant],
-          paddingClasses[padding],
-          'text-text-pri',
-          className,
-        )}
-        {...rest}
-      >
-        {children}
-      </div>
-    );
-  },
-);
+const LEGACY: Record<LegacyCardVariant, NonNullable<CardProps['variant']>> = {
+  hover: 'interactive',
+  active: 'selected',
+};
+
+export const GlassCard = ({ variant, className, children, ...rest }: GlassCardProps) => {
+  const mapped =
+    variant === 'hover' || variant === 'active'
+      ? LEGACY[variant]
+      : (variant ?? 'default');
+  return (
+    <Card variant={mapped} className={className} {...rest}>
+      {children}
+    </Card>
+  );
+};
 GlassCard.displayName = 'GlassCard';

@@ -47,11 +47,11 @@ export function PnlHeatmap({ grid, currentPricePct, recommendedRange }: PnlHeatm
           <TermHint term="pnl_grid_21" />21 档)
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded-sm bg-up/30" style={{ background: 'rgba(244,63,94,0.3)' }} />
+          <span className="inline-block w-3 h-3 rounded-sm bg-up/30" />
           盈利
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded-sm bg-down/30" style={{ background: 'rgba(74,222,128,0.3)' }} />
+          <span className="inline-block w-3 h-3 rounded-sm bg-down/30" />
           亏损
         </span>
       </div>
@@ -64,7 +64,7 @@ export function PnlHeatmap({ grid, currentPricePct, recommendedRange }: PnlHeatm
             style={{
               left: `${((recommendedRange[0] + 10) / 20) * 100}%`,
               width: `${((recommendedRange[1] - recommendedRange[0]) / 20) * 100}%`,
-              background: 'rgba(37, 99, 235, 0.08)',
+              background: 'rgb(var(--accent-rgb) / 0.08)',
             }}
           >
             <span className="absolute -top-3 left-1 inline-flex items-center text-[10px] text-accent">
@@ -93,9 +93,10 @@ export function PnlHeatmap({ grid, currentPricePct, recommendedRange }: PnlHeatm
                   isDimmed && 'opacity-50',
                 )}
                 style={{
+                  // 强度由 --up / --down 的 RGB 通道变量派生,与其他图表同一真相源
                   backgroundColor: isPos
-                    ? `rgba(244, 63, 94, ${0.1 + intensity * 0.5})`
-                    : `rgba(74, 222, 128, ${0.1 + intensity * 0.5})`,
+                    ? `rgb(var(--up-rgb) / ${0.1 + intensity * 0.5})`
+                    : `rgb(var(--down-rgb) / ${0.1 + intensity * 0.5})`,
                 }}
                 title={`${row.pct}%: 价格 ¥${row.price} → PnL ¥${row.pnl}`}
               >

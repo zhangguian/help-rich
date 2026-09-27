@@ -19,6 +19,7 @@ import {
 } from 'lightweight-charts';
 
 import { apiGet } from '@/lib/api';
+import { useChartTheme } from '@/lib/chartTheme';
 import { TermHint } from '@/components/ui/TermHint';
 import type { KlineIndicatorsResponse } from '@/lib/types';
 
@@ -80,24 +81,7 @@ interface KlineItem {
   volume: number;
 }
 
-const COLOR = {
-  up: '#f43f5e',
-  down: '#4ade80',
-  ma5: '#fb923c',
-  ma10: '#a78bfa',
-  ma20: '#60a5fa',
-  ma60: '#10b981',
-  bollUp: 'rgba(244, 63, 94, 0.85)',
-  bollMid: 'rgba(148, 163, 184, 0.85)',
-  bollDn: 'rgba(74, 222, 128, 0.85)',
-  macdDif: '#f59e0b',
-  macdDea: '#6366f1',
-  macdHistPos: 'rgba(244, 63, 94, 0.6)',
-  macdHistNeg: 'rgba(74, 222, 128, 0.6)',
-  kdjK: '#22d3ee',
-  kdjD: '#fb7185',
-  kdjJ: '#94a3b8',
-};
+// 颜色来源: useChartTheme() 运行时读 CSS 变量(见 src/lib/chartTheme.ts),与 UI 同源.
 
 interface LegendItem {
   key: string;
@@ -184,6 +168,8 @@ export function KLineChart({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  // 图表配色:运行时读 CSS 变量,与 UI 共用同一真相源
+  const COLOR = useChartTheme();
   // 数据加载失败原因(展示给用户,避免静默空白)
   const [loadError, setLoadError] = useState<string | null>(null);
   // 指标末值快照(用于图例显示当前值 + state),从 /indicators 响应解析
@@ -220,18 +206,18 @@ export function KLineChart({
       height,
       layout: {
         background: { color: 'transparent' },
-        textColor: 'rgba(255, 255, 255, 0.68)',
+        textColor: COLOR.text,
       },
       grid: {
-        vertLines: { color: 'rgba(255, 255, 255, 0.06)' },
-        horzLines: { color: 'rgba(255, 255, 255, 0.06)' },
+        vertLines: { color: COLOR.grid },
+        horzLines: { color: COLOR.grid },
       },
       timeScale: {
-        borderColor: 'rgba(255, 255, 255, 0.12)',
+        borderColor: COLOR.axis,
         timeVisible: false,
       } as TimeScaleOptions,
       rightPriceScale: {
-        borderColor: 'rgba(255, 255, 255, 0.12)',
+        borderColor: COLOR.axis,
         scaleMargins: { top: 0.06, bottom: 0.50 },
       },
       crosshair: { mode: 0 },
@@ -252,7 +238,7 @@ export function KLineChart({
     volumeSeries = chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
-      color: 'rgba(255, 255, 255, 0.4)',
+      color: COLOR.axis,
     });
     chart.priceScale('volume').applyOptions({
       scaleMargins: { top: 0.50, bottom: 0.38 },
@@ -378,8 +364,8 @@ export function KLineChart({
             value: it.volume,
             color:
               Number(it.close) >= Number(it.open)
-                ? 'rgba(244, 63, 94, 0.55)'
-                : 'rgba(74, 222, 128, 0.55)',
+                ? COLOR.macdHistPos
+                : COLOR.macdHistNeg,
           }));
           volumeSeries.setData(vol);
         }
@@ -532,7 +518,7 @@ export function KLineChart({
         mom: [], wmsr: [], skt: [], fask: [],
       };
     };
-  }, [stockCode, period, height, showVolume]);
+  }, [stockCode, period, height, showVolume, COLOR]);
 
   // 切换整组显隐(同时驱动 React 状态与 lightweight-charts series)
   const toggleGroup = (g: OverlayGroup) => {
@@ -626,8 +612,8 @@ export function KLineChart({
       currentValue: ind?.stoch?.fastk != null ? `K ${ind.stoch.fastk.toFixed(2)}` : '—',
       state: stateOfIndicator(ind?.stoch?.state ?? null),
       items: [
-        { key: 'fastk', label: 'K', color: '#a78bfa', decimals: 2 },
-        { key: 'fastd', label: 'D', color: '#fb923c', decimals: 2 },
+        { key: 'fastk', label: 'K', color: COLOR.ma10, decimals: 2 },
+        { key: 'fastd', label: 'D', color: COLOR.ma5, decimals: 2 },
       ],
     },
     {
@@ -653,8 +639,8 @@ export function KLineChart({
       currentValue: ind?.skt?.slowk != null ? `K ${ind.skt.slowk.toFixed(2)}` : '—',
       state: stateOfIndicator(ind?.skt?.state ?? null),
       items: [
-        { key: 'slowk', label: 'K', color: '#22d3ee', decimals: 2 },
-        { key: 'slowd', label: 'D', color: '#94a3b8', decimals: 2 },
+        { key: 'slowk', label: 'K', color: COLOR.kdjK, decimals: 2 },
+        { key: 'slowd', label: 'D', color: COLOR.kdjJ, decimals: 2 },
       ],
     },
     {
@@ -689,7 +675,7 @@ export function KLineChart({
               onClick={() => toggleGroup(row.group)}
               className={clsx(
                 'flex items-center gap-2 px-1 py-0.5 rounded transition-colors cursor-pointer select-none',
-                'hover:bg-white/5',
+                'hover:bg-bg-subtle',
                 !groupVisible && 'opacity-40',
               )}
               title={groupVisible ? `点击隐藏 ${row.label}` : `点击显示 ${row.label}`}
@@ -722,7 +708,7 @@ export function KLineChart({
                     key={it.key}
                     className={clsx(
                       'inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded transition-colors',
-                      v != null && groupVisible ? 'bg-white/10' : 'bg-transparent',
+                      v != null && groupVisible ? 'bg-border-def' : 'bg-transparent',
                     )}
                   >
                     <span
@@ -765,7 +751,7 @@ function StateChip({ state }: { state: LegendState }) {
         ? 'bg-down/15 text-down border-down/30'
         : state.tone === 'accent'
           ? 'bg-accent/15 text-accent border-accent/30'
-          : 'bg-white/5 text-text-ter border-white/15';
+          : 'bg-bg-subtle text-text-ter border-border-def';
   return (
     <span
       className={clsx(

@@ -1,8 +1,8 @@
 /**
- * UI Store(主题 + Toast)
+ * UI Store(Toast)
  *
- * - 主题:light / dark / system(next-themes 持久化到 localStorage)
- * - Toast:全局通知(成功/失败/警告/信息)
+ * 仅管理全局通知(成功/失败/警告/信息)。
+ * v0.7 起为单主题深色终端,无主题切换(原注释提到的 next-themes 从未真正接入)。
  */
 import { create } from 'zustand';
 

@@ -52,7 +52,7 @@ export function DailyAnalysisList({ stockCode }: { stockCode: string }) {
         <select
           value={days}
           onChange={(e) => setDays(Number(e.target.value))}
-          className="px-2 py-1 text-xs rounded-lg bg-white/5 border border-white/10 text-text-pri"
+          className="px-2 py-1 text-xs rounded-lg bg-bg-subtle border border-border-def text-text-pri"
         >
           {[7, 14, 30, 60, 90].map((d) => (
             <option key={d} value={d}>
@@ -91,7 +91,7 @@ function DailyAnalysisRow({ item }: { item: DailyAnalysisItem }) {
       ? { label: '看多', emoji: '📈', cls: 'text-up bg-up-bg' }
       : item.aiView === 'bearish'
         ? { label: '看空', emoji: '📉', cls: 'text-down bg-down-bg' }
-        : { label: '中性', emoji: '➖', cls: 'text-text-sec bg-white/5' };
+        : { label: '中性', emoji: '➖', cls: 'text-text-sec bg-bg-subtle' };
 
   const outcomeMeta =
     item.outcome === 'hit'
@@ -101,7 +101,7 @@ function DailyAnalysisRow({ item }: { item: DailyAnalysisItem }) {
         : { label: '数据不足', cls: 'text-text-ter' };
 
   return (
-    <div className="border border-white/10 rounded-lg p-3 space-y-2">
+    <div className="border border-border-def rounded-lg p-3 space-y-2">
       {/* 第一行:日期 + view + 综合分 + N 天后涨跌 */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2 text-xs">
@@ -138,7 +138,7 @@ function DailyAnalysisRow({ item }: { item: DailyAnalysisItem }) {
             {expanded ? '▾ 收起评语' : '▸ 展开评语'}
           </button>
           {expanded && (
-            <div className="mt-2 text-xs text-text-sec leading-relaxed whitespace-pre-wrap border-t border-white/10 pt-2">
+            <div className="mt-2 text-xs text-text-sec leading-relaxed whitespace-pre-wrap border-t border-border-def pt-2">
               {item.aiSummary}
             </div>
           )}
