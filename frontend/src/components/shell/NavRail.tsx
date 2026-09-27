@@ -48,7 +48,6 @@ const GROUPS: NavGroup[] = [
       { href: '/screener', label: '选股', icon: '🎯' },
       { href: '/watchlist', label: '观察池', icon: '⭐' },
       { href: '/replay-history', label: '复盘', icon: '🕐' },
-      { href: '/stock/600519', label: '个股', icon: '🔍', matchPrefix: true },
     ],
   },
   {
@@ -104,7 +103,7 @@ export function NavRail() {
   return (
     <nav
       className={clsx(
-        'shrink-0 h-screen sticky top-0 border-r border-border-def bg-surface flex flex-col transition-[width] duration-15',
+        'shrink-0 h-screen sticky top-0 border-r border-border-def bg-bg-surface flex flex-col transition-[width] duration-15',
         collapsed ? 'w-14' : 'w-[200px]',
       )}
       aria-label="主导航"
@@ -138,7 +137,7 @@ export function NavRail() {
                     'relative flex items-center gap-2.5 mx-1.5 px-2 py-1.5 rounded text-[13px] transition-colors',
                     active
                       ? 'bg-accent-subtle text-accent font-semibold'
-                      : 'text-text-sec hover:text-text-pri hover:bg-surface-2',
+                      : 'text-text-sec hover:text-text-pri hover:bg-bg-subtle',
                   )}
                 >
                   {active && <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-accent" />}
@@ -156,7 +155,7 @@ export function NavRail() {
         type="button"
         onClick={toggle}
         title={collapsed ? '展开导航' : '收起导航'}
-        className="h-9 border-t border-border-def text-text-ter hover:text-text-pri hover:bg-surface-2 transition-colors text-xs shrink-0"
+        className="h-9 border-t border-border-def text-text-ter hover:text-text-pri hover:bg-bg-subtle transition-colors text-xs shrink-0"
       >
         {collapsed ? '»' : '« 收起'}
       </button>

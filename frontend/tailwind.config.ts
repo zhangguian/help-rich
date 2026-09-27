@@ -1,11 +1,11 @@
 import type { Config } from 'tailwindcss';
 
 /**
- * Tailwind 配置 — v0.7 Dark Terminal
+ * Tailwind 配置 — v0.5 Azure Workbench
  *
- * 颜色全部映射到 CSS 变量(单主题深色,见 src/styles/tokens.css)。
- * borderRadius / boxShadow 用 theme(而非 extend) 整体覆盖,消除与 Tailwind
- * 默认刻度的撞值(此前 rounded-lg=12px 与 rounded-xl=12px 同值)。
+ * 颜色全部映射到 CSS 变量(单主题浅色,见 src/styles/tokens.css)。
+ * 保留 v0.7 的结构改善:borderRadius / boxShadow 用 theme(而非 extend)整体覆盖,
+ * 消除与 Tailwind 默认刻度的撞值(此前 rounded-lg=12px 与 rounded-xl=12px 同值)。
  */
 const config: Config = {
   content: [
@@ -24,7 +24,7 @@ const config: Config = {
       lg: 'var(--radius-lg)',
       xl: 'var(--radius-xl)',
       '2xl': 'calc(var(--radius-xl) + 4px)',
-      '3xl': 'calc(var(--radius-xl) + 12px)',
+      '3xl': 'var(--glass-radius)',
       full: '9999px',
     },
     boxShadow: {
@@ -32,7 +32,7 @@ const config: Config = {
       card: 'var(--shadow-card)',
       pop: 'var(--shadow-pop)',
       sm: 'var(--shadow-sm)',
-      DEFAULT: 'var(--shadow-card)',
+      DEFAULT: 'var(--shadow-sm)',
       md: 'var(--shadow-md)',
       lg: 'var(--shadow-lg)',
       xl: 'var(--shadow-lg)',
@@ -78,18 +78,6 @@ const config: Config = {
       fontFamily: {
         sans: ['var(--font-jakarta-sans)', 'PingFang SC', 'Microsoft YaHei', 'system-ui', 'sans-serif'],
         mono: ['var(--font-jetbrains-mono)', 'SF Mono', 'Consolas', 'monospace'],
-      },
-      fontSize: {
-        xs: ['var(--fs-xs)', { lineHeight: '1.4' }],
-        sm: ['var(--fs-sm)', { lineHeight: '1.5' }],
-        base: ['var(--fs-base)', { lineHeight: '1.6' }],
-      },
-      spacing: {
-        'gap-page': 'var(--gap-page)',
-        'gap-card': 'var(--gap-card)',
-        'pad-card': 'var(--pad-card)',
-        'pad-compact': 'var(--pad-compact)',
-        'row-h': 'var(--row-h)',
       },
     },
   },

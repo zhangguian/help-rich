@@ -1,100 +1,97 @@
 /**
- * 设计 tokens(CSS 变量)— v0.7 Dark Terminal
+ * 设计 tokens(CSS 变量)— v0.5 Azure Workbench
  *
- * 单主题:深色高密度投研终端。深蓝墨色画布 + 分层表面,靠边框与内高光建立层次
- * (深底上阴影几乎不可见)。文字层级按 WCAG AA 校准。
+ * 浅蓝渐变画布 + 白色软卡(企业版工作台风格)。
+ * v0.7 曾改为深色投研终端,实测每页内容只占上半屏、下半屏纯黑虚空,
+ * 空旷感比浅色更刺眼(浅色画布让空白像"画布",纯深底让空白像"虚空"),
+ * 故回退到 v0.5 视觉底座。
  *
- * 语义分离(本版最重要的约束):
- * - 行情色 --up / --down 只允许用于价格数字、涨跌 chip、K线/分时图、热力图
- * - 语义色 --danger / --success / --warning / --info 只允许用于 badge、toast、
- *   边框、错误态,与行情方向无关
- * 两组色同族但互不串用。所有涨跌数值恒带 +/- 号作冗余编码(服务红绿色盲)。
+ * 保留 v0.7 的两项结构改善:
+ * 1. 圆角/阴影/字号使用 theme 整体覆盖(消除 rounded-lg 与 rounded-xl 12px 撞值)
+ * 2. 语义色与行情色分离(见下方 danger/success)
  */
 :root {
-  /* 画布与表面(深蓝墨色,非纯黑 — 纯黑长时间盯盘对比过硬) */
-  --canvas: #0a0e14;
+  /* Canvas:浅蓝画布(body 渐变与光斑在 globals.css) */
+  --canvas: #eaf2fc;
   --bg-base: var(--canvas);
-  --surface: #10161f;
+
+  /* 卡片(白色半透明 + blur) */
+  --surface: rgba(255, 255, 255, 0.72);
   --bg-surface: var(--surface);
-  --surface-2: #161e2a;
+  --surface-2: rgba(255, 255, 255, 0.92);
   --bg-elevated: var(--surface-2);
-  --surface-3: #1d2735;
+  --surface-3: rgba(238, 245, 253, 0.8);
   --bg-subtle: var(--surface-3);
-  --border: #223040;
-  --border-default: var(--border);
-  --border-strong: #2e3f52;
+  --border: rgba(59, 130, 246, 0.14);
+  --border-strong: rgba(59, 130, 246, 0.3);
 
-  /* 文字层级(深底需提高亮度以达 AA) */
-  --text-primary: #e8eef6;
-  --text-secondary: #9fb0c3;
-  --text-tertiary: #6b7d93;
-  --text-disabled: #4a5a6d;
+  --blur-liquid: 20px;
+  --glass-fill: linear-gradient(165deg, #ffffff 0%, rgba(255, 255, 255, 0.94) 55%, rgba(255, 255, 255, 0.97) 100%);
+  --glass-shadow: 0 2px 4px rgba(30, 64, 138, 0.03), 0 20px 48px -20px rgba(37, 99, 235, 0.16);
+  --glass-radius: 24px;
 
-  /* 交互强调色 */
-  --accent-primary: #3d8bfd;
-  --accent-hover: #5b9dff;
-  --accent-subtle: rgba(61, 139, 253, 0.12);
+  /* 文字层级(深藏青) */
+  --text-primary: #17263f;
+  --text-secondary: #4a5c77;
+  --text-tertiary: #8496b0;
+  --text-disabled: #aab9cc;
+
+  /* 交互强调色:品牌蓝(唯一强强调) */
+  --accent-primary: #3b82f6;
+  --accent-hover: #2563eb;
+  --accent-subtle: rgba(59, 130, 246, 0.1);
 
   /* 行情色(红涨绿跌)— 仅限价格/图表语境 */
-  --status-up: #f6465d;
-  --status-down: #0ecb81;
-  --status-warn: #f0b90b;
-  --status-neutral: #6b7d93;
-  --status-up-bg: rgba(246, 70, 93, 0.12);
-  --status-down-bg: rgba(14, 203, 129, 0.12);
-  --status-warn-bg: rgba(240, 185, 11, 0.12);
+  --status-up: #e11d48;
+  --status-down: #16a34a;
+  --status-warn: #d97706;
+  --status-neutral: #8496b0;
+  --status-up-bg: rgba(225, 29, 72, 0.08);
+  --status-down-bg: rgba(22, 163, 74, 0.08);
+  --status-warn-bg: rgba(217, 119, 6, 0.1);
 
-  /* 圆角(单刻度,避免与 Tailwind 默认值撞车) */
+  /* 语义色 — 仅限 badge/toast/边框/错误态,与行情方向无关。
+     此前代码把行情红当错误色用(risk-report/rebalance/annual-report/
+     NewsFeed/HoldingsHealthPanel),语义互相污染,故分离。 */
   --radius-xs: 3px;
   --radius-sm: 5px;
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 16px;
 
-  /* 阴影(深底上主要靠边框,阴影只做轻微浮起) */
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.6);
-  --shadow-pop: 0 8px 32px -8px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--border);
-  --shadow-sm: var(--shadow-card);
-  --shadow-md: var(--shadow-card);
+  /* 阴影(浅底上阴影是主要的层次手段) */
+  --shadow-card: var(--glass-shadow);
+  --shadow-pop: 0 4px 8px rgba(30, 64, 138, 0.06), 0 24px 56px -16px rgba(37, 99, 235, 0.22);
+  --shadow-sm: 0 1px 2px rgba(30, 64, 138, 0.05), 0 4px 12px -4px rgba(37, 99, 235, 0.08);
+  --shadow-md: 0 2px 4px rgba(30, 64, 138, 0.05), 0 12px 28px -8px rgba(37, 99, 235, 0.14);
   --shadow-lg: var(--shadow-pop);
 
-  /* 密度刻度(终端风核心:比 v0.5 更紧凑) */
-  --gap-page: 12px;
-  --gap-card: 10px;
-  --pad-card: 12px;
-  --pad-compact: 8px;
-  --row-h: 32px;
-  --fs-base: 13px;
-  --fs-sm: 12px;
-  --fs-xs: 11px;
-
   /* 图表专用(由 src/lib/chartTheme.ts 运行时读取,保证图表与 UI 同一真相源) */
-  --chart-grid: rgba(159, 176, 195, 0.1);
-  --chart-axis: rgba(159, 176, 195, 0.28);
-  --chart-text: #8fa3ba;
-  --chart-ma5: #f0883e;
-  --chart-ma10: #bc8cff;
-  --chart-ma20: #58a6ff;
-  --chart-ma60: #3fb950;
-  --chart-macd-dif: #f0b90b;
-  --chart-macd-dea: #7c8cff;
-  --chart-kdj-k: #39c5cf;
-  --chart-kdj-d: #f6465d;
-  --chart-kdj-j: #8b98a9;
+  --chart-grid: rgba(100, 116, 139, 0.14);
+  --chart-axis: rgba(100, 116, 139, 0.25);
+  --chart-text: #64748b;
+  --chart-ma5: #ea580c;
+  --chart-ma10: #7c3aed;
+  --chart-ma20: #2563eb;
+  --chart-ma60: #059669;
+  --chart-macd-dif: #d97706;
+  --chart-macd-dea: #4f46e5;
+  --chart-kdj-k: #0891b2;
+  --chart-kdj-j: #64748b;
 
   /* RGB 通道变量(Tailwind <alpha-value> 模式:支持 bg-accent/70 等透明度修饰符) */
-  --accent-rgb: 61 139 253;
-  --accent-hover-rgb: 91 157 255;
-  --up-rgb: 246 70 93;
-  --down-rgb: 14 203 129;
-  --warn-rgb: 240 185 11;
-  --neutral-rgb: 107 125 147;
-  --text-pri-rgb: 232 238 246;
-  --text-sec-rgb: 159 176 195;
-  --text-ter-rgb: 107 125 147;
-  --border-def-rgb: 34 48 64;
-  --border-str-rgb: 46 63 82;
-  --surface-rgb: 16 22 31;
-  --surface-2-rgb: 22 30 42;
-  --surface-3-rgb: 29 39 53;
+  --accent-rgb: 59 130 246;
+  --accent-hover-rgb: 37 99 235;
+  --up-rgb: 225 29 72;
+  --down-rgb: 22 163 74;
+  --warn-rgb: 217 119 6;
+  --neutral-rgb: 132 150 176;
+  --text-pri-rgb: 23 38 63;
+  --text-sec-rgb: 74 92 119;
+  --text-ter-rgb: 132 150 176;
+  --border-def-rgb: 59 130 246;
+  --border-str-rgb: 59 130 246;
+  --surface-rgb: 255 255 255;
+  --surface-2-rgb: 255 255 255;
+  --surface-3-rgb: 238 245 253;
 }

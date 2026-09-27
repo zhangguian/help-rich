@@ -4,10 +4,16 @@
 
 @layer base {
   body {
-    background-color: var(--canvas);
+    background-color: var(--bg-base);
+    /* 浅蓝渐变画布 + 固定光斑(企业版工作台;清淡通透) */
+    background-image:
+      radial-gradient(60rem 40rem at 10% -8%, rgba(186, 214, 248, 0.5), transparent 55%),
+      radial-gradient(50rem 34rem at 95% 0%, rgba(202, 236, 250, 0.35), transparent 55%),
+      radial-gradient(50rem 36rem at 50% 115%, rgba(203, 224, 250, 0.42), transparent 60%),
+      linear-gradient(180deg, #e9f1fc 0%, #eff5fd 45%, #f3f8ff 100%);
+    background-attachment: fixed;
     color: var(--text-primary);
     min-height: 100vh;
-    font-size: var(--fs-base);
   }
 
   /* 字体栈唯一定义在 tailwind.config.ts fontFamily.sans(映射 --font-jakarta-sans),
@@ -15,47 +21,63 @@
      旧规则引用了从未定义的 var(--font-geist-sans), 整条声明在计算值阶段失效
      (含 fallback 一并丢弃), 导致自托管字体与中文栈从未到达用户。 */
 
-  /* 数字统一等宽 + 定宽数位,保证行情数值纵向对齐(终端风核心) */
+  /* 数字等宽 + 定宽数位,保证行情数值纵向对齐 */
   .font-mono {
     font-variant-numeric: tabular-nums;
-  }
-
-  ::selection {
-    background: var(--accent-subtle);
-    color: var(--text-primary);
   }
 }
 
 @layer components {
-  /* 终端面板 — 取代 v0.4 的 .liquid-glass。
-     深底上不靠阴影建立层次,靠 1px 边框 + 顶缘内高光。 */
-  .panel {
+  /* 软卡材质(企业浅色白卡:近实白、无感描边、柔和投影) */
+  .liquid-glass {
     position: relative;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-card);
-    transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+    background: var(--glass-fill);
+    backdrop-filter: blur(var(--blur-liquid)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--blur-liquid)) saturate(140%);
+    border: 1px solid rgba(255, 255, 255, 0.65);
+    background-clip: padding-box;
+    border-radius: var(--glass-radius);
+    box-shadow: var(--glass-shadow);
+    transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.35s cubic-bezier(0.22, 1, 0.36, 1), background 0.35s ease, border-color 0.35s ease;
   }
 
-  /* 顶缘内高光(替代玻璃拟物的 ::before 渐变) */
-  .panel::before {
+  /* 顶缘高光 */
+  .liquid-glass::before {
     content: "";
     position: absolute;
-    inset: 0 0 auto;
-    height: 1px;
+    inset: 0;
+    border-radius: inherit;
     pointer-events: none;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06) 20%, rgba(255, 255, 255, 0.06) 80%, transparent);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.6) 0%, rgba(255, 255, 255, 0) 22%);
+    opacity: 0.5;
   }
 
-  .panel-hover:hover {
-    border-color: var(--border-strong);
-    background: var(--surface-2);
+  /* 内描边 */
+  .liquid-glass::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.05);
   }
 
-  .panel-active {
-    border-color: var(--accent);
-    background: var(--accent-subtle);
+  .liquid-glass-hover:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      0 2px 4px rgba(30, 64, 138, 0.05),
+      0 24px 52px -16px rgba(37, 99, 235, 0.26);
+  }
+
+  .liquid-glass-active {
+    background:
+      linear-gradient(165deg,
+        rgba(59, 130, 246, 0.12) 0%,
+        rgba(255, 255, 255, 0.9) 55%,
+        rgba(255, 255, 255, 0.92) 100%);
+    box-shadow:
+      0 0 0 1px rgba(59, 130, 246, 0.3) inset,
+      var(--glass-shadow);
   }
 
   /* 21 档盈亏热力图:21 等分 */
@@ -63,17 +85,17 @@
     grid-template-columns: repeat(21, minmax(0, 1fr));
   }
 
-  /* lightweight-charts 内嵌 TradingView 署名 logo:保留署名,色调适配深色主题 */
+  /* lightweight-charts 内嵌 TradingView 署名 logo:保留署名,色调适配浅色主题 */
   .tv-lightweight-charts a#tv-attr-logo {
-    --fill: rgba(159, 176, 195, 0.45);
-    --stroke: #10161f;
+    --fill: rgba(100, 116, 139, 0.5);
+    --stroke: #ffffff;
   }
 }
 
-/* 滚动条(深色:细、蓝灰半透明、圆角) */
+/* 滚动条(浅色主题:细、蓝灰半透明、圆角) */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(159, 176, 195, 0.22) transparent;
+  scrollbar-color: rgba(74, 92, 119, 0.28) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -86,15 +108,15 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(159, 176, 195, 0.2);
+  background: rgba(74, 92, 119, 0.24);
   border-radius: 999px;
   border: 2px solid transparent;
-  background-clip: content-box;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(159, 176, 195, 0.34);
-  background-clip: content-box;
+  background: rgba(74, 92, 119, 0.42);
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-corner {
@@ -103,6 +125,7 @@
 
 /* 减少动效(可访问性) */
 @media (prefers-reduced-motion: reduce) {
+
   *,
   *::before,
   *::after {

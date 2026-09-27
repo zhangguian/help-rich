@@ -515,8 +515,8 @@ export default function Workbench() {
   })();
 
   return (
-    <main className="min-h-screen w-full flex justify-center px-4 py-4">
-      <div className="w-full max-w-[1720px] rounded-xl overflow-hidden border border-border-def bg-canvas flex flex-col">
+    <main className="min-h-screen w-full flex justify-center px-4 py-6">
+      <div className="w-full max-w-[1720px] rounded-2xl overflow-hidden border border-border-def bg-bg-surface flex flex-col">
         {/* 导航栏 */}
         <header className="relative z-20 flex items-center justify-between gap-3 px-5 py-3 flex-wrap border-b border-border-def">
           <div className="flex items-center gap-2.5">
@@ -536,13 +536,13 @@ export default function Workbench() {
                     'relative px-3 py-1 text-[13px] rounded transition-colors whitespace-nowrap',
                     isActive
                       ? 'text-accent font-semibold'
-                      : 'text-text-sec hover:text-text-pri hover:bg-surface-2',
+                      : 'text-text-sec hover:text-text-pri hover:bg-bg-subtle',
                   )}
                 >
                   {isActive && (
                     <motion.span
                       layoutId="tab-pill"
-                      className="absolute inset-0 rounded bg-accent-subtle border border-accent/40"
+                      className="absolute inset-0 rounded bg-accent-subtle border border-accent/30"
                       transition={{ type: 'spring', stiffness: 400, damping: 32 }}
                     />
                   )}
