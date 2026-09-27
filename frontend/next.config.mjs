@@ -1,9 +1,17 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // v0.2.1:ESLint 警告太多,build 时跳过 lint(类型检查仍走 tsc --noEmit)
-  // 保留 IDE / pre-commit 内的 lint 能力,生产前清理
+  // v0.2.1:ESLint warnings are noisy; skip lint during build.
+  // Type safety still comes from `tsc --noEmit`. IDE / pre-commit keep lint.
   eslint: {
     ignoreDuringBuilds: true,
+  },
+
+  // v0.7: disable the dev overlay indicator (compile / route badge).
+  // It rewrites DOM on every HMR update, causing needless re-layout cost.
+  // Next 14 only accepts an object here, so opt out per-position explicitly.
+  devIndicators: {
+    buildActivity: false,
+    buildActivityPosition: 'bottom-right',
   },
 };
 

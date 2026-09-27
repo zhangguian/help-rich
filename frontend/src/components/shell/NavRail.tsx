@@ -133,6 +133,7 @@ export function NavRail() {
                   key={it.href}
                   href={it.href}
                   title={it.label}
+                  prefetch
                   className={clsx(
                     'relative flex items-center gap-2.5 mx-1.5 px-2 py-1.5 rounded text-[13px] transition-colors',
                     active
