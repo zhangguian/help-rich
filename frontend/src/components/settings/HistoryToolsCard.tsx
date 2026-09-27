@@ -40,7 +40,7 @@ export function HistoryToolsCard() {
         >
           🧮 计算器
         </Button>
-        <Link href="/annual-report/2025">
+        <Link href={`/annual-report/${new Date().getFullYear()}`}>
           <Button variant="secondary" className="w-full">
             📅 年账单
           </Button>

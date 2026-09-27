@@ -90,7 +90,7 @@ export function TransactionForm({ onSuccess, onCancel, initialStockCode }: Trans
             maxLength={12}
             placeholder="600519 或 600519.SH"
             readOnly={!!initialStockCode}
-            className={`w-full px-3 py-2 border border-border-strong rounded-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface ${
+            className={`w-full px-3 py-2 border border-border-str rounded-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface ${
               initialStockCode ? 'opacity-70 cursor-not-allowed' : ''
             }`}
             {...register('stockCode')}
@@ -130,7 +130,7 @@ export function TransactionForm({ onSuccess, onCancel, initialStockCode }: Trans
           <label className="block text-sm font-medium mb-1">交易日期</label>
           <input
             type="date"
-            className="w-full px-3 py-2 border border-border-strong rounded-sm focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface"
+            className="w-full px-3 py-2 border border-border-str rounded-sm focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface"
             {...register('tradeDate')}
           />
           {errors.tradeDate && (
@@ -144,7 +144,7 @@ export function TransactionForm({ onSuccess, onCancel, initialStockCode }: Trans
             type="number"
             min={1}
             step={100}
-            className="w-full px-3 py-2 border border-border-strong rounded-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface"
+            className="w-full px-3 py-2 border border-border-str rounded-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface"
             {...register('shares', { valueAsNumber: true })}
           />
           {errors.shares && (
@@ -159,7 +159,7 @@ export function TransactionForm({ onSuccess, onCancel, initialStockCode }: Trans
           type="text"
           inputMode="decimal"
           placeholder="10.500"
-          className="w-full px-3 py-2 border border-border-strong rounded-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface"
+          className="w-full px-3 py-2 border border-border-str rounded-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface"
           {...register('price')}
         />
         {errors.price && (
@@ -173,7 +173,7 @@ export function TransactionForm({ onSuccess, onCancel, initialStockCode }: Trans
           type="text"
           maxLength={200}
           placeholder="看好银行板块..."
-          className="w-full px-3 py-2 border border-border-strong rounded-sm focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface"
+          className="w-full px-3 py-2 border border-border-str rounded-sm focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface"
           {...register('note')}
         />
         {errors.note && (

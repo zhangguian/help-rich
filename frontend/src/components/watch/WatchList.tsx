@@ -24,6 +24,20 @@ export interface WatchItem {
   isFavorite: boolean;  // v0.5 特别关注
 }
 
+/** Logo 章渐变色(按代码哈希取色,稳定不变) */
+const CHIP_COLORS = [
+  'from-blue-500 to-sky-400',
+  'from-violet-500 to-purple-400',
+  'from-cyan-500 to-teal-400',
+  'from-amber-500 to-orange-400',
+  'from-rose-500 to-pink-400',
+];
+const chipColor = (code: string) => {
+  let h = 0;
+  for (let i = 0; i < code.length; i++) h = (h * 31 + code.charCodeAt(i)) >>> 0;
+  return CHIP_COLORS[h % CHIP_COLORS.length];
+};
+
 /**
  * 左侧盯盘 aside(roadmap 功能1)
  *
@@ -231,147 +245,165 @@ export function WatchList({
 
   return (
     <GlassCard
-      variant="active"
-      padding="sm"
-      className="h-full flex flex-col overflow-hidden gap-2"
+      variant="default"
+      padding="md"
+      className="w-full flex flex-col overflow-hidden gap-2"
     >
-      <div className="flex items-center justify-between px-2 pt-1">
-        <span className="text-sm font-semibold text-text-pri">盯盘</span>
-        <button
-          type="button"
-          onClick={() =>
-            setSortDir((d) =>
-              d === 'default' ? 'desc' : d === 'desc' ? 'asc' : 'default',
-            )
-          }
-          className="flex items-center gap-1 text-xs text-text-ter hover:text-text-pri"
-          title="按涨幅排序(默认 / 降序 / 升序)"
-        >
-          <span>{items.length} 只</span>
-          <ChevronDown
-            size={12}
-            strokeWidth={1.5}
-            className={clsx(
-              'transition-transform',
-              sortDir === 'asc' && 'rotate-180',
-              sortDir === 'default' && 'opacity-40',
-            )}
-          />
-        </button>
+      <div className="flex items-center justify-between px-1 flex-wrap gap-2">
+        <div className="flex items-baseline gap-2">
+          <span className="text-base font-semibold text-text-pri">盯盘列表</span>
+          <span className="text-xs text-text-ter">({items.length})</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() =>
+              setSortDir((d) =>
+                d === 'default' ? 'desc' : d === 'desc' ? 'asc' : 'default',
+              )
+            }
+            className="flex items-center gap-1 text-xs text-text-ter hover:text-text-pri transition-colors"
+            title="按涨幅排序(默认 / 降序 / 升序)"
+          >
+            <span>按涨幅</span>
+            <ChevronDown
+              size={12}
+              strokeWidth={1.5}
+              className={clsx(
+                'transition-transform',
+                sortDir === 'asc' && 'rotate-180',
+                sortDir === 'default' && 'opacity-40',
+              )}
+            />
+          </button>
+          <Button size="sm" onClick={() => setShowAdd(true)}>
+            ＋ 添加自选
+          </Button>
+        </div>
       </div>
 
-      <ul className="flex-1 overflow-y-auto space-y-1 min-h-0 pr-1">
+      <ul className="overflow-y-auto space-y-1 min-h-0 max-h-[460px] pr-1">
         {items.length === 0 && (
-          <li className="text-text-ter text-sm text-center py-8">
-            {favoriteOnly ? '暂无特别关注股票，点击自选股票旁的 ⭐ 加入' : '暂无自选股，点击下方添加'}
+          <li className="text-text-ter text-sm text-center py-10">
+            {favoriteOnly ? '暂无特别关注股票,点击自选股票旁的 ⭐ 加入' : '暂无自选股,点击右上角「添加自选」'}
           </li>
         )}
         {sortedItems.map((it) => {
           const isActive = it.code === activeCode;
+          const halted = it.quote != null && Number(it.quote.currentPrice) === 0;
           return (
             <motion.li
               key={it.code}
               layout
-              whileHover={{ scale: 1.01 }}
-              whileTap={{ scale: 0.99 }}
               onContextMenu={(e) => onContextMenu(e, it)}
               className="relative"
             >
-              {/* {isActive && (
-                <motion.span
-                  layoutId="watch-active-bar"
-                  className="absolute left-0 top-1 bottom-1 w-0.5 rounded bg-accent"
-                  transition={{ type: 'spring', stiffness: 400, damping: 32 }}
-                />
-              )} */}
               <button
                 onClick={() => onSelect(it.code)}
-                className={`w-full flex items-center justify-between gap-2 rounded-xl px-3 py-2 text-left transition-colors ${
-                  isActive ? 'liquid-glass-active' : ''
-                }`}
+                className={clsx(
+                  'w-full flex items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors border border-transparent',
+                  isActive
+                    ? 'bg-accent-subtle ring-1 ring-accent/25'
+                    : 'hover:bg-bg-subtle',
+                )}
               >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-sm text-text-pri truncate">
-                      {it.name ?? it.code}
+                <span
+                  className={clsx(
+                    'w-9 h-9 rounded-xl bg-gradient-to-br text-white text-sm font-bold flex items-center justify-center shrink-0 shadow-sm',
+                    chipColor(it.code),
+                  )}
+                >
+                  {(it.name ?? it.code).slice(0, 1)}
+                </span>
+                <div className="min-w-0 flex-1 flex items-center gap-2">
+                  <span className="text-sm font-medium text-text-pri truncate">
+                    {it.name ?? it.code}
+                  </span>
+                  {it.inPosition && (
+                    <span className="text-[10px] px-1.5 py-px rounded-full bg-accent-subtle text-accent border border-accent/25 shrink-0">
+                      持仓
                     </span>
-                    {/* {it.inPosition && (
-                      <span className="text-[10px] px-1 py-px rounded bg-accent-subtle text-accent border border-accent/30">
-                        持仓
-                      </span>
-                    )} */}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openSetPos(it);
-                      }}
-                      className="inline-flex items-center shrink-0"
-                      title={it.inPosition ? '调整持仓(股数/成本)' : '设为持仓(股数/成本)'}
-                    >
-                      <Edit
-                        size={13}
-                        className="text-text-ter/60 hover:text-accent"
-                      />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void toggleFavorite(it.code, !it.isFavorite);
-                      }}
-                      className="inline-flex items-center shrink-0"
-                      title={it.isFavorite ? '取消特别关注' : '加入特别关注'}
-                    >
-                      <Star
-                        size={13}
-                        weight={it.isFavorite ? 'Filled' : 'Outline'}
-                        className={clsx(
-                          'transition-colors',
-                          it.isFavorite
-                            ? 'text-yellow-400'
-                            : 'text-text-ter/40 hover:text-yellow-400',
-                        )}
-                      />
-                    </button>
-                  </div>
-                  <div className="text-xs text-text-ter font-mono">{it.code}</div>
+                  )}
+                  {it.isFavorite && (
+                    <Star size={12} weight="Filled" className="text-yellow-400 shrink-0" />
+                  )}
+                  <span className="text-xs text-text-ter font-mono hidden sm:inline">{it.code}</span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openSetPos(it);
+                    }}
+                    className="inline-flex items-center shrink-0"
+                    title={it.inPosition ? '调整持仓(股数/成本)' : '设为持仓(股数/成本)'}
+                  >
+                    <Edit
+                      size={13}
+                      className="text-text-ter/60 hover:text-accent"
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void toggleFavorite(it.code, !it.isFavorite);
+                    }}
+                    className="inline-flex items-center shrink-0"
+                    title={it.isFavorite ? '取消特别关注' : '加入特别关注'}
+                  >
+                    <Star
+                      size={13}
+                      weight={it.isFavorite ? 'Filled' : 'Outline'}
+                      className={clsx(
+                        'transition-colors',
+                        it.isFavorite
+                          ? 'text-yellow-400'
+                          : 'text-text-ter/40 hover:text-yellow-400',
+                      )}
+                    />
+                  </button>
                 </div>
-                <div className="text-right shrink-0">
-                  <div className="text-sm font-mono text-text-pri">
-                    {!it.quote ? '--' : Number(it.quote.currentPrice) === 0 ? '停牌' : it.quote.currentPrice}
-                  </div>
-                  <div className={`text-xs font-mono ${pctClass(it.quote?.changePct)}`}>
+                <div className="text-sm font-mono font-medium text-text-pri w-24 text-right shrink-0">
+                  {!it.quote ? '--' : halted ? '停牌' : it.quote.currentPrice}
+                </div>
+                <div className="w-20 flex justify-end shrink-0">
+                  <span
+                    className={clsx(
+                      'px-2 py-1 rounded-lg text-xs font-mono font-semibold',
+                      !it.quote || halted
+                        ? 'bg-bg-subtle text-text-ter'
+                        : it.quote.changePct > 0
+                          ? 'bg-up-bg text-up'
+                          : it.quote.changePct < 0
+                            ? 'bg-down-bg text-down'
+                            : 'bg-bg-subtle text-text-ter',
+                    )}
+                  >
                     {!it.quote
                       ? '--'
-                      : Number(it.quote.currentPrice) === 0
+                      : halted
                         ? '停牌'
                         : `${it.quote.changePct > 0 ? '+' : ''}${it.quote.changePct.toFixed(2)}%`}
-                  </div>
+                  </span>
                 </div>
+                {it.inPosition && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setClearTarget(it);
+                    }}
+                    className="shrink-0 text-xs leading-none hover:scale-110 transition-transform"
+                    title="一键清仓"
+                  >
+                    🛑
+                  </button>
+                )}
               </button>
-              {it.inPosition && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setClearTarget(it);
-                  }}
-                  className="absolute left-0 top-0  text-down text-xs px-1"
-                  title="一键清仓"
-                >
-                  🛑
-                </button>
-              )}
             </motion.li>
           );
         })}
       </ul>
-
-      <div className="pt-1 border-t border-white/5">
-        <Button variant="secondary" className="w-full liquid-glass rounded-xl" onClick={() => setShowAdd(true)}>
-          添加自选
-        </Button>
-      </div>
 
       {renderModal(
         <LiquidModal
@@ -392,13 +424,13 @@ export function WatchList({
               value={addForm.stockCode}
               onChange={(e) => setAddForm({ ...addForm, stockCode: e.target.value })}
               placeholder="股票代码,如 600519"
-              className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
+              className="w-full px-3 py-2 text-sm rounded-lg bg-bg-subtle border border-border-def focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
             />
             <input
               value={addForm.stockName}
               onChange={(e) => setAddForm({ ...addForm, stockName: e.target.value })}
               placeholder="名称(可选)"
-              className="w-full px-3 py-2 text-sm rounded-lg bg-white/5 border border-white/10 focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
+              className="w-full px-3 py-2 text-sm rounded-lg bg-bg-subtle border border-border-def focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
             />
           </div>
         </LiquidModal>,
@@ -433,7 +465,7 @@ export function WatchList({
       {contextMenu && mounted && createPortal(
         <div
           data-watchlist-ctxmenu
-          className="fixed z-50 min-w-[10rem] rounded-xl bg-bg-base border border-white/15 shadow-lg p-1"
+          className="fixed z-50 min-w-[10rem] rounded-xl bg-bg-elevated border border-border-str shadow-lg p-1 backdrop-blur"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button
@@ -442,7 +474,7 @@ export function WatchList({
               setRemoveTarget(contextMenu.item);
               setContextMenu(null);
             }}
-            className="w-full text-left px-3 py-1.5 rounded-lg text-xs text-text-sec hover:bg-white/10 hover:text-text-pri transition-colors"
+            className="w-full text-left px-3 py-1.5 rounded-lg text-xs text-text-sec hover:bg-bg-subtle hover:text-text-pri transition-colors"
           >
             删除自选
           </button>
@@ -452,7 +484,7 @@ export function WatchList({
               openSetPos(contextMenu.item);
               setContextMenu(null);
             }}
-            className="w-full text-left px-3 py-1.5 rounded-lg text-xs text-text-sec hover:bg-white/10 hover:text-text-pri transition-colors"
+            className="w-full text-left px-3 py-1.5 rounded-lg text-xs text-text-sec hover:bg-bg-subtle hover:text-text-pri transition-colors"
           >
             {contextMenu.item.inPosition ? '调整持仓' : '设为持仓'}
           </button>
@@ -463,7 +495,7 @@ export function WatchList({
                 setClearTarget(contextMenu.item);
                 setContextMenu(null);
               }}
-              className="w-full text-left px-3 py-1.5 rounded-lg text-xs text-text-sec hover:bg-white/10 hover:text-text-pri transition-colors"
+              className="w-full text-left px-3 py-1.5 rounded-lg text-xs text-text-sec hover:bg-bg-subtle hover:text-text-pri transition-colors"
             >
               一键清仓
             </button>
@@ -521,7 +553,7 @@ export function WatchList({
                   value={posForm.shares}
                   onChange={(e) => setPosForm({ ...posForm, shares: e.target.value })}
                   placeholder="100"
-                  className="w-full px-2 py-1.5 text-sm rounded-lg bg-bg-surface border border-border-strong focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
+                  className="w-full px-2 py-1.5 text-sm rounded-lg bg-bg-surface border border-border-str focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
                 />
                 </div>
                 <div className="flex-1">
@@ -532,7 +564,7 @@ export function WatchList({
                   value={posForm.costPrice}
                   onChange={(e) => setPosForm({ ...posForm, costPrice: e.target.value })}
                   placeholder="10.500"
-                  className="w-full px-2 py-1.5 text-sm rounded-lg bg-bg-surface border border-border-strong focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
+                  className="w-full px-2 py-1.5 text-sm rounded-lg bg-bg-surface border border-border-str focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
                 />
                 </div>
                 <Button onClick={submitSetPosition} className="liquid-glass rounded-xl" size="sm">
@@ -545,7 +577,7 @@ export function WatchList({
             </div>
 
             {/* ② 录入流水(自动同步持仓) */}
-            <div className="border-t border-white/10 pt-4">
+            <div className="border-t border-border-def pt-4">
               <div className="text-xs text-text-sec mb-2">录入流水（自动同步持仓）</div>
               {setPosTarget && (
                 <TransactionForm

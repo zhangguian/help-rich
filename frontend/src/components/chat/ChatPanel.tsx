@@ -348,19 +348,19 @@ const listRef = useRef<HTMLDivElement | null>(null);
       variant="active"
       padding="sm"
       className="h-full flex flex-col overflow-hidden gap-2 min-h-0"
-      style={height ? { height: `${height}px` } : undefined}
+      style={height ? { height: `${height}px` } : { height: '420px' }}
     >
       <div
         className="h-2.5 -mt-1 flex items-center justify-center cursor-row-resize group select-none shrink-0"
         onMouseDown={onHandleMouseDown}
         title="拖拽调整高度"
       >
-        <span className="w-12 h-[3px] rounded-full bg-white/15 group-hover:bg-white/40 transition-colors" />
+        <span className="w-12 h-[3px] rounded-full bg-border-str group-hover:bg-accent/50 transition-colors" />
       </div>
       <div className="px-2 pt-1 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm font-semibold text-text-pri truncate">
-            AI 问一问{stockName && stockCode ? ` · ${stockName}` : ''}
+            💬 AI 问一问{stockName && stockCode ? ` · ${stockName}` : ''}
           </span>
           {sending && (
             <span className="inline-block w-2 h-2 rounded-full bg-accent animate-pulse" />
@@ -371,7 +371,7 @@ const listRef = useRef<HTMLDivElement | null>(null);
             type="button"
             onClick={handleClear}
             title="清空本轮对话(也会清除浏览器缓存的历史)"
-            className="shrink-0 text-xs text-text-ter hover:text-text-pri px-1.5 py-0.5 rounded hover:bg-white/5"
+            className="shrink-0 text-xs text-text-ter hover:text-text-pri px-1.5 py-0.5 rounded hover:bg-bg-subtle"
           >
             🗑 清空
           </button>
@@ -387,7 +387,7 @@ const listRef = useRef<HTMLDivElement | null>(null);
           </p>
         )}
         {hintVisible && (
-          <div className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/5 text-[11px] text-text-ter">
+          <div className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg bg-bg-subtle border border-border-def text-[11px] text-text-ter">
             <span>以下为上次对话缓存 · 共 {messages.length} 条</span>
             <button
               type="button"
@@ -416,10 +416,10 @@ const listRef = useRef<HTMLDivElement | null>(null);
                 {m.role === 'user' ? '我' : 'AI'}
               </div>
               <div
-                className={`text-sm leading-relaxed whitespace-pre-wrap rounded-xl px-3 py-2 ${
+                className={`text-sm leading-relaxed whitespace-pre-wrap rounded-2xl px-3 py-2 ${
                   m.role === 'user'
-                    ? 'bg-accent-subtle text-text-pri ml-8'
-                    : 'bg-white/5 text-text-sec'
+                    ? 'bg-accent text-white ml-8 rounded-br-md'
+                    : 'bg-bg-subtle text-text-pri mr-8 rounded-bl-md border border-border-def'
                 }`}
               >
                 {m.text}
@@ -433,12 +433,12 @@ const listRef = useRef<HTMLDivElement | null>(null);
       {stockCode && !sending && quickPrompts.length > 0 && (
         <div
           ref={popoverRef}
-          className="relative flex items-center gap-2 px-1 pt-1 border-t border-white/5"
+          className="relative flex items-center gap-2 px-1 pt-1 border-t border-border-def"
         >
           <button
             type="button"
             onClick={() => send(quickPrompts[0])}
-            className="px-3 py-1 rounded-full border border-white/10 hover:border-accent/50 text-xs text-text-sec hover:text-text-pri transition-colors"
+            className="px-3 py-1 rounded-full border border-border-def bg-bg-surface hover:border-accent/50 text-xs text-text-sec hover:text-text-pri transition-colors"
           >
             {quickPrompts[0]}
           </button>
@@ -447,13 +447,13 @@ const listRef = useRef<HTMLDivElement | null>(null);
               type="button"
               title="查看更多快捷提问"
               onClick={() => setPopoverOpen((v) => !v)}
-              className="ml-auto px-2.5 py-1 rounded-full border border-white/10 hover:border-accent/50 text-xs text-text-sec hover:text-text-pri transition-colors"
+              className="ml-auto px-2.5 py-1 rounded-full border border-border-def bg-bg-surface hover:border-accent/50 text-xs text-text-sec hover:text-text-pri transition-colors"
             >
               更多
             </button>
           )}
           {popoverOpen && quickPrompts.length > 1 && (
-            <div className="absolute left-0 right-0 bottom-full mb-1 z-20 rounded-xl bg-bg-base border border-white/15 shadow-lg p-1.5 flex flex-col gap-1 max-h-80 overflow-y-auto">
+            <div className="absolute left-0 right-0 bottom-full mb-1 z-20 rounded-xl bg-bg-elevated border border-border-str shadow-lg p-1.5 flex flex-col gap-1 max-h-80 overflow-y-auto">
               {quickPrompts.map((p) => (
                 <button
                   key={p}
@@ -462,7 +462,7 @@ const listRef = useRef<HTMLDivElement | null>(null);
                     send(p);
                     setPopoverOpen(false);
                   }}
-                  className="text-left px-3 py-1.5 rounded-lg text-xs text-text-sec hover:bg-white/10 hover:text-text-pri transition-colors whitespace-nowrap"
+                  className="text-left px-3 py-1.5 rounded-lg text-xs text-text-sec hover:bg-bg-subtle hover:text-text-pri transition-colors whitespace-nowrap"
                 >
                   {p}
                 </button>
@@ -472,16 +472,16 @@ const listRef = useRef<HTMLDivElement | null>(null);
         </div>
       )}
 
-      <div className="flex gap-2 pt-1 border-t border-white/5">
+      <div className="flex gap-2 pt-1 border-t border-border-def">
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && send()}
           disabled={!stockCode || sending}
           placeholder={stockCode ? '输入你的问题…' : '先选择一只股票'}
-          className="flex-1 px-3 py-2 text-sm rounded-xl bg-white/5 border border-white/10 focus:border-accent outline-none text-text-pri placeholder:text-text-ter disabled:opacity-40"
+          className="flex-1 px-3 py-2 text-sm rounded-xl bg-bg-subtle border border-border-def focus:border-accent outline-none text-text-pri placeholder:text-text-ter disabled:opacity-40"
         />
-        <Button onClick={() => send()} disabled={!stockCode || sending || !input.trim()} className="liquid-glass rounded-xl">
+        <Button onClick={() => send()} disabled={!stockCode || sending || !input.trim()} className="rounded-xl">
           {sending ? '回答中…' : '发送'}
         </Button>
       </div>

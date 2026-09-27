@@ -8,7 +8,16 @@ import clsx from 'clsx';
 
 import { apiGet, snakeToCamel } from '@/lib/api';
 import { consumeAnalysisStream } from '@/lib/analysisStream';
-import type { AnalysisResult, Position, Quote, WatchlistItem } from '@/lib/types';
+import type {
+  AmountTrendResponse,
+  AnalysisResult,
+  MarketIndex,
+  MarketOverview,
+  MarketSentiment,
+  Position,
+  Quote,
+  WatchlistItem,
+} from '@/lib/types';
 
 import { AnalysisPanel } from '@/components/advice/AnalysisPanel';
 import { CalculatorPanel } from '@/components/calculator/CalculatorPanel';
@@ -24,6 +33,7 @@ import { PositionSummaryTable } from '@/components/positions/PositionSummaryTabl
 import { StockFlowTab } from '@/components/positions/StockFlowTab';
 import { ScreenerPanel } from '@/components/screener/ScreenerPanel';
 import { WatchlistPanel } from '@/components/screener/WatchlistPanel';
+import { ReflectionCard } from '@/components/reflection/ReflectionCard';
 import { SectorBoard } from '@/components/sector/SectorBoard';
 import { SettingsPanel } from '@/components/settings/SettingsPanel';
 import { Button } from '@/components/ui/Button';
@@ -53,11 +63,41 @@ const PERIODS: { key: KlinePeriod; label: string }[] = [
   { key: '60min', label: '60分' },
 ];
 
+/** 欢迎横幅右侧的大盘速览数据(三大指数 + 涨跌家数/区间分布/两市成交额) */
+interface MarketHeader {
+  indexes: MarketIndex[];
+  upTotal: number | null;
+  downTotal: number | null;
+  flatTotal: number | null;
+  amountYi: number | null;
+  buckets: MarketSentiment['buckets'] | null;
+}
+
+/** Logo 章渐变色(按代码哈希取色,稳定不变) */
+const CHIP_COLORS = [
+  'from-blue-500 to-sky-400',
+  'from-violet-500 to-purple-400',
+  'from-cyan-500 to-teal-400',
+  'from-amber-500 to-orange-400',
+  'from-rose-500 to-pink-400',
+];
+const chipColor = (code: string) => {
+  let h = 0;
+  for (let i = 0; i < code.length; i++) h = (h * 31 + code.charCodeAt(i)) >>> 0;
+  return CHIP_COLORS[h % CHIP_COLORS.length];
+};
+
+/** 成交额(亿元)格式化:保留 1 位小数 + 千分位 */
+function decimal(v: number): string {
+  return v.toLocaleString('zh-CN', { maximumFractionDigits: 1 });
+}
+
 /**
- * 四区盯盘工作台(v0.4-roadmap §4.0)
+ * 卡片工作台 v0.6(复刻企业版设计稿结构)
  *
- * 左 aside 盯盘列表 | 中间 K线区(顶 tab 可切板块/快讯) | 右侧上操作提示 + 下 AI 对话。
- * 点击列表行 → 中间 + 右侧联动切换(不跳路由)。
+ * 一整块浅蓝圆角仪表盘容器:蓝底内嵌导航栏 + hero 问候区(玻璃扇片装饰)+ 浮动持仓小卡
+ * (骑跨蓝/白交界),下方白色内容区承载统计卡行 / K线大卡 + AI 双卡 / 盯盘列表卡。
+ * 大盘/板块资金/快讯/选股/观察池/设置 tab 时白色内容区被对应面板占满。
  */
 export default function Workbench() {
   const [tab, setTab] = useState<TabKey>('watch');
@@ -89,7 +129,7 @@ export default function Workbench() {
     if (autoRefresh) localStorage.setItem('auto-refresh-enabled', '1');
     else localStorage.removeItem('auto-refresh-enabled');
   }, [autoRefresh]);
-  // ChatPanel 高度(用户拖拽条控制);null = 用 flex 默认;持久化到 localStorage
+  // ChatPanel 高度(用户拖拽条控制);null = 用组件默认;持久化到 localStorage
   const [chatHeight, setChatHeight] = useState<number | null>(null);
   useEffect(() => {
     const v = localStorage.getItem('chat-panel-height');
@@ -102,6 +142,43 @@ export default function Workbench() {
       localStorage.removeItem('chat-panel-height');
     }
   }, [chatHeight]);
+
+  // 欢迎横幅(挂载后计算,避免 SSR/CSR 时间不一致)
+  const [greeting, setGreeting] = useState<string>('--');
+  const [dateStr, setDateStr] = useState<string>('');
+  useEffect(() => {
+    const now = new Date();
+    const h = now.getHours();
+    setGreeting(h < 5 ? '夜深了' : h < 9 ? '早上好' : h < 12 ? '上午好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好');
+    setDateStr(
+      now.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }),
+    );
+  }, []);
+
+  // 大盘速览(欢迎区右侧胶囊):三大指数 + 涨跌家数 + 两市成交额 + 量能趋势
+  const [marketHeader, setMarketHeader] = useState<MarketHeader | null>(null);
+  const [amountTrend, setAmountTrend] = useState<AmountTrendResponse['items']>([]);
+  const fetchMarketHeader = useCallback(async () => {
+    try {
+      const [ov, st] = await Promise.all([
+        apiGet<MarketOverview>('/market/overview'),
+        apiGet<MarketSentiment>('/market/sentiment'),
+      ]);
+      setMarketHeader({
+        indexes: ov.indexes.filter((x): x is MarketIndex => x != null),
+        upTotal: st?.upTotal ?? null,
+        downTotal: st?.downTotal ?? null,
+        flatTotal: st?.flatTotal ?? null,
+        amountYi: st?.amountYi ?? null,
+        buckets: st?.buckets ?? null,
+      });
+      apiGet<AmountTrendResponse>('/market/amount-trend?days=5')
+        .then((r) => setAmountTrend(r.items ?? []))
+        .catch(() => {});
+    } catch {
+      /* toast 已由拦截器处理 */
+    }
+  }, []);
 
   const fetchBase = useCallback(async () => {
     try {
@@ -153,7 +230,8 @@ export default function Workbench() {
 
   useEffect(() => {
     fetchBase();
-  }, [fetchBase]);
+    fetchMarketHeader();
+  }, [fetchBase, fetchMarketHeader]);
 
   useEffect(() => {
     if (!autoRefresh) {
@@ -161,9 +239,13 @@ export default function Workbench() {
       return;
     }
     fetchBase();
+    fetchMarketHeader();
     setSecondsLeft(15);
     const refresh = setInterval(() => {
-      fetchBase().finally(() => setSecondsLeft(15));
+      fetchBase().finally(() => {
+        fetchMarketHeader();
+        setSecondsLeft(15);
+      });
     }, 15000);
     const tick = setInterval(
       () => setSecondsLeft((s) => Math.max(0, s - 1)),
@@ -173,7 +255,7 @@ export default function Workbench() {
       clearInterval(refresh);
       clearInterval(tick);
     };
-  }, [autoRefresh, fetchBase]);
+  }, [autoRefresh, fetchBase, fetchMarketHeader]);
 
   const selectStock = useCallback((code: string) => {
     setActiveCode(code);
@@ -184,47 +266,11 @@ export default function Workbench() {
     apiGet<Quote>(`/quotes/${encodeURIComponent(code)}`)
       .then(setSelectedQuote)
       .catch(() => {});
-    // 读 IndexedDB 缓存(24h 内命中);无缓存时不主动 fetch — 等用户点「开始分析」
-    void refreshAnalysisFromCache(code);
+    // 无存档回显:分析面板显示空态,由用户手动点「开始分析」(每次实时拉 K + 实时 LLM)
   }, []);
 
-  /** 切股回显:统一走后端 daily_analyses 存档(跨浏览器/换设备一致)。
-     防御:#4 + #5 双校验 — stockCode 不匹配则丢弃/拒绝 */
-  const refreshAnalysisFromCache = useCallback(async (code: string) => {
-    if (!code) return;
-    try {
-      const latest = await apiGet<AnalysisResult>(
-        `/diagnose/stock/${encodeURIComponent(code)}/analysis-latest`,
-      );
-      if (activeCodeRef.current !== code) return;
-      if (latest && latest.stockCode !== code) {
-        console.error(
-          `[isolation] Backend stockCode mismatch: ${latest.stockCode} != ${code}`,
-        );
-        setAnalysis(null);
-        setAnalysisStarted(false);
-        return;
-      }
-      if (latest && (latest.indicators || latest.ai)) {
-        // 有存档 → 显示(展示即最新,无需前端缓存)
-        setAnalysis(latest);
-        setAnalysisStarted(true);
-      } else {
-        setAnalysis(null);
-        setAnalysisStarted(false);
-      }
-    } catch (e) {
-      if (activeCodeRef.current === code) {
-        console.warn(`[analysis-latest] 后端兜底失败(${code}):`, e);
-        setAnalysis(null);
-        setAnalysisStarted(false);
-      }
-    }
-  }, []);
-
-  /** 流式:用户手动点「开始分析/重新分析」 — 默认走后端节点缓存;
-   *  force=true 时调流式端点加 ?force=true,后端跳过节点缓存强制重算 LLM */
-  const refreshAnalysis = useCallback((force = false) => {
+  /** 流式:用户手动点「开始分析/重新分析」 — 每次实时拉 K + 实时 LLM,无节点缓存 */
+  const refreshAnalysis = useCallback(() => {
     const code = activeCode;
     if (!code) return;
     setAnalysisStarted(true);
@@ -232,7 +278,7 @@ export default function Workbench() {
     setAnalysisProgress(null);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 305000);
-    const url = `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api'}/stock/${encodeURIComponent(code)}/analysis/stream${force ? '?force=true' : ''}`;
+    const url = `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000/api'}/stock/${encodeURIComponent(code)}/analysis/stream`;
     consumeAnalysisStream(url, {
       signal: controller.signal,
       onEvent: (evt) => {
@@ -245,9 +291,6 @@ export default function Workbench() {
             latestKlineDate: evt.latest_kline_date ?? prev?.latestKlineDate ?? null,
             indicators: snakeToCamel(evt.data) as AnalysisResult['indicators'],
           } as AnalysisResult));
-        } else if (evt.event === 'cache_hit') {
-          const r = snakeToCamel(evt.data) as AnalysisResult;
-          setAnalysis(r);
         } else if (evt.event === 'ai_started') {
           setAnalysisProgress(0);
         } else if (evt.event === 'ai_progress') {
@@ -288,11 +331,10 @@ export default function Workbench() {
       });
   }, [activeCode]);
 
-  /** 强制重算:调流式端点 ?force=true,后端跳过节点缓存强制重算 LLM。
-   *  后端 save_from_analysis_result 仅在 ai_source=="live" 时落库,失败/超时结果不污染今日行。 */
+  /** 重新分析:每次实时拉 K + 实时 LLM,与 refreshAnalysis 同语义 */
   const forceRefreshAnalysis = useCallback(() => {
     if (!activeCode) return;
-    refreshAnalysis(true);
+    refreshAnalysis();
   }, [activeCode, refreshAnalysis]);
 
   const visibleItems = useMemo(() => {
@@ -329,13 +371,187 @@ export default function Workbench() {
     };
   }, [activePosition]);
 
+  const isDashboardTab = tab === 'watch' || tab === 'favorite' || tab === 'position';
+
+  // 浮动持仓小卡(参考图用户卡):持仓优先,无持仓回退自选;选中股居中抬升
+  const floatCards = useMemo(() => {
+    const base = positions.length > 0
+      ? positions.map((p) => ({ code: p.stockCode, name: p.stockName }))
+      : watchAll.slice(0, 5).map((it) => ({ code: it.code, name: it.name ?? it.code }));
+    return base.slice(0, 5);
+  }, [positions, watchAll]);
+  const floatCenter = useMemo(() => {
+    if (activeCode) {
+      const idx = floatCards.findIndex((c) => c.code === activeCode);
+      if (idx >= 0) return idx;
+    }
+    return Math.max(0, Math.floor(floatCards.length / 2));
+  }, [activeCode, floatCards]);
+
+  /** 统计行第 4 卡:AI 助手对话卡(参考图 AI助手卡样式:气泡 + 时间戳) */
+  const aiHelperCard = (
+    <GlassCard padding="md" className="min-h-[150px] flex flex-col">
+      <div className="flex items-center gap-3">
+        <span className="w-10 h-10 rounded-2xl bg-accent-subtle flex items-center justify-center text-lg shrink-0">🤖</span>
+        <div className="text-xs text-text-sec">AI 助手</div>
+        {analysis?.ai && (
+          <span
+            className={clsx(
+              'ml-auto px-2 py-0.5 rounded-lg text-xs font-semibold border',
+              analysis.ai.view === 'bullish'
+                ? 'text-up border-up/40 bg-up-bg'
+                : analysis.ai.view === 'bearish'
+                  ? 'text-down border-down/40 bg-down-bg'
+                  : 'text-text-sec border-border-def bg-bg-subtle',
+            )}
+          >
+            {analysis.ai.view === 'bullish' ? '看多' : analysis.ai.view === 'bearish' ? '看空' : '中性'}
+          </span>
+        )}
+      </div>
+      <div className="mt-3 flex-1 space-y-2 min-h-0">
+        {/* 用户指令气泡 */}
+        <div className="flex items-start gap-2">
+          <span className="w-6 h-6 rounded-lg bg-accent-subtle flex items-center justify-center text-[11px] shrink-0">✦</span>
+          <div className="flex-1 text-xs text-text-sec bg-bg-subtle rounded-xl rounded-tl-sm px-3 py-2 leading-relaxed line-clamp-2">
+            {activeCode
+              ? `请分析 ${selectedQuote?.name ?? activeCode} 的当前走势与操作参考。`
+              : '在下方列表选择一只股票,AI 将结合技术指标给出白话解读。'}
+          </div>
+        </div>
+        {/* AI 回复气泡 */}
+        <div className="flex items-start gap-2">
+          <span className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-500 to-sky-400 text-white flex items-center justify-center text-[10px] font-bold shrink-0">
+            AI
+          </span>
+          <div className="flex-1 text-xs text-text-pri bg-bg-subtle border border-border-def rounded-xl rounded-tl-sm px-3 py-2 leading-relaxed line-clamp-2">
+            {analysisLoading
+              ? analysisProgress != null
+                ? `思考中…(${analysisProgress}s)`
+                : '分析中…'
+              : analysis?.ai
+                ? analysis.ai.trend
+                : '点「开始分析」获取解读。'}
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <span className="text-[10px] text-text-ter font-mono">
+          {analysis?.latestKlineDate ? `数据截至 ${analysis.latestKlineDate}` : ''}
+        </span>
+        <Button
+          size="sm"
+          className="rounded-full"
+          onClick={() => (analysis?.ai ? forceRefreshAnalysis() : refreshAnalysis())}
+          disabled={analysisLoading || !activeCode}
+        >
+          {analysis?.ai ? '🔄 重新分析' : '✨ 开始分析'}
+        </Button>
+      </div>
+    </GlassCard>
+  );
+
+  /** 第二行左卡:市场情绪区间分布(参考图带图例数字的图表卡) */
+  const sentimentCard = (() => {
+    const b = marketHeader?.buckets ?? null;
+    const bars = b
+      ? [
+          { v: b.limitUp, label: '涨停', tone: 'up' as const },
+          { v: b.up5_10, label: '+5~10', tone: 'up' as const },
+          { v: b.up1_5, label: '+1~5', tone: 'up' as const },
+          { v: b.up0_1, label: '+0~1', tone: 'up' as const },
+          { v: b.flat, label: '平', tone: 'flat' as const },
+          { v: b.down0_1, label: '-0~1', tone: 'down' as const },
+          { v: b.down1_5, label: '-1~5', tone: 'down' as const },
+          { v: b.down5_10, label: '-5~10', tone: 'down' as const },
+          { v: b.limitDown, label: '跌停', tone: 'down' as const },
+        ]
+      : null;
+    const max = bars ? Math.max(...bars.map((x) => x.v), 1) : 1;
+    const toneColor = (tone: 'up' | 'flat' | 'down') =>
+      tone === 'up' ? 'rgba(225, 29, 72, 0.5)' : tone === 'down' ? 'rgba(22, 163, 74, 0.5)' : 'rgba(100, 116, 139, 0.35)';
+    return (
+      <GlassCard padding="md" className="min-h-[150px] flex flex-col">
+        <div className="flex items-center gap-3">
+          <span className="w-10 h-10 rounded-2xl bg-up-bg flex items-center justify-center text-lg shrink-0">🌡️</span>
+          <div className="text-xs text-text-sec">市场情绪 · 全A 区间分布</div>
+          <span className="ml-auto text-xs font-mono text-text-ter">
+            <span className="text-up font-semibold">{marketHeader?.upTotal ?? '--'}</span> 涨 ·{' '}
+            <span className="text-down font-semibold">{marketHeader?.downTotal ?? '--'}</span> 跌
+          </span>
+        </div>
+        <div className="flex items-end gap-1.5 h-16 mt-3" aria-hidden>
+          {bars
+            ? bars.map((x) => (
+                <div key={x.label} className="flex-1 flex flex-col items-center justify-end gap-1 h-full" title={`${x.label} ${x.v} 家`}>
+                  <div
+                    className="w-full rounded-t-[4px] min-w-[4px]"
+                    style={{ height: `${Math.max((x.v / max) * 100, 4)}%`, backgroundColor: toneColor(x.tone) }}
+                  />
+                </div>
+              ))
+            : Array.from({ length: 9 }).map((_, i) => (
+                <div key={i} className="flex-1 h-3 rounded-t-[4px] bg-bg-subtle animate-pulse" />
+              ))}
+        </div>
+        <div className="flex justify-between text-[10px] text-text-ter mt-1.5 font-mono">
+          {bars ? bars.map((x) => <span key={x.label}>{x.label}</span>) : null}
+        </div>
+      </GlassCard>
+    );
+  })();
+
+  /** 第二行右卡:两市量能 5 日趋势(参考图带图例数字的图表卡) */
+  const amountCard = (() => {
+    const max = Math.max(...amountTrend.map((i) => i.volumeYi), 1e-9);
+    const last = amountTrend.length > 0 ? amountTrend[amountTrend.length - 1] : null;
+    return (
+      <GlassCard padding="md" className="min-h-[150px] flex flex-col xl:col-span-2">
+        <div className="flex items-center gap-3">
+          <span className="w-10 h-10 rounded-2xl bg-accent-subtle flex items-center justify-center text-lg shrink-0">💱</span>
+          <div className="text-xs text-text-sec">两市量能 · 近 5 日</div>
+          <span className="ml-auto text-xs font-mono text-text-ter">
+            最新 <span className="text-text-pri font-semibold">{last ? last.volumeYi.toFixed(0) : '--'}</span> 亿手
+          </span>
+        </div>
+        <div className="flex items-end gap-3 h-16 mt-3 px-2" aria-hidden>
+          {amountTrend.length > 0
+            ? amountTrend.map((it) => (
+                <div key={it.date} className="flex-1 flex flex-col items-center justify-end gap-1 h-full" title={`${it.date} ${it.volumeYi.toFixed(0)} 亿手`}>
+                  <div
+                    className="w-3/5 rounded-t-[5px] bg-accent/35"
+                    style={{ height: `${Math.max((it.volumeYi / max) * 100, 6)}%` }}
+                  />
+                </div>
+              ))
+            : Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex-1 h-3 rounded-t-[5px] bg-bg-subtle animate-pulse" />
+              ))}
+        </div>
+        <div className="flex justify-between text-[10px] text-text-ter mt-1.5 font-mono px-2">
+          {amountTrend.length > 0
+            ? amountTrend.map((it) => <span key={it.date}>{it.date.slice(5)}</span>)
+            : <span>加载中…</span>}
+        </div>
+      </GlassCard>
+    );
+  })();
+
   return (
-    <main className="h-screen flex flex-col bg-bg-base text-text-pri p-5 gap-4 overflow-hidden">
-      {/* 顶部 tab */}
-      <header className="flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-bold mr-3">买股工具室</h1>
-          <nav className="flex items-center gap-1 rounded-2xl bg-white/5 p-1">
+    <main className="min-h-screen w-full flex justify-center px-4 py-6">
+      <div
+        className="w-full max-w-[1720px] rounded-[28px] overflow-hidden shadow-2xl shadow-blue-300/40 flex flex-col"
+        style={{ background: 'linear-gradient(165deg, #6f9fec 0%, #9cc0f5 28%, #c9def9 62%, #e9f2fe 100%)' }}
+      >
+        {/* 导航栏(容器蓝底内,参考图 Clario 顶栏) */}
+        <header className="relative z-20 flex items-center justify-between gap-3 px-6 pt-5 flex-wrap">
+          <div className="flex items-center gap-2.5">
+            <span className="w-9 h-9 rounded-xl bg-white/90 text-blue-600 flex items-center justify-center text-lg shadow-sm">
+              📈
+            </span>
+            <span className="text-lg font-bold text-white drop-shadow-sm whitespace-nowrap">买股工具室</span>
+          </div>
+          <nav className="flex items-center gap-1.5 flex-wrap">
             {TABS.map((t) => {
               const isActive = tab === t.key;
               return (
@@ -343,14 +559,16 @@ export default function Workbench() {
                   key={t.key}
                   onClick={() => setTab(t.key)}
                   className={clsx(
-                    'relative px-4 py-1.5 text-sm rounded-xl transition-colors',
-                    isActive ? 'text-text-pri' : 'text-text-sec hover:text-text-pri',
+                    'relative px-3.5 py-1.5 text-sm rounded-full transition-colors whitespace-nowrap',
+                    isActive
+                      ? 'text-blue-600 font-semibold'
+                      : 'text-white/85 hover:text-white hover:bg-white/15',
                   )}
                 >
                   {isActive && (
                     <motion.span
                       layoutId="tab-pill"
-                      className="liquid-glass absolute inset-0 rounded-xl bg-accent-subtle border border-accent/25"
+                      className="absolute inset-0 rounded-full bg-white shadow-md shadow-blue-900/15"
                       transition={{ type: 'spring', stiffness: 400, damping: 32 }}
                     />
                   )}
@@ -359,59 +577,401 @@ export default function Workbench() {
               );
             })}
           </nav>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setAutoRefresh((v) => !v)}
-            title={autoRefresh ? '点击关闭自动刷新' : '点击开启自动刷新(15s 一次)'}
-            className={clsx(
-              'flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium border transition-colors',
-              autoRefresh
-                ? 'border-up/40 bg-up-bg text-up'
-                : 'border-white/10 bg-white/5 text-text-sec hover:bg-white/10',
-            )}
-          >
-            <span
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setAutoRefresh((v) => !v)}
+              title={autoRefresh ? '点击关闭自动刷新' : '点击开启自动刷新(15s 一次)'}
               className={clsx(
-                'w-2 h-2 rounded-full',
-                autoRefresh ? 'bg-up animate-pulse' : 'bg-text-ter/50',
+                'flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors',
+                autoRefresh
+                  ? 'bg-white text-blue-600 font-semibold shadow-sm'
+                  : 'bg-white/15 text-white/85 hover:bg-white/25',
               )}
-            />
-            自动刷新{' '}
-            {autoRefresh ? (secondsLeft > 0 ? `${secondsLeft}s` : '刷新中…') : 'OFF'}
-          </button>
-          <span className="text-xs text-text-ter">数据源:新浪 · AI 本地配置</span>
+            >
+              <span
+                className={clsx(
+                  'w-2 h-2 rounded-full',
+                  autoRefresh ? 'bg-accent animate-pulse' : 'bg-white/50',
+                )}
+              />
+              自动刷新{' '}
+              {autoRefresh ? (secondsLeft > 0 ? `${secondsLeft}s` : '刷新中…') : 'OFF'}
+            </button>
+            <span className="text-xs text-white/70 hidden lg:inline">数据源:新浪 · AI 本地配置</span>
+          </div>
+        </header>
+
+        {/* Hero 问候区(容器蓝底内,参考图「所有客户数据」横幅) */}
+        <section className="relative z-10 px-6 pt-5 pb-24">
+          {/* 玻璃扇片装饰 */}
+          <div className="absolute right-64 top-1/2 -translate-y-1/2 hidden xl:flex items-center pointer-events-none">
+            {[-24, -8, 8, 24].map((deg) => (
+              <div
+                key={deg}
+                className="w-12 h-24 rounded-2xl bg-white/30 border border-white/45 backdrop-blur-sm -ml-2 first:ml-0"
+                style={{ transform: `rotate(${deg}deg) translateY(${Math.abs(deg) / 2.4}px)` }}
+              />
+            ))}
+          </div>
+          <div className="absolute -right-16 -bottom-16 w-72 h-72 rounded-full bg-white/20 blur-3xl pointer-events-none" />
+          <p className="text-[11px] font-semibold text-white/75 tracking-[0.2em] uppercase relative">持仓总览 · 实时行情</p>
+          <h2 className="text-[30px] leading-tight font-bold text-white mt-1.5 relative drop-shadow-sm">
+            {greeting},祝盯盘顺利
+          </h2>
+          <div className="mt-4 flex gap-2 relative flex-wrap">
+            <span className="px-3 py-1 rounded-full bg-white/90 text-blue-600 text-xs font-semibold shadow-sm">{dateStr}</span>
+            <span className="px-3 py-1 rounded-full bg-white/20 backdrop-blur text-xs text-white">📈 自选 {watchAll.length}</span>
+            <span className="px-3 py-1 rounded-full bg-white/20 backdrop-blur text-xs text-white">💼 持仓 {positions.length}</span>
+            <span className="px-3 py-1 rounded-full bg-white/20 backdrop-blur text-xs text-white">⭐ 特别关注 {watchAll.filter((it) => it.isFavorite).length}</span>
+          </div>
+
+          {/* 右侧三大指数状态胶囊(参考图「状态/涨跌」pills),点击进大盘页 */}
+          <div className="absolute right-6 top-5 hidden lg:flex flex-col gap-2 items-end">
+            {(marketHeader?.indexes ?? []).slice(0, 3).map((idx) => (
+              <button
+                key={idx.code}
+                onClick={() => setTab('market')}
+                className="flex items-center gap-2 rounded-full bg-white/18 backdrop-blur px-3 py-1.5 text-xs text-white hover:bg-white/28 transition-colors"
+                title={`${idx.name} · 点击查看大盘详情`}
+              >
+                <span className="font-semibold">{idx.name}</span>
+                <span className="font-mono">{idx.currentPrice}</span>
+                <span className={clsx('font-mono font-semibold', idx.changePct > 0 ? 'text-rose-100' : 'text-emerald-100')}>
+                  {idx.changePct > 0 ? '+' : ''}
+                  {idx.changePct.toFixed(2)}%
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* 浮动持仓小卡:骑跨蓝/白交界(参考图联系人卡行) */}
+        <div className="relative z-20 px-6 -mt-16 flex justify-center gap-3 flex-wrap">
+          {isDashboardTab && floatCards.length === 0 && (
+            <div className="bg-white/85 rounded-2xl px-5 py-3 text-sm text-text-ter shadow-lg shadow-blue-900/10">
+              添加自选 / 持仓后,这里会展示股票小卡
+            </div>
+          )}
+          {isDashboardTab &&
+            floatCards.map((c, i) => {
+              const q = quotesMap[c.code] ?? null;
+              const halted = q != null && Number(q.currentPrice) === 0;
+              const isCenter = i === floatCenter;
+              return (
+                <button
+                  key={c.code}
+                  onClick={() => selectStock(c.code)}
+                  className={clsx(
+                    'bg-white rounded-2xl px-4 py-3 flex items-center gap-3 text-left transition-all',
+                    isCenter
+                      ? 'ring-2 ring-blue-300 shadow-xl shadow-blue-900/15 scale-[1.05]'
+                      : 'shadow-lg shadow-blue-900/10 hover:-translate-y-0.5',
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'w-10 h-10 rounded-xl bg-gradient-to-br text-white text-base font-bold flex items-center justify-center shrink-0 shadow-sm',
+                      chipColor(c.code),
+                    )}
+                  >
+                    {(c.name ?? c.code).slice(0, 1)}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1.5">
+                      <span className="text-sm font-semibold text-text-pri truncate max-w-[8rem]">{c.name ?? c.code}</span>
+                      <span className="text-[10px] text-text-ter font-mono">{c.code}</span>
+                    </span>
+                    <span className="flex items-center gap-2 mt-0.5">
+                      <span className="text-sm font-mono font-semibold text-text-pri">
+                        {!q ? '--' : halted ? '停牌' : q.currentPrice}
+                      </span>
+                      {q && !halted && (
+                        <span
+                          className={clsx(
+                            'px-1.5 py-px rounded-md text-[11px] font-mono font-semibold',
+                            q.changePct > 0 ? 'bg-up-bg text-up' : q.changePct < 0 ? 'bg-down-bg text-down' : 'bg-bg-subtle text-text-ter',
+                          )}
+                        >
+                          {q.changePct > 0 ? '+' : ''}
+                          {q.changePct.toFixed(2)}%
+                        </span>
+                      )}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
         </div>
-      </header>
 
-      {/* 三区主体 */}
-      <div className="flex flex-1 gap-4 min-h-0">
-        {/* 左 aside:大盘 / 设置 / 选股 / 观察池 Tab 时收起,中间区占满宽度 */}
-        {tab !== 'market' && tab !== 'settings' && tab !== 'screener' && tab !== 'watchlist' && (
-          <aside className="w-72 shrink-0 min-h-0">
-            <WatchList
-              items={visibleItems}
-              activeCode={activeCode}
-              favoriteOnly={tab === 'favorite'}
-              onSelect={selectStock}
-              onChanged={fetchBase}
-            />
-          </aside>
-        )}
-
-        {/* 中间 K线区 */}
-        <section className="flex-1 min-w-0 min-h-0 flex flex-col gap-3">
+        {/* 白色内容区(嵌在蓝色容器下半部,参考图白色卡片区) */}
+        <div className="relative z-10 bg-[#f5f9fe] px-5 pb-6 pt-6 flex flex-col gap-5">
           <AnimatePresence mode="wait">
             <motion.div
               key={tab}
-              initial={{ opacity: 0, x: 24, filter: 'blur(6px)' }}
-              animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
-              exit={{ opacity: 0, x: -24, filter: 'blur(6px)' }}
+              initial={{ opacity: 0, y: 16, filter: 'blur(6px)' }}
+              animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, y: -12, filter: 'blur(6px)' }}
               transition={{ duration: 0.26, ease: 'easeOut' }}
-              className="flex-1 min-h-0 flex flex-col gap-3"
+              className="flex-1 min-h-0 flex flex-col gap-5"
             >
-              {tab === 'screener' ? (
+              {isDashboardTab ? (
+                <>
+                  {/* 22:00 今日反思 + 消息面提示(改动 C);组件内部已做 22:00 与当日交易守卫,
+                      非触发条件时返回 null,无需在此判断 */}
+                  <ReflectionCard />
+
+                  {/* 统计卡行:总市值 / 总浮盈 / 今日盈亏 / AI 助手(参考图 4 卡行) */}
+                  {positions.length > 0 ? (
+                    <PositionStatsCards positions={positions} extra={aiHelperCard} />
+                  ) : (
+                    <div className="grid grid-cols-2 xl:grid-cols-4 gap-5">
+                      {[
+                        { label: '上涨家数', value: marketHeader?.upTotal, cls: 'text-up', icon: '🔺', chip: 'bg-up-bg' },
+                        { label: '下跌家数', value: marketHeader?.downTotal, cls: 'text-down', icon: '🔻', chip: 'bg-down-bg' },
+                        { label: '平盘家数', value: marketHeader?.flatTotal, cls: 'text-text-pri', icon: '➖', chip: 'bg-bg-subtle' },
+                        {
+                          label: '两市成交额',
+                          value: marketHeader?.amountYi,
+                          cls: 'text-text-pri',
+                          icon: '💱',
+                          chip: 'bg-accent-subtle',
+                          fmt: (v: number) => `${decimal(v)} 亿`,
+                        },
+                      ].map((c) => (
+                        <GlassCard key={c.label} padding="md" className="min-h-[150px] flex flex-col">
+                          <div className="flex items-center gap-3">
+                            <span className={`w-10 h-10 rounded-2xl flex items-center justify-center text-lg shrink-0 ${c.chip}`}>
+                              {c.icon}
+                            </span>
+                            <div className="text-xs text-text-sec">{c.label}</div>
+                          </div>
+                          <div className={clsx('text-[26px] font-mono font-bold mt-3 leading-none', c.cls)}>
+                            {c.value == null ? '--' : c.fmt ? c.fmt(c.value) : c.value}
+                          </div>
+                          <div className="text-xs text-text-ter mt-1.5">暂无持仓,展示市场情绪</div>
+                        </GlassCard>
+                      ))}
+                      {aiHelperCard}
+                    </div>
+                  )}
+
+                  {/* 第二行:市场情绪 + 两市量能(参考图带图例数字的图表卡) */}
+                  <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+                    {sentimentCard}
+                    {amountCard}
+                  </div>
+
+                  {/* K线大卡(2/3)+ AI 双卡列(1/3) */}
+                  <div className="grid grid-cols-1 xl:grid-cols-3 gap-5 items-start">
+                    <div className="xl:col-span-2 flex flex-col gap-4 min-w-0">
+                      {tab === 'position' && positionView === 'table' ? (
+                        <PositionSummaryTable positions={positions} onSelect={selectStock} />
+                      ) : tab === 'position' && positionView === 'flow' && activeCode ? (
+                        <GlassCard padding="md">
+                          <StockFlowTab
+                            stockCode={activeCode}
+                            stockName={selectedQuote?.name ?? null}
+                          />
+                        </GlassCard>
+                      ) : (
+                        <>
+                          {activeCode ? (
+                            <GlassCard padding="md" className="flex items-center justify-between gap-3 flex-wrap shrink-0">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <span
+                                  className={clsx(
+                                    'w-11 h-11 rounded-2xl bg-gradient-to-br text-white text-base font-bold flex items-center justify-center shrink-0 shadow-sm shadow-blue-500/25',
+                                    chipColor(activeCode),
+                                  )}
+                                >
+                                  {(selectedQuote?.name ?? activeCode).slice(0, 1)}
+                                </span>
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2.5 min-w-0 flex-wrap">
+                                    <span className="font-semibold text-text-pri text-lg truncate">
+                                      {selectedQuote?.name ?? activeCode}
+                                    </span>
+                                    <span className="text-xs text-text-ter font-mono">{activeCode}</span>
+                                    {activePosition && (
+                                      <span className="text-[10px] px-2 py-px rounded-full bg-accent-subtle text-accent border border-accent/25 font-medium">
+                                        已持仓
+                                      </span>
+                                    )}
+                                  </div>
+                                  {positionPnl && (
+                                    <div className="flex items-center gap-3 mt-1 text-xs font-mono flex-wrap">
+                                      <span className={pctClass(positionPnl.todayPnl ?? undefined)}>
+                                        {positionPnl.todayPnl != null
+                                          ? `今日 ${positionPnl.todayPnl >= 0 ? '+' : ''}¥${positionPnl.todayPnl.toFixed(2)}`
+                                          : '今日 --'}
+                                      </span>
+                                      <span className={pctClass(positionPnl.floatingPnl ?? undefined)}>
+                                        {positionPnl.floatingPnl != null
+                                          ? `浮盈 ${positionPnl.floatingPnl >= 0 ? '+' : ''}¥${positionPnl.floatingPnl.toFixed(2)} (${
+                                              positionPnl.ratioPct != null
+                                                ? `${positionPnl.ratioPct >= 0 ? '+' : ''}${positionPnl.ratioPct.toFixed(2)}%`
+                                                : '--'
+                                            })`
+                                          : '浮盈 --'}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-4 flex-wrap">
+                                <div className="text-right">
+                                  <div className="text-3xl font-mono font-bold text-text-pri leading-tight">
+                                    {selectedQuote
+                                      ? Number(selectedQuote.currentPrice) === 0
+                                        ? '停牌'
+                                        : selectedQuote.currentPrice
+                                      : '--'}
+                                  </div>
+                                  <div className={`text-sm font-mono ${pctClass(selectedQuote?.changePct)}`}>
+                                    {selectedQuote
+                                      ? Number(selectedQuote.currentPrice) === 0
+                                        ? '停牌'
+                                        : `${selectedQuote.changePct > 0 ? '+' : ''}${selectedQuote.changePct.toFixed(2)}%`
+                                      : '行情加载中'}
+                                  </div>
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                  <div className="flex gap-2">
+                                    <Button size="sm" variant="secondary" onClick={() => setShowCalc(true)}>
+                                      🧮 成本计算器
+                                    </Button>
+                                    <Button size="sm" variant="secondary" onClick={() => setShowHealth(true)}>
+                                      🩺 持仓分析
+                                    </Button>
+                                  </div>
+                                  <Link
+                                    href={activeCode
+                                      ? `/replay-history?code=${encodeURIComponent(activeCode)}`
+                                      : '/replay-history'}
+                                  >
+                                    <Button size="sm" variant="secondary" className="w-full">
+                                      📊 复盘历史
+                                    </Button>
+                                  </Link>
+                                </div>
+                              </div>
+                            </GlassCard>
+                          ) : (
+                            <GlassCard padding="lg" className="shrink-0 text-center">
+                              <p className="text-text-ter text-sm">↓ 从下方盯盘列表选择一只自选 / 持仓股票</p>
+                            </GlassCard>
+                          )}
+
+                          <div className="flex items-center justify-between gap-2 shrink-0 flex-wrap">
+                            {/* 左侧:持仓 tab 视图切换 */}
+                            {tab === 'position' && (
+                              <div className="flex items-center gap-1.5">
+                                {(
+                                  [
+                                    { key: 'kline', label: '📈 K 线' },
+                                    { key: 'flow', label: '📋 流水' },
+                                    { key: 'table', label: '📋 持仓表' },
+                                  ] as const
+                                ).map((v) => (
+                                  <button
+                                    key={v.key}
+                                    onClick={() => setPositionView(v.key)}
+                                    disabled={v.key === 'flow' && !activeCode}
+                                    className={clsx(
+                                      'px-3 py-1.5 text-sm rounded-full transition-colors border',
+                                      positionView === v.key
+                                        ? 'bg-accent text-white border-accent shadow-sm shadow-blue-500/25'
+                                        : 'bg-bg-surface text-text-sec hover:text-text-pri border-border-def disabled:opacity-40 disabled:cursor-not-allowed',
+                                    )}
+                                  >
+                                    {v.label}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {/* 右侧:周期切换(持仓表/流水视图下隐藏) */}
+                            {!(tab === 'position' && (positionView === 'table' || positionView === 'flow')) && (
+                              <div className="flex items-center gap-1.5">
+                                {PERIODS.map((p) => (
+                                  <button
+                                    key={p.key}
+                                    onClick={() => setPeriod(p.key)}
+                                    className={clsx(
+                                      'px-3 py-1.5 text-sm rounded-full transition-colors border',
+                                      period === p.key
+                                        ? 'bg-accent text-white border-accent shadow-sm shadow-blue-500/25'
+                                        : 'bg-bg-surface text-text-sec hover:text-text-pri border-border-def',
+                                    )}
+                                  >
+                                    {p.label}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {activeCode ? (
+                            <GlassCard padding="sm" className="w-full">
+                              {period === 'intraday' ? (
+                                <IntradayChart stockCode={activeCode} height={420} />
+                              ) : (
+                                <>
+                                  {period === 'daily' && (
+                                    <div className="mb-2">
+                                      <CompareChart stockCode={activeCode} />
+                                    </div>
+                                  )}
+                                  <KLineChart stockCode={activeCode} period={period} showVolume height={420} />
+                                </>
+                              )}
+                            </GlassCard>
+                          ) : (
+                            <GlassCard padding="lg" className="w-full flex items-center justify-center min-h-[320px]">
+                              <p className="text-text-ter text-sm">
+                                {tab === 'position' && positionView === 'flow'
+                                  ? '先选一只股票才能查看流水与复盘'
+                                  : '选择股票后显示 K 线图'}
+                              </p>
+                            </GlassCard>
+                          )}
+                        </>
+                      )}
+                    </div>
+
+                    {/* 右列:AI 分析 + AI 问一问 */}
+                    <div className="flex flex-col gap-4 min-w-0">
+                      <AnalysisPanel
+                        analysis={analysis}
+                        started={analysisStarted}
+                        loading={analysisLoading}
+                        aiProgress={analysisProgress}
+                        onRefresh={() => refreshAnalysis()}
+                        onForceRefresh={forceRefreshAnalysis}
+                        onRetry={() => refreshAnalysis()}
+                      />
+                      <ChatPanel
+                        stockCode={activeCode}
+                        stockName={selectedQuote?.name ?? null}
+                        avgCost={activePosition ? Number(activePosition.avgCost) : null}
+                        currentPrice={selectedQuote ? Number(selectedQuote.currentPrice) : null}
+                        changePct={selectedQuote?.changePct != null ? Number(selectedQuote.changePct) : null}
+                        height={chatHeight}
+                        onHeightChange={setChatHeight}
+                      />
+                    </div>
+                  </div>
+
+                  {/* 盯盘列表卡(全宽) */}
+                  <WatchList
+                    items={visibleItems}
+                    activeCode={activeCode}
+                    favoriteOnly={tab === 'favorite'}
+                    onSelect={selectStock}
+                    onChanged={fetchBase}
+                  />
+                </>
+              ) : tab === 'screener' ? (
                 <ScreenerPanel />
               ) : tab === 'watchlist' ? (
                 <WatchlistPanel />
@@ -421,222 +981,12 @@ export default function Workbench() {
                 <NewsFeed />
               ) : tab === 'market' ? (
                 <MarketOverviewPage />
-              ) : tab === 'settings' ? (
-                <SettingsPanel />
               ) : (
-                <>
-                  {tab === 'position' && positionView === 'table' ? (
-                    <PositionStatsCards positions={positions} />
-                  ) : activeCode ? (
-                    <GlassCard padding="sm" className="flex items-center justify-between shrink-0 min-h-[80px]">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <span className="font-semibold text-text-pri truncate">
-                            {selectedQuote?.name ?? activeCode}
-                          </span>
-                          <span className="text-xs text-text-ter font-mono">{activeCode}</span>
-                          {activePosition && (
-                            <span className="text-[10px] px-1.5 py-px rounded bg-accent-subtle text-accent border border-accent/25">
-                              已持仓
-                            </span>
-                          )}
-                        </div>
-                        {positionPnl && (
-                          <div className="flex items-center gap-3 mt-0.5 text-xs font-mono">
-                            <span className={pctClass(positionPnl.todayPnl ?? undefined)}>
-                              {positionPnl.todayPnl != null
-                                ? `今日 ${positionPnl.todayPnl >= 0 ? '+' : ''}¥${positionPnl.todayPnl.toFixed(2)}`
-                                : '今日 --'}
-                            </span>
-                            <span
-                              className={pctClass(positionPnl.floatingPnl ?? undefined)}
-                            >
-                              {positionPnl.floatingPnl != null
-                                ? `浮盈 ${positionPnl.floatingPnl >= 0 ? '+' : ''}¥${positionPnl.floatingPnl.toFixed(2)} (${
-                                    positionPnl.ratioPct != null
-                                      ? `${positionPnl.ratioPct >= 0 ? '+' : ''}${positionPnl.ratioPct.toFixed(2)}%`
-                                      : '--'
-                                  })`
-                                : '浮盈 --'}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="text-xl font-mono font-semibold text-text-pri">
-                          {selectedQuote
-                            ? Number(selectedQuote.currentPrice) === 0
-                              ? '停牌'
-                              : selectedQuote.currentPrice
-                            : '--'}
-                        </div>
-                        <div className={`text-sm font-mono ${pctClass(selectedQuote?.changePct)}`}>
-                          {selectedQuote
-                            ? Number(selectedQuote.currentPrice) === 0
-                              ? '停牌'
-                              : `${selectedQuote.changePct > 0 ? '+' : ''}${selectedQuote.changePct.toFixed(2)}%`
-                            : '行情加载中'}
-                        </div>
-                        <div className="flex justify-end gap-2 mt-2">
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => setShowCalc(true)}
-                          >
-                            🧮 成本计算器
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => setShowHealth(true)}
-                          >
-                            🩺 持仓分析
-                          </Button>
-                          <Link
-                            href={activeCode
-                              ? `/replay-history?code=${encodeURIComponent(activeCode)}`
-                              : '/replay-history'}
-                          >
-                            <Button size="sm" variant="secondary">
-                              📊 复盘历史
-                            </Button>
-                          </Link>
-                        </div>
-                      </div>
-                    </GlassCard>
-                  ) : (
-                    <GlassCard padding="lg" className="shrink-0 text-center">
-                      <p className="text-text-ter text-sm">← 从左侧选择一只自选 / 持仓股票</p>
-                    </GlassCard>
-                  )}
-
-                  <div className="flex items-center justify-between gap-2 shrink-0">
-                    {/* 左侧:持仓 tab 视图切换 */}
-                    {tab === 'position' && (
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          onClick={() => setPositionView('kline')}
-                          className={clsx(
-                            'px-3 py-1.5 text-sm rounded-xl transition-colors ',
-                            positionView === 'kline'
-                              ? 'bg-accent-subtle text-accent border border-accent/25 liquid-glass'
-                              : 'bg-white/5 text-text-sec hover:text-text-pri border border-white/5',
-                          )}
-                        >
-                          📈 K 线
-                        </button>
-                        <button
-                          onClick={() => setPositionView('flow')}
-                          disabled={!activeCode}
-                          className={clsx(
-                            'px-3 py-1.5 text-sm rounded-xl transition-colors ',
-                            positionView === 'flow'
-                              ? 'bg-accent-subtle text-accent border border-accent/25 liquid-glass'
-                              : 'bg-white/5 text-text-sec hover:text-text-pri border border-white/5 disabled:opacity-40 disabled:cursor-not-allowed',
-                          )}
-                        >
-                          📋 流水
-                        </button>
-                        <button
-                          onClick={() => setPositionView('table')}
-                          className={clsx(
-                            'px-3 py-1.5 text-sm rounded-xl transition-colors ',
-                            positionView === 'table'
-                              ? 'bg-accent-subtle text-accent border border-accent/25 liquid-glass'
-                              : 'bg-white/5 text-text-sec hover:text-text-pri border border-white/5',
-                          )}
-                        >
-                          📋 持仓表
-                        </button>
-                      </div>
-                    )}
-                    {/* 右侧:周期切换(持仓表视图下隐藏,切回 K 线再显示) */}
-                    {!(tab === 'position' && (positionView === 'table' || positionView === 'flow')) && (
-                      <div className="flex items-center gap-1.5">
-                        {PERIODS.map((p) => (
-                          <button
-                            key={p.key}
-                            onClick={() => setPeriod(p.key)}
-                            className={clsx(
-                              'px-3 py-1.5 text-sm rounded-xl transition-colors',
-                              period === p.key
-                                ? 'bg-accent-subtle text-accent border border-accent/25 liquid-glass'
-                                : 'bg-white/5 text-text-sec hover:text-text-pri border border-white/5',
-                            )}
-                          >
-                            {p.label}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {tab === 'position' && positionView === 'table' ? (
-                    <PositionSummaryTable positions={positions} onSelect={selectStock} />
-                  ) : tab === 'position' && positionView === 'flow' && activeCode ? (
-                    <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-                      <StockFlowTab
-                        stockCode={activeCode}
-                        stockName={selectedQuote?.name ?? null}
-                      />
-                    </div>
-                  ) : activeCode ? (
-                    <div className="flex-1 min-h-0 overflow-y-auto">
-                      {period === 'intraday' ? (
-                        <IntradayChart stockCode={activeCode} height={420} />
-                      ) : (
-                        <>
-                          {period === 'daily' && (
-                            <div className="mb-2">
-                              <CompareChart stockCode={activeCode} />
-                            </div>
-                          )}
-                          <KLineChart stockCode={activeCode} period={period} showVolume height={420} />
-                        </>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="flex-1 min-h-0 liquid-glass rounded-2xl flex items-center justify-center">
-                      <p className="text-text-ter text-sm">
-                        {tab === 'position' && positionView === 'flow'
-                          ? '先选一只股票才能查看流水与复盘'
-                          : '选择股票后显示 K 线图'}
-                      </p>
-                    </div>
-                  )}
-                </>
+                <SettingsPanel />
               )}
             </motion.div>
           </AnimatePresence>
-        </section>
-
-        {/* 右侧:上操作提示 / 下 AI 对话 — 大盘 / 设置 / 选股 / 观察池 Tab 时收起 */}
-        {tab !== 'market' && tab !== 'settings' && tab !== 'screener' && tab !== 'watchlist' && (
-          <aside className="w-[22rem] shrink-0 flex flex-col gap-3 min-h-0">
-            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-<AnalysisPanel
-                  analysis={analysis}
-                  started={analysisStarted}
-                  loading={analysisLoading}
-                  aiProgress={analysisProgress}
-                  onRefresh={() => refreshAnalysis(false)}
-                  onForceRefresh={forceRefreshAnalysis}
-                  onRetry={() => refreshAnalysis(true)}
-                />
-            </div>
-            <div className="flex-none min-h-0">
-              <ChatPanel
-                stockCode={activeCode}
-                stockName={selectedQuote?.name ?? null}
-                avgCost={activePosition ? Number(activePosition.avgCost) : null}
-                currentPrice={selectedQuote ? Number(selectedQuote.currentPrice) : null}
-                changePct={selectedQuote?.changePct != null ? Number(selectedQuote.changePct) : null}
-                height={chatHeight}
-                onHeightChange={setChatHeight}
-              />
-            </div>
-          </aside>
-        )}
+        </div>
       </div>
 
       <LiquidModal
