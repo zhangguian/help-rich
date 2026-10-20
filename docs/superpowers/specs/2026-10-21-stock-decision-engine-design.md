@@ -230,9 +230,10 @@ TPlan = {
     "industry": str | None,
     "change_pct": float | None,      # 行业等权 K 线近 1 日涨幅
     "vs_market_pct": float | None,   # 行业涨幅 - 大盘涨幅
-    "fund_net_yi": float | None,     # 板块资金净流入（亿元）
+    "fund_net_yi": float | None,     # 板块资金净流入（亿元）—— 口径不匹配时为 None
     "fund_direction": "in" | "out" | None,
     "state": "leading" | "warm" | "lagging" | "cold" | None,
+    "leading": [{"name": str, "net_yi": float}],   # 今日资金主攻板块 Top3
     "summary": str,
   },
   "stock_flow": {
@@ -511,10 +512,11 @@ loss   → '解套参考'
 
 ### 7.1 大盘 `market`
 
-数据源：`fetch_market_sentiment()`（全市场 5568 只，60s 缓存）。
+数据源：`fetch_market_sentiment()`（全市场 5568 只，60s 缓存）+ `get_market_overview()`（取上证指数真实涨跌幅）。
 
 ```
-up_total, down_total, flat_total, limit_up, limit_down, sample_size 取自接口
+up_total, down_total, flat_total, limit_up, limit_down, sample_size 取自 sentiment 接口
+change_pct   = get_market_overview() 的 indexes[0].change_pct（第一个非空者）
 state:
   up_total > down_total * 1.5                        → 'warm'
   down_total > up_total * 1.5                        → 'cold'
@@ -524,16 +526,27 @@ summary = f'大盘偏暖/偏冷/分化:涨 {up_total} / 跌 {down_total},涨停 
 
 ### 7.2 行业 `sector`
 
-数据源：`resolve_industry(code)` → 行业名；`get_sector_kline(industry)` → 行业等权 K 线；
-`get_sector_fund_flow()` → 板块资金流排行（按名称匹配）。
+> ⚠️ **两套行业命名口径必须分清**（实现时的头号坑）：
+>
+> | 口径 | 形态 | 适用 |
+> | --- | --- | --- |
+> | **证监会行业名**（离线表 baostock） | `C39计算机、通信和其他电子设备制造业` | `get_sector_kline()` 行业等权 K 线 |
+> | **新浪行业板块名** | `电子元件` | `get_sector_fund_flow()` 板块资金流 |
+>
+> `resolve_industry()` 优先返回证监会口径（离线表命中时），
+> 因此**用它的返回值去匹配板块资金流通常落空** —— 落空就如实降级，**不得编造**。
+
+数据源：`resolve_industry(code)` → 行业名；`get_sector_kline(industry)` → 行业等权 K 线（`items` 只有 `date`/`close`）；
+`get_sector_fund_flow(fenlei=1)` → 新浪行业板块资金流排行。
 
 ```
-change_pct    = 行业等权 K 线最近一根涨幅
-vs_market_pct = change_pct - 大盘指数涨幅
-fund_net_yi   = 板块资金流排行中同名板块的 netamount_yi（找不到 → None）
-fund_direction= 'in'  if fund_net_yi is not None and fund_net_yi > 0
-               'out' if fund_net_yi is not None and fund_net_yi < 0
-               None  if fund_net_yi is None
+change_pct    = 行业等权 K 线最后一根 close / 倒数第二根 close - 1
+vs_market_pct = change_pct - 大盘 change_pct
+fund_net_yi   = 板块资金流排行中**同名**板块的 netamount_yi（找不到 → None）
+fund_direction= 'in'  if fund_net_yi > 0 / 'out' if < 0 / None if 无
+
+leading       = 排行中 netamount_yi 为正的前 3 个板块 [{name, net_yi}]
+                （该口径**恒可用**,回答「今天钱在往哪走」,不依赖行业名匹配）
 
 state:
   change_pct > 1   → 'leading'
@@ -595,8 +608,8 @@ GET /api/stock/{stock_code}/decision
 
 | 码 | 条件 | 含义 |
 | --- | --- | --- |
-| 400 | `stock_code` 格式非法 | `{"code":"INVALID_CODE","message":"股票代码格式不正确"}` |
-| 503 | K 线完全不可用（无法做任何判断） | `{"code":"DATA_SOURCE_UNAVAILABLE","message":"K 线数据源不可用,无法生成决策"}` |
+| 422 | `stock_code` 格式非法 | `{"code":"INVALID_STOCK_CODE","message":"代码格式应为 6 位数字 + .SH/.SZ"}`（沿用 `stock.py` 既有 `_check_code`） |
+| 502 | K 线完全不可用 | `{"code":"DATA_SOURCE_UNAVAILABLE","message":"..."}`（沿用 `_load_klines`） |
 
 **特性**
 
