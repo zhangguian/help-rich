@@ -1540,7 +1540,6 @@ async def decision(code: str) -> dict:
     position_status, _ = _resolve_position_status(position, current_price)
 
     from app.services.decision_service import DecisionContext, build_decision
-    from app.services.market_context_service import get_market_context
 
     indicators = compute_indicators(klines)
     prev_close = None
@@ -1582,7 +1581,8 @@ async def decision(code: str) -> dict:
     return {"decision": build_decision(ctx)}
 ```
 
-同时在 `backend/app/api/stock.py` 顶部 import 区补：
+同时在 `backend/app/api/stock.py` 顶部 import 区补（**必须是模块级 import** —— 测试用
+`patch("app.api.stock.get_market_context")` 打补丁；若改成函数内 import，patch 会被绕过、测试失效）：
 
 ```python
 from app.services.ta_service import compute_indicators
