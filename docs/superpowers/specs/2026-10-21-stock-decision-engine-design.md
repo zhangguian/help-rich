@@ -1,7 +1,7 @@
 # 盯盘决策引擎设计（Deterministic Decision Engine）
 
 > 日期：2026-10-21
-> 状态：设计已批准，待写实施计划
+> 状态：设计已批准，实施中（v0.9 修订：§6.2 补 G5 T 区间宽度校验、止损提示归位到 Decision 顶层 `stop_loss`）
 > 背景：用户诉求「股民盯盘，还是不知道这只股票什么时候该买什么时候该卖，什么时候适合做T，亏损时该怎么做，盈利是该怎么做，这股票的市场情况如何，现在的走势如何」
 > 原则：遵循项目既有铁律 **「LLM 只翻译不计算」——确定性指标由算法算**（见 `docs/roadmap.md` 阶段 4）
 
@@ -330,6 +330,17 @@ amplitude_pct = (t_high - t_low) / effective_price * 100
 
 若 `effective_price > p80`：`t_high` 仍按上式计算，但 `sell_trigger` 说明「现价已高于 P80,只做卖出方向」。
 
+**T 区间宽度校验（G5，与 G1 同属「做 T 赚不到差价」语义）**
+
+```
+G5 t_high > t_low —— T 区间必须有正宽度
+   P20≈P80（横盘分位带退化）或近 5 日波动区间被分位带完全覆盖时，
+   t_high == t_low（甚至 t_high < t_low），区间宽为 0，此时给出「区间 0 宽」是无效输出
+   → suitable=False：'T 区间无宽度(P20~P80 分位带与近 5 日波动区间无重叠),做 T 无差价'
+```
+
+> 说明：G5 在 T 区间计算之后判定，不属于 G0~G4 的前置门槛序列。
+
 **底仓比例**
 
 ```
@@ -341,8 +352,31 @@ base_position_pct = '≥70%' if bull_ma else '≥50%'
 ```
 sell_trigger   = f'冲高至 {t_high:.2f} 元附近且量能未超 5 日均量 1.5 倍时卖出 T 仓'
 buyback_trigger= f'回落至 {t_low:.2f} 元附近且缩量企稳（MACD 绿柱不放大）时买回'
-stop_loss      = f'底仓跌破 {stop_loss_price:.2f} 元即止损,防止做 T 做飞'
 ```
+
+**止损提示的归属（修正）**
+
+`stop_loss` 文案 `f'底仓跌破 {stop_loss_price:.2f} 元即止损,防止做 T 做飞'` **不属于 TPlan**：
+TPlan 的键集合固定为 §5.2 的 9 个键，`unsuitable_signals` 的语义是
+「**suitable=False 时**写明为什么不适合做 T」，不得在 suitable=True 时用来装止损提示。
+
+因此约定：
+
+- `judge_t_plan` 在 `suitable=True` 时，`unsuitable_signals` 返回**空字符串**；
+- 止损提示由 `build_decision` 的**顶层** `stop_loss` 字段承载（通用持仓止损，非 T 专属）：
+
+  ```python
+  stop_loss = {
+      "price": stop_loss_price,
+      "basis": (f"参考支撑 {support} 元 × 0.97,跌破 {stop_loss_price} 元即止损"
+                if support is not None else
+                f"跌破 {stop_loss_price} 元即止损"),
+  }
+  ```
+
+- `stop_loss_price` 缺失时顶层 `stop_loss = None`，此时 TPlan 也不得出现止损文案；
+- 「防止做 T 做飞」属于 T 场景话术，不再写入 TPlan；做 T 场景的止损信息由顶层 `stop_loss`
+  与 T 卡的 `sell_trigger` 共同承载。
 
 **空仓特例**：`position_status == 'empty'` 时仍返回 `t_plan`，但 `needs_position=True`，
 且 `headline` 补充「当前无底仓,做 T 前需先建仓」。
