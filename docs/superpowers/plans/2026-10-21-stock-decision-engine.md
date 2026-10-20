@@ -51,7 +51,7 @@
 
 ---
 
-## 任务 1：决策引擎骨架 + 走势判定 + 做T判定
+### Task 1: 决策引擎骨架 + 走势判定 + 做T判定
 
 **Files:**
 - Create: `backend/app/services/decision_service.py`
@@ -498,7 +498,7 @@ git commit -m "feat(decision): 决策引擎骨架 + 走势判定 + 做T判定"
 
 ---
 
-## 任务 2：买/卖/亏损/不动作判定 + verdict 组装
+### Task 2: 买/卖/亏损/不动作判定 + verdict 组装
 
 **Files:**
 - Modify: `backend/app/services/decision_service.py`
@@ -1037,7 +1037,7 @@ git commit -m "feat(decision): 买/卖/亏损/别动判定 + verdict 组装 + bu
 
 ---
 
-## 任务 3：市场环境聚合
+### Task 3: 市场环境聚合
 
 **Files:**
 - Create: `backend/app/services/market_context_service.py`
@@ -1446,7 +1446,7 @@ git commit -m "feat(decision): 市场环境聚合(大盘/行业/资金/相对强
 
 ---
 
-## 任务 4：API 端点
+### Task 4: API 端点
 
 **Files:**
 - Modify: `backend/app/api/stock.py`（在 `@router.get("/{code}/analysis")` **之前**插入新端点）
@@ -1630,7 +1630,7 @@ git commit -m "feat(api): GET /api/stock/{code}/decision 确定性决策端点"
 
 ---
 
-## 任务 5：回测闸门
+### Task 5: 回测闸门
 
 **Files:**
 - Create: `backend/app/services/decision_backtest.py`
@@ -1957,7 +1957,7 @@ git commit -m "feat(decision): 回测闸门 + 规则校准报告"
 
 ---
 
-## 任务 6：前端类型 + 决策卡组件
+### Task 6: 前端类型 + 决策卡组件
 
 **Files:**
 - Modify: `frontend/src/lib/types.ts`（文件末尾追加）
@@ -2274,7 +2274,7 @@ git commit -m "feat(frontend): 决策卡组件 + 类型定义"
 
 ---
 
-## 任务 7：接入盯盘台右栏
+### Task 7: 接入盯盘台右栏
 
 **Files:**
 - Modify: `frontend/src/components/desk/DecisionColumn.tsx`
@@ -2394,7 +2394,7 @@ git commit -m "feat(frontend): 决策卡接入盯盘台右栏(选中即出,不�
 
 ---
 
-## 任务 8：端到端实测 + 文档登记
+### Task 8: 端到端实测 + 文档登记
 
 **Files:**
 - Modify: `docs/roadmap.md`
