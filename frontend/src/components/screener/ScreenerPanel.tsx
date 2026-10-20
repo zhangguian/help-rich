@@ -238,6 +238,18 @@ export function ScreenerPanel() {
           <Button variant="ghost" size="sm" onClick={loadLatest}>
             🔄 刷新
           </Button>
+          <Link
+            href="/screener/weights"
+            className="text-center text-xs text-text-ter hover:text-accent"
+          >
+            ⚖️ 调整权重
+          </Link>
+          <Link
+            href="/backtest"
+            className="text-center text-xs text-text-ter hover:text-accent"
+          >
+            📊 回测验证
+          </Link>
         </div>
       </div>
 

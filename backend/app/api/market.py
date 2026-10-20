@@ -189,7 +189,10 @@ async def market_index_sparks_endpoint(count: int = 60) -> dict:
 async def market_sentiment_endpoint() -> dict:
     """沪深 A 股涨跌家数 + 区间分布(roadmap §3.9 涨跌分布)
 
-    注:样本量 ~200,反映情绪概览。
+    **口径:全市场**(沪深京 A 股约 5500+ 只),非采样。
+    涨跌停按板块判定(主板 ±10% / 创业板科创板 ±20% / 北交所 ±30% / ST ±5%)。
+
+    数据源失败 → 502(不返回任何假数据)。
     """
     try:
         return await fetch_market_sentiment()

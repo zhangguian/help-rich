@@ -340,8 +340,15 @@ class TestDailyAnalysisAPI:
             return _StubLLM(VALID_AI)
         async def _fake_active():
             return "deepseek"
-        stock_advice_service.llm_settings_repo.get_active = _fake_active
-        stock_advice_service.provider_factory.get = _fake_get
+
+        # 必须用 monkeypatch.setattr,不能直接赋值:
+        # llm_settings_repo / provider_factory 都是**进程内共享单例**,
+        # 直接赋值会永久改掉它们的 get_active/get,泄漏到后续测试文件。
+        # 历史症状:全量跑时 test_llm_api::test_switch_provider 失败(单跑绿)。
+        monkeypatch.setattr(
+            stock_advice_service.llm_settings_repo, "get_active", _fake_active
+        )
+        monkeypatch.setattr(stock_advice_service.provider_factory, "get", _fake_get)
 
         # 1) 先 POST 流水触发 analyze → 但流水不是必需的,analysis 端点本身也调 LLM
         # 2) 直接 GET /api/stock/001896.SZ/analysis → 触发 LLM + 持久化
@@ -489,6 +496,20 @@ def _make_fake_klines(base_date, base_close, target_idx, target_close, n):
     return _fake
 
 
+def _anchor_today():
+    """winrate 端点按 `date.today() - days` 取窗口,所以 seed 必须锚定"今天"。
+
+    历史问题:本文件曾把 seed 写死 `_d(2026, 8, 4)`。测试在 2026-08 写、
+    在 8 月跑都绿;一旦跨过 days 窗口(默认 30 天),seed 的日期就落到窗口外,
+    端点返回 samples=0 —— 典型的"过期定时炸弹测试"。
+    这里统一锚定真实今天。取 `today - 5` 是为了让 `i+5`(最多 -7)这批 seed
+    全部稳稳落在 days=30 窗口内,又不至于太靠近"今天"导致 outcome 取不到未来 K 线。
+    """
+    from datetime import date, timedelta
+
+    return date.today() - timedelta(days=5)
+
+
 class TestWinrateAPI:
     def test_endpoint_returns_aggregated(self, client, monkeypatch):
         """winrate 端点返回聚合结果"""
@@ -498,7 +519,7 @@ class TestWinrateAPI:
 
         # seed: 4 条分析(2 bullish, 1 bearish, 1 neutral)
         async def _seed():
-            today = _d(2026, 8, 4)
+            today = _anchor_today()
             for i, (view, _) in enumerate([
                 ("bullish", "hit"),  # 涨
                 ("bullish", "miss"),  # 跌
@@ -516,9 +537,11 @@ class TestWinrateAPI:
 
         asyncio.run(_seed())
 
-        # 用 fake fetch_klines:确保 analysis 当日(2026-07-27 ~ 07-30)+ 20 日后都有 close
+        # fake klines 必须覆盖「最早的 seed 日期」到「之后 horizon 天」
+        # seed 最早在 anchor-8(即 today-13),所以 base 取 anchor-14,
+        # n=60 才能覆盖 +20 horizon;否则 bearish 那条会因缺 K 线被跳过。
         fake = _make_fake_klines(
-            base_date=_d(2026, 7, 20),  # 涵盖 7/27~7/30 analysis_date
+            base_date=_anchor_today() - timedelta(days=14),
             base_close="100.000",
             target_idx=25,
             target_close="110.000",  # 涨
@@ -549,7 +572,7 @@ class TestWinrateAPI:
         from datetime import date as _d, timedelta
 
         async def _seed():
-            today = _d(2026, 8, 4)
+            today = _anchor_today()
             # 只 1 条 bullish
             await daily_analysis_repo.upsert(
                 stock_code="001896.SZ",
@@ -563,7 +586,8 @@ class TestWinrateAPI:
         asyncio.run(_seed())
 
         fake = _make_fake_klines(
-            base_date=_d(2026, 7, 1), base_close="100.000",
+            base_date=_anchor_today() - timedelta(days=10),
+            base_close="100.000",
             target_idx=20, target_close="110.000", n=60,
         )
         monkeypatch.setattr(kline_service, "fetch_klines", fake)
@@ -594,7 +618,7 @@ class TestWinrateAPI:
         from datetime import date as _d, timedelta
 
         async def _seed():
-            today = _d(2026, 8, 4)
+            today = _anchor_today()
             for i, view in enumerate(["bullish", "bullish", "bearish"]):
                 await daily_analysis_repo.upsert(
                     stock_code="001896.SZ",
@@ -631,7 +655,7 @@ class TestWinrateAPI:
         from datetime import date as _d, timedelta
 
         async def _seed():
-            today = _d(2026, 8, 4)
+            today = _anchor_today()
             for i in range(3):
                 await daily_analysis_repo.upsert(
                     stock_code="001896.SZ",

@@ -287,6 +287,22 @@ function SentimentPanel({
           </span>
         )}
       </div>
+      {/* 口径说明:全市场统计 vs 首页采样(2026-10-20 修复:旧实现只取涨幅榜首页,
+          会得出 "93 家涨停 / 0 家下跌" 的失真结论) */}
+      {sentiment && (
+        <p
+          className={clsx(
+            'text-[10px] leading-snug',
+            sentiment.partial ? 'text-warn' : 'text-text-ter',
+          )}
+        >
+          {sentiment.partial ? (
+            <>⚠ 仅统计前 {sentiment.sampleSize} 只样本,非全市场,涨跌家数不可作决策依据</>
+          ) : (
+            <>全市场 {sentiment.sampleSize} 只沪深京 A 股(涨跌停按板块:主板 ±10% / 创业板科创板 ±20% / 北交所 ±30%)</>
+          )}
+        </p>
+      )}
       {loading || !sentiment ? (
         <SkeletonBars />
       ) : (

@@ -85,18 +85,47 @@ api.interceptors.request.use(
 
 /**
  * camelCase → snake_case 转换(请求 body 用)
+ *
+ * 与 camelKey 对称:区间分桶键 `up5_10` → `up_5_10`
  */
 function camelToSnake(obj: unknown): unknown {
   if (Array.isArray(obj)) return obj.map(camelToSnake);
   if (obj !== null && typeof obj === 'object' && !(obj instanceof Date)) {
     return Object.fromEntries(
-      Object.entries(obj as Record<string, unknown>).map(([k, v]) => [
-        k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`),
-        camelToSnake(v),
-      ]),
+      Object.entries(obj as Record<string, unknown>).map(([k, v]) => {
+        const range = /^([a-z]+)(\d+)_(\d+)$/.exec(k);
+        const snake = range
+          ? `${range[1]}_${range[2]}_${range[3]}`
+          : k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+        return [snake, camelToSnake(v)];
+      }),
     );
   }
   return obj;
+}
+
+/**
+ * 单个键名 snake_case → camelCase
+ *
+ * **为什么要单独抽一个函数**:区间分桶键(后端 `up_5_10` / `down_1_5` / `limit_up`)
+ * 有一半是数字,通用规则 `/_([a-z])/g` 只吃掉「下划线 + 字母」,
+ * 于是 `up_5_10` 原样保留 —— 而 src/lib/types.ts 里声明的字段名是
+ * `up5_10`(第一段下划线去掉、第二段保留)。
+ *
+ * 结果:类型检查全绿、运行期却是 `undefined`。
+ * 受影响的地方(此前都是静默失效的):
+ *   - components/desk/BreadthBar.tsx(市场宽度色带 → 6 个档位家数显示 undefined)
+ *   - components/market/MarketOverviewPage.tsx(大盘页「A 股涨跌分布」)
+ *
+ * 规则(窄口径,只命中「单词 + 两段数字」这一种形态):
+ *   up_5_10  → up5_10
+ *   down_1_5 → down1_5
+ *   limit_up → limitUp(走通用规则)
+ */
+function camelKey(key: string): string {
+  const range = /^([a-z]+)_(\d+)_(\d+)$/.exec(key);
+  if (range) return `${range[1]}${range[2]}_${range[3]}`;
+  return key.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
 }
 
 /**
@@ -108,7 +137,7 @@ export function snakeToCamel(obj: unknown): unknown {
   if (obj !== null && typeof obj === 'object' && !(obj instanceof Date)) {
     return Object.fromEntries(
       Object.entries(obj as Record<string, unknown>).map(([k, v]) => [
-        k.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase()),
+        camelKey(k),
         snakeToCamel(v),
       ]),
     );

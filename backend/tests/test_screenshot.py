@@ -300,7 +300,7 @@ class TestScreenshotService:
         assert out["screenshot_type"] == "position"
 
     def test_confirm_writes_transactions(self, monkeypatch):
-        from app.repositories.transaction_repo import transaction_repo
+        from app.modules.portfolio.repository import transaction_repo
 
         record = asyncio.run(screenshot_repo.create(
             parsed_items=[], screenshot_type="transactions",
@@ -343,7 +343,7 @@ class TestScreenshotService:
         got = asyncio.run(screenshot_repo.get_by_id(record.id))
         assert got.status == "confirmed"
         # 持仓真的入库了
-        from app.services.position_service import get_position
+        from app.modules.portfolio.service import get_position
         p = asyncio.run(get_position("001896.SZ"))
         assert p is not None
         assert p.shares == 300
@@ -358,7 +358,7 @@ class TestScreenshotService:
             record.id, [{"stock_code": "600519.SH", "stock_name": "贵州茅台",
                          "shares": 100, "cost_price": "1450.000"}], "position"
         ))
-        from app.services.position_service import get_position
+        from app.modules.portfolio.service import get_position
         p = asyncio.run(get_position("600519.SH"))
         assert p is not None
         assert p.shares == 100

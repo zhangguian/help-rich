@@ -144,7 +144,7 @@ async def _refresh_one_fenlei(fenlei: int, top_n: int = 20) -> list[dict[str, An
     _prev_snapshots[fenlei] = _to_snapshot(items)
 
     if alerts:
-        logger.info("板块资金异动 (fenlei=%s): %d 条", fenlei, len(alerts))
+        logger.info("板块资金异动 (fenlei=%s): %s 条", fenlei, len(alerts))
         await event_bus.publish({
             "event": "sector_fund_flow_alert",
             "fenlei": fenlei,

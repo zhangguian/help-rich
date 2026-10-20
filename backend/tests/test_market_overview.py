@@ -209,21 +209,47 @@ async def test_fetch_market_sparklines_partial_fail():
 # ============ sentiment ============
 
 
+def _snap_row(
+    code: str,
+    pct: float,
+    amount_yi: float,
+    *,
+    limit: float = 10.0,
+    name: str = "x",
+) -> dict[str, Any]:
+    """构造一行**归一化后**的全市场快照
+
+    契约见 `app.data.market_snapshot.fetch_market_snapshot`:
+    {code, name, price, change_pct, prev_close, amount_yi, volume, limit_pct}
+    其中 amount_yi 单位是**亿元**,limit_pct 是该股所属板块的涨跌停幅度。
+    """
+    return {
+        "code": code,
+        "name": name,
+        "price": 10.0,
+        "change_pct": pct,
+        "prev_close": 10.0,
+        "amount_yi": amount_yi,
+        "volume": 1000,
+        "limit_pct": limit,
+    }
+
+
 async def test_fetch_market_sentiment_basic():
-    """涨跌家数 + 区间分布"""
+    """涨跌家数 + 区间分布(全市场快照口径)"""
     rows = [
-        {"symbol": "sh600000", "name": "x", "changepercent": "10", "amount": "100000000"},
-        {"symbol": "sh600001", "name": "x", "changepercent": "5.5", "amount": "50000000"},
-        {"symbol": "sh600002", "name": "x", "changepercent": "1.5", "amount": "0"},
-        {"symbol": "sh600003", "name": "x", "changepercent": "0.05", "amount": "0"},
-        {"symbol": "sh600004", "name": "x", "changepercent": "0", "amount": "0"},
-        {"symbol": "sh600005", "name": "x", "changepercent": "-0.05", "amount": "0"},
-        {"symbol": "sh600006", "name": "x", "changepercent": "-1.5", "amount": "0"},
-        {"symbol": "sh600007", "name": "x", "changepercent": "-5.5", "amount": "0"},
-        {"symbol": "sh600008", "name": "x", "changepercent": "-10", "amount": "0"},
+        _snap_row("600000.SH", 10.0, 1.0),
+        _snap_row("600001.SH", 5.5, 0.5),
+        _snap_row("600002.SH", 1.5, 0.0),
+        _snap_row("600003.SH", 0.05, 0.0),
+        _snap_row("600004.SH", 0.0, 0.0),
+        _snap_row("600005.SH", -0.05, 0.0),
+        _snap_row("600006.SH", -1.5, 0.0),
+        _snap_row("600007.SH", -5.5, 0.0),
+        _snap_row("600008.SH", -10.0, 0.0),
     ]
     with patch(
-        "app.services.market_overview_service._fetch_hs_a_quotes",
+        "app.data.market_snapshot.fetch_market_snapshot",
         AsyncMock(return_value=rows),
     ):
         out = await market_overview_service.fetch_market_sentiment()
@@ -241,27 +267,48 @@ async def test_fetch_market_sentiment_basic():
     assert out["buckets"]["down_1_5"] == 1
     assert out["buckets"]["down_5_10"] == 1
     assert out["buckets"]["limit_down"] == 1
-    # amount:仅 100000000 + 50000000 = 1.5 亿
+    # amount:仅 1.0 + 0.5 = 1.5 亿
     assert out["amount_yi"] == 1.5
+    # 口径:全市场(不是首页采样),前端据此决定是否显示"不可作决策依据"
+    assert out["source"] == "sina_full"
+    assert out["partial"] is False
 
 
-async def test_fetch_market_sentiment_invalid_pct_skipped():
-    """异常字段跳过,其余统计正确"""
+async def test_fetch_market_sentiment_limit_is_board_aware():
+    """涨跌停按**板块**判定:创业板 +10% 不是涨停,主板 +10% 才是
+
+    旧实现统一按 ±10% 判定,会把创业板/科创板(±20%)的普通涨幅误判成涨停。
+    """
     rows = [
-        {"symbol": "sh600000", "name": "x", "changepercent": "bad", "amount": "0"},
-        {"symbol": "sh600001", "name": "x", "changepercent": "2.5", "amount": "0"},
+        _snap_row("300001.SZ", 10.0, 1.0, limit=20.0),   # 创业板 +10% → up_5_10
+        _snap_row("300002.SZ", 20.0, 1.0, limit=20.0),   # 创业板 +20% → limit_up
+        _snap_row("600000.SH", 10.0, 1.0, limit=10.0),   # 主板 +10%   → limit_up
+        _snap_row("920001.BJ", 30.0, 1.0, limit=30.0),   # 北交所 +30% → limit_up
+        _snap_row("600001.SH", 5.0, 1.0, limit=5.0),     # ST 主板 +5% → limit_up
     ]
     with patch(
-        "app.services.market_overview_service._fetch_hs_a_quotes",
+        "app.data.market_snapshot.fetch_market_snapshot",
         AsyncMock(return_value=rows),
     ):
         out = await market_overview_service.fetch_market_sentiment()
 
-    assert out["up_total"] == 1
-    assert out["buckets"]["up_1_5"] == 1
-    # M2.5:涨停/跌停家数单列
-    assert out["limit_up"] == 0
+    assert out["buckets"]["limit_up"] == 4   # 创业板/主板/北交所/ST 各 1
+    assert out["buckets"]["up_5_10"] == 1     # 创业板 +10% 不算涨停
+    assert out["up_total"] == 5
+    assert out["limit_up"] == 4
     assert out["limit_down"] == 0
+
+
+async def test_fetch_market_sentiment_snapshot_unavailable_raises():
+    """全市场快照不可用 → 抛错(API 层返 502),**不返回首页采样假数据**"""
+    from app.data.market_snapshot import MarketSnapshotUnavailable
+
+    with patch(
+        "app.data.market_snapshot.fetch_market_snapshot",
+        AsyncMock(side_effect=MarketSnapshotUnavailable("network down")),
+    ):
+        with pytest.raises(MarketSnapshotUnavailable):
+            await market_overview_service.fetch_market_sentiment()
 
 
 # ============ M2.5 两市量能趋势 ============
@@ -301,19 +348,15 @@ async def test_fetch_amount_trend_fail_empty():
 
 
 async def test_fetch_main_fund_flow_top_n():
-    """主力净流入榜按净额降序,top N"""
+    """主力净流入榜按净额降序,top N(全市场快照口径)"""
     rows = [
-        {"symbol": "sh600000", "name": "A", "trade": "10",
-         "changepercent": "5", "amount": "100000000"},   # 1 亿
-        {"symbol": "sh600001", "name": "B", "trade": "20",
-         "changepercent": "-3", "amount": "50000000"},  # 0.5 亿
-        {"symbol": "sh600002", "name": "C", "trade": "30",
-         "changepercent": "8", "amount": "200000000"},  # 2 亿
-        {"symbol": "sh600003", "name": "D", "trade": "40",
-         "changepercent": "1", "amount": "100000000"},  # 1 亿
+        _snap_row("600000.SH", 5.0, 1.0),    # 1 亿 × (1+5/10)  = 1.5 亿
+        _snap_row("600001.SH", -3.0, 0.5),   # 0.5 亿 × -(1+3/10) = -0.65 亿
+        _snap_row("600002.SH", 8.0, 2.0),    # 2 亿 × (1+8/10)  = 3.6 亿
+        _snap_row("600003.SH", 1.0, 1.0),    # 1 亿 × (1+1/10)  = 1.1 亿
     ]
     with patch(
-        "app.services.market_overview_service._fetch_hs_a_quotes",
+        "app.data.market_snapshot.fetch_market_snapshot",
         AsyncMock(return_value=rows),
     ):
         out = await market_overview_service.fetch_main_fund_flow(limit=2)
@@ -329,23 +372,35 @@ async def test_fetch_main_fund_flow_top_n():
     assert "600001.SH" not in codes
 
 
-async def test_fetch_main_fund_flow_handles_missing_fields():
-    """symbol/changepct 缺失 → 跳过"""
-    rows = [
+async def test_fetch_main_fund_flow_fallback_skips_bad_rows():
+    """全量快照不可用 → 降级新浪采样;采样行缺字段/坏数值 → 跳过"""
+    from app.data.market_snapshot import MarketSnapshotUnavailable
+
+    fallback_rows = [
+        # 缺 symbol → 跳过
         {"name": "A", "trade": "10", "changepercent": "5", "amount": "100000000"},
+        # 坏涨跌幅 → 跳过
         {"symbol": "sh600000", "name": "B", "trade": "abc",
          "changepercent": "bad", "amount": "100000000"},
+        # 正常 → 1 亿 × (1+2/10) = 1.2 亿
         {"symbol": "sh600001", "name": "C", "trade": "10",
          "changepercent": "2", "amount": "100000000"},
     ]
-    with patch(
-        "app.services.market_overview_service._fetch_hs_a_quotes",
-        AsyncMock(return_value=rows),
+    with (
+        patch(
+            "app.data.market_snapshot.fetch_market_snapshot",
+            AsyncMock(side_effect=MarketSnapshotUnavailable("network down")),
+        ),
+        patch(
+            "app.services.market_overview_service._fetch_hs_a_quotes",
+            AsyncMock(return_value=fallback_rows),
+        ),
     ):
         out = await market_overview_service.fetch_main_fund_flow(limit=10)
 
     assert len(out) == 1
     assert out[0]["code"] == "600001.SH"
+    assert out[0]["netamount_yi"] == 1.2
 
 
 # ============ API 层 ============

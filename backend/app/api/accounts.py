@@ -1,0 +1,64 @@
+"""投资账户 API(阶段5)
+
+- GET    /api/accounts              → 账户列表(含持仓数/成本概览)
+- POST   /api/accounts              → 新建账户
+- PATCH  /api/accounts/{id}         → 重命名
+- DELETE /api/accounts/{id}         → 删除(默认账户/有持仓/有流水时拒绝)
+- GET    /api/accounts/{id}/summary → 单账户持仓与盈亏汇总
+"""
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+from app.modules.portfolio.account_service import AccountError, account_service
+
+router = APIRouter(prefix="/accounts", tags=["accounts"])
+
+
+class AccountIn(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    kind: str = "broker"
+    broker: str | None = None
+    note: str | None = None
+
+
+class AccountPatch(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+
+
+@router.get("")
+async def list_accounts() -> dict:
+    return {"items": await account_service.list_with_summary()}
+
+
+@router.post("")
+async def create_account(payload: AccountIn) -> dict:
+    account_id = await account_service.create(
+        payload.name, payload.kind, payload.broker, payload.note
+    )
+    return {"id": account_id}
+
+
+@router.patch("/{account_id}")
+async def rename_account(account_id: int, payload: AccountPatch) -> dict:
+    try:
+        await account_service.rename(account_id, payload.name)
+    except AccountError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True}
+
+
+@router.delete("/{account_id}")
+async def delete_account(account_id: int) -> dict:
+    try:
+        await account_service.delete(account_id)
+    except AccountError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True}
+
+
+@router.get("/{account_id}/summary")
+async def account_summary(account_id: int) -> dict:
+    try:
+        return await account_service.summary(account_id)
+    except AccountError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e

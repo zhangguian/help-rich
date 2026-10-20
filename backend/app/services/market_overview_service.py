@@ -95,8 +95,11 @@ async def _fetch_movers(direction: str, num: int = 3) -> list[dict[str, Any]]:
         num_part = symbol[2:]
         market = {"sh": "SH", "sz": "SZ", "bj": "BJ"}.get(prefix, "SH")
         code = f"{num_part}.{market}"
+        # 新浪该接口的排序字段是 changepercent(changeratio 已失效,见 ADR-0011);
+        # 兼容两种字段名,缺失则跳过该行
+        raw_pct = r.get("changepercent", r.get("changeratio"))
         try:
-            change_pct = float(r["changeratio"])
+            change_pct = float(raw_pct)
             trade = float(r["trade"])
         except (KeyError, TypeError, ValueError):
             continue
@@ -165,11 +168,20 @@ _SENTIMENT_URL = (
     "quotes_service/api/json_v2.php/Market_Center.getHQNodeData"
 )
 
+# 全市场快照的 60s 缓存由 `app.data.market_snapshot` 内部维护
+# (拉 56 页约 3~6s,必须缓存);本模块不再另设缓存层,避免两处 TTL 不一致。
+
 
 async def _fetch_hs_a_quotes(page_size: int = 200) -> list[dict[str, Any]]:
-    """沪深 A 股全市场快照首页(用于涨跌家数统计)
+    """沪深 A 股快照(**仅首页采样,不可用于全市场统计**)
 
-    MVP 取首页 page_size=200,反映情绪概览,非全市场精确统计。
+    ⚠️ 警告:该接口单页硬上限 100 条,且按 `sort=changepercent` 排序时取回的
+    必然是涨幅榜前列 —— 用它统计"涨跌家数/涨停家数"是**采样偏差**,
+    会得出 "93 家涨停、0 家下跌" 这类失真结论(实测于 2026-10-20)。
+
+    保留本函数仅作 `fetch_main_fund_flow` 的**降级兜底**(全量快照不可用时);
+    全市场统计请用 `app.data.market_snapshot.fetch_market_snapshot`
+    (新浪按 `sort=symbol` 全量翻页,56 页覆盖全部沪深京 A 股)。
     """
     params = {
         "node": "hs_a",
@@ -190,7 +202,12 @@ async def _fetch_hs_a_quotes(page_size: int = 200) -> list[dict[str, Any]]:
 
 
 def _bucket_pct(pct: float) -> str:
-    """根据涨跌幅分桶"""
+    """根据涨跌幅分桶(固定 ±10% 口径,**不区分板块**)
+
+    ⚠️ 仅适用于主板。创业板/科创板 ±20%、北交所 ±30%,用本函数会把它们的
+    涨停股误判进 up_5_10 桶。板块感知请用
+    `app.data.eastmoney.bucket_by_limit(pct, limit_pct)`。
+    """
     if pct >= 9.9:
         return "limit_up"
     if pct >= 5:
@@ -208,14 +225,8 @@ def _bucket_pct(pct: float) -> str:
     return "limit_down"
 
 
-async def fetch_market_sentiment() -> dict[str, Any]:
-    """沪深 A 股涨跌家数 + 9 档区间分布 + 成交额(亿元)
-
-    样本量只覆盖首页 ~200 条,反映当日情绪概览。
-    """
-    rows = await _fetch_hs_a_quotes(page_size=200)
-
-    buckets: dict[str, int] = {
+def _empty_buckets() -> dict[str, int]:
+    return {
         "limit_up": 0,
         "up_5_10": 0,
         "up_1_5": 0,
@@ -226,32 +237,49 @@ async def fetch_market_sentiment() -> dict[str, Any]:
         "down_5_10": 0,
         "limit_down": 0,
     }
-    up_total = 0
-    down_total = 0
-    flat_total = 0
-    total_amount = 0.0  # 亿元
+
+
+async def fetch_market_sentiment() -> dict[str, Any]:
+    """沪深 A 股涨跌家数 + 9 档区间分布 + 涨停/跌停家数 + 成交额(亿元)
+
+    **数据源:新浪全 A 股快照(全量翻页,无采样偏差)**
+    旧实现取新浪"涨幅榜首页 200 条"当全市场统计,会得出严重失真的结论
+    (实测 2026-10-20:旧实现 up=100/down=0/limit_up=93,真实为
+    up=3777/down=1667/limit_up=59)。
+
+    - 全市场口径:sample_size ≈ 5500+ 只沪深京 A 股
+    - 涨跌停按**板块**判定(主板 ±10% / 创业板科创板 ±20% / 北交所 ±30% / ST ±5%)
+    - 数据源失败 → 抛 MarketSnapshotUnavailable,由 API 返回 503(不返回假数据)
+    """
+    from app.data.market_snapshot import (
+        MarketSnapshotUnavailable,
+        bucket_by_limit,
+        fetch_market_snapshot,
+    )
+
+    try:
+        rows = await fetch_market_snapshot()
+    except MarketSnapshotUnavailable as e:
+        logger.warning("全市场快照失败: %s", e)
+        raise
+
+    buckets = _empty_buckets()
+    up_total = down_total = flat_total = 0
+    total_amount = 0.0
 
     for r in rows:
-        if not isinstance(r, dict):
-            continue
-        try:
-            pct = float(r.get("changepercent", 0) or 0)
-            amount_wan = float(r.get("amount", 0) or 0)
-        except (TypeError, ValueError):
-            continue
-        total_amount += amount_wan / 1e8
-
+        pct = r["change_pct"]
+        total_amount += r["amount_yi"]
         if abs(pct) < 0.01:
             buckets["flat"] += 1
             flat_total += 1
-        elif pct > 0:
+            continue
+        if pct > 0:
             up_total += 1
-            bucket = _bucket_pct(pct)
-            buckets[bucket] = buckets.get(bucket, 0) + 1
         else:
             down_total += 1
-            bucket = _bucket_pct(pct)
-            buckets[bucket] = buckets.get(bucket, 0) + 1
+        bucket = bucket_by_limit(pct, r["limit_pct"])
+        buckets[bucket] = buckets.get(bucket, 0) + 1
 
     return {
         "sample_size": len(rows),
@@ -260,9 +288,12 @@ async def fetch_market_sentiment() -> dict[str, Any]:
         "flat_total": flat_total,
         "buckets": buckets,
         "amount_yi": round(total_amount, 2),
-        # M2.5:涨停/跌停家数单列(小白第一眼)
+        # 涨停/跌停家数单列(小白第一眼)
         "limit_up": buckets["limit_up"],
         "limit_down": buckets["limit_down"],
+        # 口径标记:full=全市场统计,partial=首页采样(前端据此提示,不再假装全市场)
+        "source": "sina_full",
+        "partial": False,
     }
 
 
@@ -298,42 +329,72 @@ async def fetch_amount_trend(days: int = 5) -> dict[str, Any]:
 
 
 async def fetch_main_fund_flow(limit: int = 10) -> list[dict[str, Any]]:
-    """A 股个股主力净流入榜(降级方案)
+    """A 股个股主力净流入榜(降级估算)
 
-    新浪 Market_Center 不暴露个股净流入接口;本方案按 hs_a 全市场数据,
+    新浪 Market_Center 不暴露个股净流入接口;本方案按全市场快照,
     估算净额 = 成交额 × sign(涨幅) × (1 + |涨幅%| / 10) ,反映"涨越凶越流入"
     的近似规律。仅供可视化,非真实主力净额。
-    """
-    rows = await _fetch_hs_a_quotes(page_size=200)
 
-    items: list[dict[str, Any]] = []
-    for r in rows:
-        if not isinstance(r, dict):
-            continue
-        symbol = r.get("symbol") or ""
-        if not symbol:
-            continue
-        try:
-            change_pct = float(r.get("changepercent", 0) or 0)
-            amount_wan = float(r.get("amount", 0) or 0)
-        except (TypeError, ValueError):
-            continue
-        prefix = symbol[:2]
-        num = symbol[2:]
-        market = {"sh": "SH", "sz": "SZ"}.get(prefix, "SH")
-        code = f"{num}.{market}"
-        amount_yi = amount_wan / 1e8
-        net = amount_yi * (1 if change_pct > 0 else -1) * (1 + abs(change_pct) / 10)
-        items.append({
-            "code": code,
-            "name": r.get("name", ""),
-            "current_price": r.get("trade", ""),
-            "change_pct": change_pct,
-            "netamount_yi": round(net, 2),
-        })
+    ⚠️ 旧实现只取新浪首页 200 条(按涨幅降序 → 全是涨幅榜前列),
+    榜单天然偏科;现改用全量快照,与"主力净流入"语义更贴近。
+    """
+    from app.data.market_snapshot import MarketSnapshotUnavailable, fetch_market_snapshot
+
+    try:
+        rows = await fetch_market_snapshot()
+    except MarketSnapshotUnavailable as e:
+        logger.warning("全市场快照失败,主力净流入降级新浪采样: %s", e)
+        rows = await _fetch_hs_a_quotes(page_size=200)
+        items = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            symbol = r.get("symbol") or ""
+            if not symbol:
+                continue
+            try:
+                change_pct = float(r.get("changepercent", 0) or 0)
+                amount_wan = float(r.get("amount", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            prefix = symbol[:2]
+            num = symbol[2:]
+            market = {"sh": "SH", "sz": "SZ"}.get(prefix, "SH")
+            amount_yi = amount_wan / 1e8
+            net = amount_yi * (1 if change_pct > 0 else -1) * (1 + abs(change_pct) / 10)
+            items.append({
+                "code": f"{num}.{market}",
+                "name": r.get("name", ""),
+                "current_price": r.get("trade", ""),
+                "change_pct": change_pct,
+                "netamount_yi": round(net, 2),
+            })
+    else:
+        items = [
+            {
+                "code": r["code"],
+                "name": r["name"],
+                "current_price": f"{r['price']:.3f}",
+                "change_pct": r["change_pct"],
+                "netamount_yi": round(
+                    r["amount_yi"]
+                    * (1 if r["change_pct"] > 0 else -1)
+                    * (1 + abs(r["change_pct"]) / 10),
+                    2,
+                ),
+            }
+            for r in rows
+        ]
 
     items.sort(key=lambda x: x["netamount_yi"], reverse=True)
     return items[:limit]
+
+
+def reset_sentiment_cache() -> None:
+    """测试辅助:清空情绪统计相关缓存"""
+    from app.data.market_snapshot import reset_market_snapshot_cache
+
+    reset_market_snapshot_cache()
 
 
 __all__ = [
@@ -345,4 +406,5 @@ __all__ = [
     "fetch_main_fund_flow",
     "fetch_amount_trend",
     "reset_market_overview_service",
+    "reset_sentiment_cache",
 ]

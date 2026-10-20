@@ -19,7 +19,7 @@ from app.ocr.paddle_client import paddle_client
 from app.ocr.text_extract import extract_items
 from app.repositories.llm_settings_repo import llm_settings_repo
 from app.repositories.screenshot_repo import screenshot_repo
-from app.repositories.transaction_repo import transaction_repo
+from app.modules.portfolio.repository import transaction_repo
 from app.repositories.watchlist_repo import watchlist_repo
 
 logger = logging.getLogger(__name__)
@@ -195,7 +195,7 @@ class ScreenshotService:
         async def _do():
             if screenshot_type in ("position", "holdings"):
                 # 持仓快照 → 持仓表(代码/名称/股数/每股成本价)
-                from app.services.position_service import upsert_position
+                from app.modules.portfolio.service import upsert_position
 
                 for item in items:
                     code = item.get("stock_code")

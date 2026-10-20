@@ -1,0 +1,1426 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>买股工具室 · 盯盘台重设计稿</title>
+<style>
+/* ============ 设计 token:深色(默认)/ 浅色 ============ */
+:root{
+  --mono:"JetBrains Mono","Cascadia Mono",Consolas,ui-monospace,monospace;
+  --ui:"PingFang SC","Microsoft YaHei","Segoe UI",system-ui,sans-serif;
+  --rail:48px; --list:258px; --decision:304px; --topbar:46px; --breadth:44px;
+}
+html[data-theme="dark"]{
+  --bg:#070B12; --panel:#0D131D; --panel-2:#121A26; --panel-3:#18212F;
+  --line:#1E2836; --line-soft:#161E2A;
+  --text:#E2E8F2; --text-2:#8FA0B8; --text-3:#5C6B84;
+  --up:#F6465D; --up-0:rgba(246,70,93,.32); --up-1:rgba(246,70,93,.55); --up-2:rgba(246,70,93,.78); --up-d:#FF5C71;
+  --down:#0ECB81; --down-0:rgba(14,235,129,.30); --down-1:rgba(14,235,129,.52); --down-2:rgba(14,235,129,.76); --down-d:#2BE39A;
+  --flat:#3A475C; --accent:#22D3EE; --accent-soft:rgba(34,211,238,.12);
+  --warn:#F5A524; --warn-soft:rgba(245,165,36,.14);
+  --grid:rgba(143,160,184,.13); --shadow:0 18px 44px -18px rgba(0,0,0,.8);
+  --ma5:#F0883E; --ma10:#A78BFA; --ma20:#3B9EFF; --ma60:#22C55E;
+  color-scheme:dark;
+}
+html[data-theme="light"]{
+  --bg:#EEF1F5; --panel:#FFFFFF; --panel-2:#F7F9FB; --panel-3:#EEF2F6;
+  --line:#DDE3EA; --line-soft:#EAEEF3;
+  --text:#101826; --text-2:#54627A; --text-3:#8A97AC;
+  --up:#D92B3E; --up-0:rgba(217,43,62,.16); --up-1:rgba(217,43,62,.34); --up-2:rgba(217,43,62,.6); --up-d:#C21F32;
+  --down:#07A05C; --down-0:rgba(7,160,92,.14); --down-1:rgba(7,160,92,.3); --down-2:rgba(7,160,92,.55); --down-d:#068A50;
+  --flat:#C9D2DD; --accent:#0A84C4; --accent-soft:rgba(10,132,196,.1);
+  --warn:#B87400; --warn-soft:rgba(184,116,0,.12);
+  --grid:rgba(16,24,38,.09); --shadow:0 10px 26px -14px rgba(16,24,38,.28);
+  --ma5:#C2410C; --ma10:#7C3AED; --ma20:#1D4ED8; --ma60:#15803D;
+  color-scheme:light;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--ui);font-size:13px;line-height:1.45;
+  -webkit-font-smoothing:antialiased;overflow:hidden}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--text-3)}
+.lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3)}
+
+/* ============ 预览器外壳(非产品界面) ============ */
+.preview-bar{display:flex;align-items:center;gap:14px;padding:9px 16px;background:#11161F;
+  border-bottom:1px solid #232C3A;color:#C9D4E4;font-size:12px;flex-wrap:wrap}
+.preview-bar b{color:#fff;font-weight:600}
+.preview-bar .hint{color:#7C8AA3}
+.seg{display:inline-flex;border:1px solid #2A3444;border-radius:7px;overflow:hidden}
+.seg button{background:transparent;border:0;color:#9AA8BE;padding:4px 11px;font-size:11.5px;cursor:pointer;font-family:var(--ui)}
+.seg button.on{background:#22D3EE;color:#04222A;font-weight:600}
+.seg button:hover:not(.on){background:#1B2432;color:#D6E0EE}
+.scene{display:none}
+.scene.on{display:block}
+/* 视口模拟:用 iframe 以真实宽度渲染,媒体查询按 iframe 宽度判定 */
+.vpwrap{display:none;overflow:auto;height:calc(100vh - 37px);background:#0A0E16;padding:0}
+.vpwrap.on{display:block}
+.vpwrap iframe{border:0;display:block;background:#070B12}
+body.framed .preview-bar{display:none}
+body.framed .desk{height:100vh}
+
+/* ============ 产品:盯盘台 ============ */
+.desk{height:calc(100vh - 37px);display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+
+/* --- 顶栏 --- */
+.topbar{height:var(--topbar);flex:0 0 auto;display:flex;align-items:center;gap:16px;
+  padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;letter-spacing:.01em;white-space:nowrap;flex:0 0 auto}
+.brand .mark{width:22px;height:22px;border-radius:5px;background:linear-gradient(140deg,var(--up),#FF8A5B);
+  display:grid;place-items:center;font-size:11px;color:#fff;font-weight:700;font-family:var(--mono);flex:0 0 auto}
+.tabs{display:flex;gap:2px;background:var(--panel-2);border:1px solid var(--line);border-radius:7px;padding:2px;flex:0 0 auto}
+.tabs button{background:transparent;border:0;color:var(--text-2);font-size:11.5px;padding:3px 12px;
+  border-radius:5px;cursor:pointer;font-family:var(--ui);white-space:nowrap}
+.tabs button.on{background:var(--panel-3);color:var(--text);font-weight:600}
+.tabs button.on.fav{color:var(--warn)}
+.ticker{display:flex;align-items:center;gap:16px;margin-left:auto;min-width:0;overflow:hidden}
+.tick{display:flex;align-items:baseline;gap:6px;white-space:nowrap}
+.tick i{font-style:normal;font-size:10.5px;color:var(--text-3);font-family:var(--mono);letter-spacing:.06em;white-space:nowrap}
+.tick b{font-size:13.5px;font-weight:600}
+.tick em{font-style:normal;font-size:11.5px;font-weight:600}
+.hb{display:flex;align-items:center;gap:8px;padding-left:12px;border-left:1px solid var(--line);
+  font-size:11px;color:var(--text-3);flex:0 0 auto;white-space:nowrap}
+.pill{border:1px solid var(--line);border-radius:5px;padding:3px 9px;color:var(--text-2);cursor:pointer;
+  background:var(--panel-2);white-space:nowrap}
+.pill:hover{border-color:var(--accent);color:var(--accent)}
+
+/* --- 市场宽度条(签名元素) --- */
+.breadth{height:var(--breadth);flex:0 0 auto;display:flex;align-items:center;gap:16px;
+  padding:0 14px;background:var(--panel-2);border-bottom:1px solid var(--line)}
+.bstats{display:flex;align-items:baseline;gap:14px;white-space:nowrap}
+.bstat{display:flex;align-items:baseline;gap:5px}
+.bstat u{text-decoration:none;font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:.1em}
+.bstat b{font-size:16px;font-weight:600;font-family:var(--mono)}
+.bandwrap{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.band{display:flex;height:12px;border-radius:3px;overflow:hidden;background:var(--panel-3);gap:1px}
+.band-seg{transition:filter .15s}
+.band-seg:hover{filter:brightness(1.35)}
+.band-legend{display:flex;gap:16px;justify-content:flex-start;flex-wrap:wrap;overflow:hidden;row-gap:3px}
+.band-chip{display:flex;align-items:center;gap:4px;font-size:9px;color:var(--text-3);
+  font-family:var(--mono);letter-spacing:.02em;white-space:nowrap}
+.band-chip i{width:7px;height:7px;border-radius:2px;display:inline-block}
+.band-chip b{color:var(--text-2);font-weight:600}
+
+/* --- 主体三栏 --- */
+.main{flex:1;min-height:0;display:grid;grid-template-columns:var(--rail) var(--list) minmax(0,1fr) var(--decision);
+  grid-template-rows:minmax(0,1fr)}
+.rail{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;
+  align-items:center;padding:8px 0;gap:2px;overflow:hidden}
+.rlogo{width:28px;height:28px;border-radius:7px;background:linear-gradient(140deg,var(--up),#FF8A5B);
+  display:grid;place-items:center;color:#fff;font-weight:700;font-family:var(--mono);font-size:11px;margin-bottom:8px}
+.ritem{width:32px;height:30px;border-radius:6px;display:grid;place-items:center;color:var(--text-3);cursor:pointer;
+  font-size:14px;line-height:1;transition:background .14s,color .14s;position:relative}
+.ritem:hover{background:var(--panel-3);color:var(--text-2)}
+.ritem.on{background:var(--accent-soft);color:var(--accent)}
+.ritem.on::before{content:"";position:absolute;left:-8px;top:7px;bottom:7px;width:2px;border-radius:2px;background:var(--accent)}
+.rsep{width:20px;height:1px;background:var(--line);margin:6px 0}
+
+/* --- 行情列表 --- */
+.qlist{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;
+  min-width:0;min-height:0;overflow:hidden}
+.qhead{display:flex;align-items:center;gap:8px;padding:0 10px;height:32px;border-bottom:1px solid var(--line)}
+.qhead .lbl{flex:1}
+.qsort{font-size:10px;color:var(--text-3);font-family:var(--mono)}
+.qsearch{flex:1;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;color:var(--text);
+  font-size:11.5px;padding:3px 8px;font-family:var(--ui);outline:none}
+.qsearch:focus{border-color:var(--accent)}
+.qrows{flex:1;overflow-y:auto}
+.qrow{display:flex;align-items:center;gap:8px;padding:5px 10px;border-bottom:1px solid var(--line-soft);
+  cursor:pointer;position:relative}
+.qrow:hover{background:var(--panel-2)}
+.qrow.active{background:var(--accent-soft)}
+.qrow.active::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--accent)}
+.qleft{flex:1;min-width:0;display:flex;flex-direction:column;gap:0}
+.qname{font-size:12.5px;font-weight:500;display:flex;align-items:center;gap:4px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3}
+.qcode{font-family:var(--mono);font-size:9.5px;color:var(--text-3);line-height:1.2}
+.qprice{font-size:12px;text-align:right;font-weight:500;min-width:48px;white-space:nowrap}
+.qpct{font-size:10.5px;text-align:right;min-width:48px;white-space:nowrap}
+.tag-pos{font-style:normal;font-size:9px;background:var(--accent-soft);color:var(--accent);
+  border-radius:3px;padding:0 3px;font-weight:600}
+.tag-fav{font-style:normal;font-size:10px;color:var(--warn)}
+.qfoot{border-top:1px solid var(--line);padding:5px 10px;font-size:10px;color:var(--text-3);
+  display:flex;justify-content:space-between;font-family:var(--mono)}
+
+/* --- 中栏:图表舞台 --- */
+.stage{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg);overflow:hidden}
+.stockhead{display:flex;align-items:center;gap:14px;padding:9px 14px;background:var(--panel);
+  border-bottom:1px solid var(--line);flex-wrap:wrap}
+.sh-name{font-size:17px;font-weight:600;letter-spacing:.01em}
+.sh-code{font-family:var(--mono);font-size:11px;color:var(--text-3)}
+.sh-price{display:flex;align-items:baseline;gap:9px}
+.sh-price b{font-family:var(--mono);font-size:26px;font-weight:600;line-height:1}
+.sh-price em{font-style:normal;font-family:var(--mono);font-size:13px;font-weight:600}
+.sh-meta{display:flex;gap:14px;margin-left:auto;flex-wrap:wrap}
+.shm{display:flex;flex-direction:column;gap:1px;white-space:nowrap}
+.shm u{text-decoration:none;font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.1em}
+.shm b{font-family:var(--mono);font-size:12.5px;font-weight:500}
+.sh-tags{display:flex;gap:5px;flex-wrap:wrap}
+.sh-tag{font-size:10px;padding:1px 6px;border-radius:4px;border:1px solid var(--line);color:var(--text-2);white-space:nowrap}
+.sh-tag.pos{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+.sh-price{display:flex;align-items:baseline;gap:9px;white-space:nowrap}
+
+.chartbar{display:flex;align-items:center;gap:14px;padding:0 14px;height:34px;background:var(--panel);
+  border-bottom:1px solid var(--line)}
+.periods{display:flex;gap:1px}
+.periods button{background:transparent;border:1px solid transparent;color:var(--text-2);font-size:11.5px;
+  padding:2px 11px;border-radius:5px;cursor:pointer;font-family:var(--ui)}
+.periods button.on{background:var(--panel-3);border-color:var(--line);color:var(--text);font-weight:600}
+.overlay-legend{display:flex;gap:12px;margin-left:auto;font-size:10px;color:var(--text-3);font-family:var(--mono)}
+.overlay-legend i{display:inline-block;width:12px;height:2px;vertical-align:middle;margin-right:4px}
+
+.chartbox{flex:1;min-height:0;padding:10px 14px 6px;display:flex;gap:6px}
+.yaxis{width:40px;flex:0 0 auto;display:flex;flex-direction:column;justify-content:space-between;
+  padding:3px 0 22px;font-size:9px;color:var(--text-3);font-family:var(--mono);text-align:right;line-height:1}
+.plot{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+.chartarea{flex:1;min-height:0;position:relative}
+.chartarea svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+.xaxis{display:flex;justify-content:space-between;font-size:9px;color:var(--text-3);font-family:var(--mono);
+  padding-top:3px;height:14px;flex:0 0 auto}
+.legend-row{display:flex;gap:16px;padding:6px 2px 0;border-top:1px solid var(--line-soft);margin-top:4px;
+  flex-wrap:wrap;flex:0 0 auto}
+.leg{display:flex;align-items:baseline;gap:5px;font-size:10.5px;color:var(--text-3);font-family:var(--mono)}
+.leg b{color:var(--text-2);font-size:11.5px}
+
+.levels{background:var(--panel);border-top:1px solid var(--line);padding:8px 14px 10px;flex:0 0 auto}
+.levels-head{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+.lv{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.lv-item{background:var(--panel-2);border:1px solid var(--line);border-radius:7px;padding:6px 9px;
+  display:flex;flex-direction:column;gap:2px}
+.lv-item u{text-decoration:none;font-size:9.5px;font-family:var(--mono);letter-spacing:.1em}
+.lv-item b{font-family:var(--mono);font-size:14px;font-weight:600}
+.lv-item span{font-size:10.5px;color:var(--text-3);line-height:1.35}
+.lv-item.support{border-left:2px solid var(--down)}
+.lv-item.stabilize{border-left:2px solid var(--warn)}
+.lv-item.pressure{border-left:2px solid var(--up)}
+
+/* --- 右栏:决策 --- */
+.decision{background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column;
+  min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden}
+.dsec{padding:11px 13px;border-bottom:1px solid var(--line)}
+.dhead{display:flex;align-items:center;gap:7px;margin-bottom:9px}
+.dhead .lbl{flex:1}
+.dnum{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;min-width:0}
+.dnum-item{display:flex;flex-direction:column;gap:1px;min-width:0}
+.dnum-item u{text-decoration:none;font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.06em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dnum-item b{font-family:var(--mono);font-size:13.5px;font-weight:600;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.dnum-item span{font-size:9.5px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prow{display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line-soft);font-size:11.5px}
+.prow:last-child{border-bottom:0}
+.pl{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.25}
+.pname{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pcode{font-size:9.5px;color:var(--text-3);font-family:var(--mono)}
+.pr{display:flex;align-items:baseline;gap:10px;flex:0 0 auto}
+.pmono{font-size:11px;text-align:right;min-width:52px;white-space:nowrap}
+
+.ai-card{background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:10px 11px}
+.ai-top{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+.ai-view{font-size:12px;font-weight:600;padding:2px 8px;border-radius:5px;background:var(--up-soft);color:var(--up)}
+.ai-score{font-family:var(--mono);font-size:11px;color:var(--text-3);margin-left:auto}
+.ai-line{font-size:12px;line-height:1.6;color:var(--text-2);margin-bottom:7px}
+.ai-line b{color:var(--text);font-weight:600}
+.ai-risk{background:var(--warn-soft);border-left:2px solid var(--warn);border-radius:0 6px 6px 0;
+  padding:6px 9px;font-size:11.5px;line-height:1.55;color:var(--text-2)}
+.ai-risk u{text-decoration:none;font-size:9.5px;font-family:var(--mono);letter-spacing:.1em;color:var(--warn);
+  display:block;margin-bottom:2px}
+
+.steps{display:flex;flex-direction:column;gap:7px}
+.step{display:flex;gap:9px;align-items:flex-start}
+.step-n{width:17px;height:17px;flex:0 0 auto;border-radius:50%;background:var(--panel-3);color:var(--text-3);
+  font-size:9.5px;font-family:var(--mono);display:grid;place-items:center;margin-top:1px;font-weight:600}
+.step.on .step-n{background:var(--accent);color:#04222A}
+.step-q{font-size:11.5px;line-height:1.5}
+.step-q b{color:var(--text);font-weight:600}
+.step-a{font-size:11px;color:var(--text-2);margin-top:2px;padding:4px 7px;background:var(--panel-2);
+  border:1px solid var(--line);border-radius:5px}
+.step.on .step-a{color:var(--text);border-color:var(--line);background:var(--panel-3)}
+.step-a.muted{color:var(--text-3);background:transparent;border-style:dashed}
+
+.mvrow{display:flex;gap:12px;flex-wrap:wrap}
+.mv{display:flex;align-items:baseline;gap:5px;font-size:11px;color:var(--text-2)}
+.mv b{font-weight:500}
+.mv em{font-style:normal;font-size:10.5px;font-weight:600}
+.volbars{display:flex;gap:7px;align-items:flex-end;height:46px;margin-top:7px}
+.volbar{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;height:100%;justify-content:flex-end}
+.volbar i{width:100%;background:var(--accent);opacity:.5;border-radius:2px 2px 0 0;display:block}
+.volbar u{text-decoration:none;font-size:9px;color:var(--text-3);font-family:var(--mono)}
+
+/* 空场景 */
+.empty{display:grid;place-items:center;height:100%;text-align:center;color:var(--text-3)}
+.empty .big{font-size:40px;opacity:.25;margin-bottom:10px}
+.empty h4{font-size:14px;color:var(--text-2);font-weight:600;margin-bottom:5px}
+.empty p{font-size:12px;max-width:280px;line-height:1.6}
+.empty-hint{margin-top:14px;display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
+.empty-hint span{font-size:10.5px;border:1px solid var(--line);border-radius:5px;padding:2px 8px;color:var(--text-3)}
+
+::-webkit-scrollbar{width:7px;height:7px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
+::-webkit-scrollbar-thumb:hover{background:var(--text-3)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* 中等宽度降级:先收窄两侧,但**不牺牲决策栏**——
+   新手速看 5 步与 AI 解读是核心功能,不能因为窗口窄就消失 */
+@media (max-width:1400px){
+  :root{--list:244px;--decision:300px}
+  .sh-meta{gap:11px}
+  .dnum-item b{font-size:12.5px}
+}
+@media (max-width:1200px){
+  :root{--list:214px;--decision:282px}
+  .tick i{display:none}
+  .band-legend{gap:8px;flex-wrap:wrap;justify-content:flex-start}
+  .bstats{gap:10px}
+  .bstat b{font-size:14px}
+}
+/* 窄屏(平板竖屏 / 侧边窄面板):决策栏不隐藏,改为**移到底部横排**,
+   保证「AI 解读 + 新手速看」始终可见 —— 这是小白用户的核心入口 */
+@media (max-width:1040px){
+  .main{grid-template-columns:var(--rail) var(--list) minmax(0,1fr);
+    grid-template-rows:minmax(0,1fr) minmax(230px,320px)}
+  .decision{grid-column:1/-1;border-left:0;border-top:1px solid var(--line);
+    display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:start;overflow-y:auto}
+  .dsec{border-bottom:0;border-right:1px solid var(--line);padding:9px 11px}
+  .sh-meta{display:none}
+}
+</style>
+</head>
+<body>
+
+<div class="preview-bar">
+  <b>买股工具室 · 盯盘台重设计稿</b>
+  <span class="hint">布局从「卡片墙 + 上下堆叠」改为「满屏三栏工作台」；右侧集中决策信息</span>
+  <div class="seg" id="themeSeg">
+    <button data-t="dark" class="on">深色终端</button>
+    <button data-t="light">浅色纸面</button>
+  </div>
+  <div class="seg" id="sceneSeg">
+    <button data-s="main" class="on">已选股票</button>
+    <button data-s="cold">冷启动(未选)</button>
+  </div>
+  <div class="seg" id="vpSeg">
+    <button data-w="auto" class="on">自适应</button>
+    <button data-w="1440">1440px</button>
+    <button data-w="1280">1280px</button>
+  </div>
+  <span class="hint">数据取自本机后端真实接口 · 2026/10/21 00:22:59</span>
+</div>
+<div class="vpwrap" id="vpwrap"></div>
+
+<!-- ================= 场景 1:已选股票 ================= -->
+<div class="scene on" id="scene-main">
+<div class="desk">
+
+  <header class="topbar">
+    <div class="brand"><span class="mark">买</span>买股工具室</div>
+    <div class="tabs"><button class="on">自选</button><button class="fav">★ 关注</button></div>
+    <div class="ticker"><span class="tick" title="上证指数"><i>上证</i><b class="mono up">3735.37</b><em class="mono up">+0.12%</em></span><span class="tick" title="深证成指"><i>深证</i><b class="mono down">11801.29</b><em class="mono down">-0.14%</em></span><span class="tick" title="创业板指"><i>创业板</i><b class="mono down">2739.20</b><em class="mono down">-0.26%</em></span></div>
+    <div class="hb"><span class="pill">自动刷新 ON</span><span class="mono">20:57:31</span></div>
+  </header>
+
+  <section class="breadth">
+    <div class="bstats">
+      <div class="bstat"><u>全A</u><b class="mono">5568</b><u>只</u></div>
+      <div class="bstat"><u>涨</u><b class="mono up">3777</b></div>
+      <div class="bstat"><u>跌</u><b class="mono down">1667</b></div>
+      <div class="bstat"><u>涨停</u><b class="mono up">59</b></div>
+      <div class="bstat"><u>跌停</u><b class="mono down">10</b></div>
+      <div class="bstat"><u>成交</u><b class="mono">1.47</b><u>万亿</u></div>
+    </div>
+    <div class="bandwrap">
+      <div class="band"><div class="band-seg" style="flex:0.17959770114942528;background:var(--down-d)" title="跌停 10 只"></div><div class="band-seg" style="flex:1.0237068965517242;background:var(--down-2)" title="-5~10 57 只"></div><div class="band-seg" style="flex:13.900862068965516;background:var(--down-1)" title="-1~5 774 只"></div><div class="band-seg" style="flex:14.834770114942527;background:var(--down-0)" title="-0~1 826 只"></div><div class="band-seg" style="flex:2.227011494252874;background:var(--flat)" title="平 124 只"></div><div class="band-seg" style="flex:18.606321839080458;background:var(--up-0)" title="0~1 1036 只"></div><div class="band-seg" style="flex:42.151580459770116;background:var(--up-1)" title="1~5 2347 只"></div><div class="band-seg" style="flex:6.016522988505748;background:var(--up-2)" title="5~10 335 只"></div><div class="band-seg" style="flex:1.059626436781609;background:var(--up-d)" title="涨停 59 只"></div></div>
+      <div class="band-legend"><span class="band-chip"><i style="background:var(--down-d)"></i>跌停 <b>10</b></span><span class="band-chip"><i style="background:var(--down-2)"></i>-5~10 <b>57</b></span><span class="band-chip"><i style="background:var(--down-1)"></i>-1~5 <b>774</b></span><span class="band-chip"><i style="background:var(--down-0)"></i>-0~1 <b>826</b></span><span class="band-chip"><i style="background:var(--flat)"></i>平 <b>124</b></span><span class="band-chip"><i style="background:var(--up-0)"></i>0~1 <b>1036</b></span><span class="band-chip"><i style="background:var(--up-1)"></i>1~5 <b>2347</b></span><span class="band-chip"><i style="background:var(--up-2)"></i>5~10 <b>335</b></span><span class="band-chip"><i style="background:var(--up-d)"></i>涨停 <b>59</b></span></div>
+    </div>
+  </section>
+
+  <div class="main">
+
+    <nav class="rail">
+      <div class="rlogo">买</div>
+      <div class="ritem on" title="盯盘">📈</div>
+      <div class="rsep"></div>
+      <div class="ritem" title="大盘">🌏</div>
+      <div class="ritem" title="板块">🗂</div>
+      <div class="ritem" title="快讯">📰</div>
+      <div class="rsep"></div>
+      <div class="ritem" title="选股">🎯</div>
+      <div class="ritem" title="回测">📊</div>
+      <div class="ritem" title="盘前简报">☀️</div>
+      <div class="rsep"></div>
+      <div class="ritem" title="持仓">💼</div>
+      <div class="ritem" title="设置">⚙️</div>
+    </nav>
+
+    <section class="qlist">
+      <div class="qhead">
+        <input class="qsearch" placeholder="代码 / 名称">
+        <span class="qsort">涨幅 ▾</span>
+      </div>
+      <div class="qrows"><div class="qrow">
+      <div class="qleft">
+        <span class="qname">中电港<i class="tag-pos">持</i></span>
+        <span class="qcode">001287.SZ</span>
+      </div>
+      <span class="qprice mono up">19.330</span>
+      <span class="qpct mono up">+3.48%</span>
+    </div><div class="qrow active">
+      <div class="qleft">
+        <span class="qname">华天科技<i class="tag-pos">持</i></span>
+        <span class="qcode">002185.SZ</span>
+      </div>
+      <span class="qprice mono up">14.350</span>
+      <span class="qpct mono up">+3.31%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">豫能控股<i class="tag-pos">持</i></span>
+        <span class="qcode">001896.SZ</span>
+      </div>
+      <span class="qprice mono up">9.670</span>
+      <span class="qpct mono up">+0.42%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">中国长城<i class="tag-pos">持</i></span>
+        <span class="qcode">000066.SZ</span>
+      </div>
+      <span class="qprice mono up">13.430</span>
+      <span class="qpct mono up">+0.07%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">云铝股份<i class="tag-pos">持</i></span>
+        <span class="qcode">000807.SZ</span>
+      </div>
+      <span class="qprice mono down">25.320</span>
+      <span class="qpct mono down">-1.17%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">半导体设备ETF<i class="tag-pos">持</i></span>
+        <span class="qcode">561980.SH</span>
+      </div>
+      <span class="qprice mono down">0.548</span>
+      <span class="qpct mono down">-1.26%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">平安新兴产业LOF<i class="tag-pos">持</i></span>
+        <span class="qcode">501099.SH</span>
+      </div>
+      <span class="qprice mono down">2.523</span>
+      <span class="qpct mono down">-2.40%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">征和工业<i class="tag-fav">★</i></span>
+        <span class="qcode">003033.SZ</span>
+      </div>
+      <span class="qprice mono up">74.660</span>
+      <span class="qpct mono up">+3.77%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">亨通光电<i class="tag-fav">★</i></span>
+        <span class="qcode">600487.SH</span>
+      </div>
+      <span class="qprice mono up">52.070</span>
+      <span class="qpct mono up">+3.62%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">天孚通信<i class="tag-fav">★</i></span>
+        <span class="qcode">300394.SZ</span>
+      </div>
+      <span class="qprice mono up">204.540</span>
+      <span class="qpct mono up">+0.61%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">大唐发电<i class="tag-fav">★</i></span>
+        <span class="qcode">601991.SH</span>
+      </div>
+      <span class="qprice mono flat">5.100</span>
+      <span class="qpct mono flat">+0.00%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">紫金矿业<i class="tag-fav">★</i></span>
+        <span class="qcode">601899.SH</span>
+      </div>
+      <span class="qprice mono down">29.060</span>
+      <span class="qpct mono down">-2.45%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">洛阳钼业<i class="tag-fav">★</i></span>
+        <span class="qcode">603993.SH</span>
+      </div>
+      <span class="qprice mono down">14.350</span>
+      <span class="qpct mono down">-7.00%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">世嘉科技</span>
+        <span class="qcode">002796.SZ</span>
+      </div>
+      <span class="qprice mono up">21.730</span>
+      <span class="qpct mono up">+3.38%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">科士达</span>
+        <span class="qcode">002518.SZ</span>
+      </div>
+      <span class="qprice mono up">29.020</span>
+      <span class="qpct mono up">+3.02%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">晶方科技</span>
+        <span class="qcode">603005.SH</span>
+      </div>
+      <span class="qprice mono up">23.020</span>
+      <span class="qpct mono up">+2.54%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">消费电子ETF华夏</span>
+        <span class="qcode">159732.SZ</span>
+      </div>
+      <span class="qprice mono up">1.100</span>
+      <span class="qpct mono up">+2.52%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">科创新材ETF</span>
+        <span class="qcode">588160.SH</span>
+      </div>
+      <span class="qprice mono up">0.873</span>
+      <span class="qpct mono up">+2.22%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">恒铭达</span>
+        <span class="qcode">002947.SZ</span>
+      </div>
+      <span class="qprice mono up">49.140</span>
+      <span class="qpct mono up">+1.91%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">港股创新药ETF</span>
+        <span class="qcode">513120.SH</span>
+      </div>
+      <span class="qprice mono up">1.263</span>
+      <span class="qpct mono up">+1.69%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">中国卫星</span>
+        <span class="qcode">600118.SH</span>
+      </div>
+      <span class="qprice mono up">51.800</span>
+      <span class="qpct mono up">+1.65%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">长电科技</span>
+        <span class="qcode">600584.SH</span>
+      </div>
+      <span class="qprice mono up">57.250</span>
+      <span class="qpct mono up">+1.62%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">深科技</span>
+        <span class="qcode">000021.SZ</span>
+      </div>
+      <span class="qprice mono up">28.700</span>
+      <span class="qpct mono up">+1.59%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">多氟多</span>
+        <span class="qcode">002407.SZ</span>
+      </div>
+      <span class="qprice mono up">25.440</span>
+      <span class="qpct mono up">+1.39%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">能源化工ETF建信</span>
+        <span class="qcode">159981.SZ</span>
+      </div>
+      <span class="qprice mono up">1.827</span>
+      <span class="qpct mono up">+1.00%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">北方稀土</span>
+        <span class="qcode">600111.SH</span>
+      </div>
+      <span class="qprice mono up">35.580</span>
+      <span class="qpct mono up">+0.99%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">中天科技</span>
+        <span class="qcode">600522.SH</span>
+      </div>
+      <span class="qprice mono up">28.240</span>
+      <span class="qpct mono up">+0.64%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">中微公司</span>
+        <span class="qcode">688012.SH</span>
+      </div>
+      <span class="qprice mono up">278.500</span>
+      <span class="qpct mono up">+0.44%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">紫光股份</span>
+        <span class="qcode">000938.SZ</span>
+      </div>
+      <span class="qprice mono up">25.710</span>
+      <span class="qpct mono up">+0.43%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">香农芯创</span>
+        <span class="qcode">300475.SZ</span>
+      </div>
+      <span class="qprice mono up">114.440</span>
+      <span class="qpct mono up">+0.39%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">天齐锂业</span>
+        <span class="qcode">002466.SZ</span>
+      </div>
+      <span class="qprice mono up">36.500</span>
+      <span class="qpct mono up">+0.19%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">电池ETF汇添富</span>
+        <span class="qcode">159796.SZ</span>
+      </div>
+      <span class="qprice mono up">0.692</span>
+      <span class="qpct mono up">+0.14%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">上证指数</span>
+        <span class="qcode">000001.SH</span>
+      </div>
+      <span class="qprice mono up">3735.370</span>
+      <span class="qpct mono up">+0.12%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">华电辽能</span>
+        <span class="qcode">600396.SH</span>
+      </div>
+      <span class="qprice mono down">11.090</span>
+      <span class="qpct mono down">-0.27%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">京东方A</span>
+        <span class="qcode">000725.SZ</span>
+      </div>
+      <span class="qprice mono down">5.040</span>
+      <span class="qpct mono down">-0.40%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">华明装备</span>
+        <span class="qcode">002270.SZ</span>
+      </div>
+      <span class="qprice mono down">19.000</span>
+      <span class="qpct mono down">-0.42%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">恒生科技ETF华夏</span>
+        <span class="qcode">513180.SH</span>
+      </div>
+      <span class="qprice mono down">0.509</span>
+      <span class="qpct mono down">-0.78%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">寒武纪</span>
+        <span class="qcode">688256.SH</span>
+      </div>
+      <span class="qprice mono down">921.000</span>
+      <span class="qpct mono down">-0.81%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">电网设备ETF国泰</span>
+        <span class="qcode">561380.SH</span>
+      </div>
+      <span class="qprice mono down">0.634</span>
+      <span class="qpct mono down">-1.09%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">招商银行</span>
+        <span class="qcode">600036.SH</span>
+      </div>
+      <span class="qprice mono down">42.520</span>
+      <span class="qpct mono down">-1.23%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">亿纬锂能</span>
+        <span class="qcode">300014.SZ</span>
+      </div>
+      <span class="qprice mono down">44.040</span>
+      <span class="qpct mono down">-2.22%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">共达电声</span>
+        <span class="qcode">002655.SZ</span>
+      </div>
+      <span class="qprice mono down">31.500</span>
+      <span class="qpct mono down">-2.23%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">宁德时代</span>
+        <span class="qcode">300750.SZ</span>
+      </div>
+      <span class="qprice mono down">259.080</span>
+      <span class="qpct mono down">-2.97%</span>
+    </div></div>
+      <div class="qfoot"><span>43 只</span><span>持仓 7</span></div>
+    </section>
+
+    <section class="stage">
+      <div class="stockhead">
+        <span class="sh-name">华天科技</span>
+        <span class="sh-code">002185.SZ</span>
+        <span class="sh-price">
+          <b class="up">14.350</b>
+          <em class="up">+3.31%</em>
+        </span>
+        <span class="sh-tags">
+          <span class="sh-tag pos">持仓 700 股</span>
+          <span class="sh-tag">成本 23.041</span>
+        </span>
+        <div class="sh-meta">
+          <div class="shm"><u>最高</u><b class="mono">14.490</b></div>
+          <div class="shm"><u>最低</u><b class="mono">14.000</b></div>
+          <div class="shm"><u>昨收</u><b class="mono">13.890</b></div>
+          <div class="shm"><u>成交额</u><b class="mono">21.50 亿</b></div>
+        </div>
+      </div>
+
+      <div class="chartbar">
+        <div class="periods"><button>分时</button><button class="on">日K</button><button>周K</button><button>月K</button><button>60分</button></div>
+        <div class="overlay-legend">
+          <span><i style="background:var(--ma5)"></i>MA5</span>
+          <span><i style="background:var(--ma10)"></i>MA10</span>
+          <span><i style="background:var(--ma20)"></i>MA20</span>
+          <span><i style="background:var(--ma60)"></i>MA60</span>
+        </div>
+      </div>
+
+      <div class="chartbox">
+        <div class="yaxis"></div>
+        <div class="plot">
+          <div class="chartarea"></div>
+          <div class="xaxis"></div>
+          <div class="legend-row">
+            <span class="leg">MA5 <b class="mono" style="color:var(--ma5)">14.23</b></span>
+            <span class="leg">MA10 <b class="mono" style="color:var(--ma10)">15.00</b></span>
+            <span class="leg">MA20 <b class="mono" style="color:var(--ma20)">16.22</b></span>
+            <span class="leg">MA60 <b class="mono" style="color:var(--ma60)">16.75</b></span>
+            <span class="leg">20日高 <b class="mono">19.22</b></span>
+            <span class="leg">20日低 <b class="mono">13.47</b></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="levels">
+        <div class="levels-head">
+          <span class="lbl">关键价位</span>
+          <span style="font-size:10.5px;color:var(--text-3)">来自技术指标与 AI 解读 · 位置参考</span>
+        </div>
+        <div class="lv">
+          <div class="lv-item support"><u>支撑</u><b>13.47</b><span>近 5 日最低点,跌破可能测试 9.67 强支撑</span></div>
+          <div class="lv-item stabilize"><u>企稳</u><b>14.55</b><span>下降通道下轨,在此企稳可能反弹</span></div>
+          <div class="lv-item pressure"><u>压力</u><b>16.22</b><span>MA20 均线,需放量突破才算反转</span></div>
+          <div class="lv-item pressure"><u>压力</u><b>16.75</b><span>MA60 均线,中期多空分水岭</span></div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="decision">
+      <div class="dsec">
+        <div class="dhead"><span class="lbl">持仓概览</span><span style="font-size:10px;color:var(--text-3)">7 只</span></div>
+        <div class="dnum">
+          <div class="dnum-item"><u>总市值</u><b class="mono">¥35,847.90</b><span>股数 × 现价</span></div>
+          <div class="dnum-item"><u>总浮盈</u><b class="mono down">-31.65%</b><span>¥-16,595.90</span></div>
+          <div class="dnum-item"><u>今日盈亏</u><b class="mono up">+¥390.90</b><span>现价 − 昨收</span></div>
+        </div>
+        <div style="margin-top:9px"><div class="prow">
+      <div class="pl">
+        <span class="pname">豫能控股</span>
+        <span class="pcode">001896.SZ · 300股</span>
+      </div>
+      <div class="pr">
+        <span class="pmono mono down">-57.64%</span>
+        <span class="pmono mono up">+0.42%</span>
+      </div>
+    </div><div class="prow">
+      <div class="pl">
+        <span class="pname">云铝股份</span>
+        <span class="pcode">000807.SZ · 200股</span>
+      </div>
+      <div class="pr">
+        <span class="pmono mono up">+39.66%</span>
+        <span class="pmono mono down">-1.17%</span>
+      </div>
+    </div><div class="prow">
+      <div class="pl">
+        <span class="pname">中国长城</span>
+        <span class="pcode">000066.SZ · 300股</span>
+      </div>
+      <div class="pr">
+        <span class="pmono mono down">-40.03%</span>
+        <span class="pmono mono up">+0.07%</span>
+      </div>
+    </div><div class="prow">
+      <div class="pl">
+        <span class="pname">中电港</span>
+        <span class="pcode">001287.SZ · 400股</span>
+      </div>
+      <div class="pr">
+        <span class="pmono mono down">-17.01%</span>
+        <span class="pmono mono up">+3.48%</span>
+      </div>
+    </div><div class="prow">
+      <div class="pl">
+        <span class="pname">华天科技</span>
+        <span class="pcode">002185.SZ · 700股</span>
+      </div>
+      <div class="pr">
+        <span class="pmono mono down">-37.72%</span>
+        <span class="pmono mono up">+3.31%</span>
+      </div>
+    </div><div class="prow">
+      <div class="pl">
+        <span class="pname">半导体设备ETF</span>
+        <span class="pcode">561980.SH · 500股</span>
+      </div>
+      <div class="pr">
+        <span class="pmono mono down">-34.06%</span>
+        <span class="pmono mono down">-1.26%</span>
+      </div>
+    </div><div class="prow">
+      <div class="pl">
+        <span class="pname">平安新兴产业LOF</span>
+        <span class="pcode">501099.SH · 2300股</span>
+      </div>
+      <div class="pr">
+        <span class="pmono mono down">-38.19%</span>
+        <span class="pmono mono down">-2.40%</span>
+      </div>
+    </div></div>
+      </div>
+
+      <div class="dsec">
+        <div class="dhead"><span class="lbl">AI 解读</span><span class="ai-score mono">view 75 分</span></div>
+        <div class="ai-card">
+          <div class="ai-top">
+            <span class="ai-view">看多</span>
+            <span style="font-size:11px;color:var(--text-3)">MDD · 30s</span>
+          </div>
+          <p class="ai-line"><b>KDJ 金叉超卖区 + 量增价升</b>,底背离诱空信号,75 分看多,短期可能反弹但整体仍在下降通道。</p>
+          <p class="ai-line">下降通道中,9 月底高点 18.55 跌至当前 14.35,跌幅约 22.6%,现价触及下轨 14.55 附近,短期有支撑。</p>
+          <div class="ai-risk"><u>风险提示</u>当前浮亏约 37%,下降通道未反转,MACD 零轴下方运行,中期趋势仍偏空,反弹高度有限,建议逢高减仓而非加仓死守。</div>
+        </div>
+      </div>
+
+      <div class="dsec">
+        <div class="dhead"><span class="lbl">新手速看 · 5 步</span><span style="font-size:10px;color:var(--accent)">已分析</span></div>
+        <div class="steps">
+          <div class="step on"><div class="step-n">1</div><div><div class="step-q"><b>方向</b> 涨势 / 跌势 / 震荡</div>
+            <div class="step-a">看多 · 下降通道中短线企稳</div></div></div>
+          <div class="step on"><div class="step-n">2</div><div><div class="step-q"><b>量能</b> 放量上涨更可信</div>
+            <div class="step-a">缩量 0.54,但末日量较前 5 日均量增长 32%,量增价升</div></div></div>
+          <div class="step on"><div class="step-n">3</div><div><div class="step-q"><b>价位</b> 当前价处于近 120 日什么位置</div>
+            <div class="step-a">低位区间(接近 P20 ¥15.19),慎接飞刀</div></div></div>
+          <div class="step on"><div class="step-n">4</div><div><div class="step-q"><b>支撑 / 压力</b> 关键位置决定买卖点</div>
+            <div class="step-a">支撑 ¥13.47 · 企稳 ¥14.55 · 压力 ¥16.22 / 16.75</div></div></div>
+          <div class="step on"><div class="step-n">5</div><div><div class="step-q"><b>信号确认</b> 机械信号 + 胜率 + AI 解读一致</div>
+            <div class="step-a">看多 · 75 分 · 历史同类胜率 61%</div></div></div>
+        </div>
+      </div>
+
+      <div class="dsec">
+        <div class="dhead"><span class="lbl">领涨 / 领跌</span></div>
+        <div class="mvrow"><span class="mv"><b>嘉晨智能</b><em class="mono up">+29.98%</em></span><span class="mv"><b>格利尔</b><em class="mono up">+29.97%</em></span><span class="mv"><b>博汇科技</b><em class="mono up">+20.01%</em></span></div>
+        <div class="mvrow" style="margin-top:4px"><span class="mv"><b>*ST泉为</b><em class="mono down">-19.24%</em></span><span class="mv"><b>善水科技</b><em class="mono down">-18.94%</em></span><span class="mv"><b>莱美药业</b><em class="mono down">-15.48%</em></span></div>
+      </div>
+
+      <div class="dsec">
+        <div class="dhead"><span class="lbl">两市量能 · 近 5 日</span><span style="font-size:10px;color:var(--text-3)">亿手</span></div>
+        <div class="volbars"><span class="volbar" title="2026-10-14 445.96 亿手"><i style="height:87.41571271757878%"></i><u>10-14</u></span><span class="volbar" title="2026-10-15 510.16 亿手"><i style="height:100%"></i><u>10-15</u></span><span class="volbar" title="2026-10-16 472.63 亿手"><i style="height:92.6434843970519%"></i><u>10-16</u></span><span class="volbar" title="2026-10-19 417.79 亿手"><i style="height:81.89391563431082%"></i><u>10-19</u></span><span class="volbar" title="2026-10-20 408.69 亿手"><i style="height:80.11016151795515%"></i><u>10-20</u></span></div>
+      </div>
+    </aside>
+
+  </div>
+</div>
+</div>
+
+<!-- ================= 场景 2:冷启动 ================= -->
+<div class="scene" id="scene-cold">
+<div class="desk">
+  <header class="topbar">
+    <div class="brand"><span class="mark">买</span>买股工具室</div>
+    <div class="tabs"><button class="on">自选</button><button class="fav">★ 关注</button></div>
+    <div class="ticker"><span class="tick" title="上证指数"><i>上证</i><b class="mono up">3735.37</b><em class="mono up">+0.12%</em></span><span class="tick" title="深证成指"><i>深证</i><b class="mono down">11801.29</b><em class="mono down">-0.14%</em></span><span class="tick" title="创业板指"><i>创业板</i><b class="mono down">2739.20</b><em class="mono down">-0.26%</em></span></div>
+    <div class="hb"><span class="pill">自动刷新 ON</span><span class="mono">20:57:31</span></div>
+  </header>
+  <section class="breadth">
+    <div class="bstats">
+      <div class="bstat"><u>全A</u><b class="mono">5568</b><u>只</u></div>
+      <div class="bstat"><u>涨</u><b class="mono up">3777</b></div>
+      <div class="bstat"><u>跌</u><b class="mono down">1667</b></div>
+      <div class="bstat"><u>涨停</u><b class="mono up">59</b></div>
+      <div class="bstat"><u>跌停</u><b class="mono down">10</b></div>
+      <div class="bstat"><u>成交</u><b class="mono">1.47</b><u>万亿</u></div>
+    </div>
+    <div class="bandwrap">
+      <div class="band"><div class="band-seg" style="flex:0.17959770114942528;background:var(--down-d)" title="跌停 10 只"></div><div class="band-seg" style="flex:1.0237068965517242;background:var(--down-2)" title="-5~10 57 只"></div><div class="band-seg" style="flex:13.900862068965516;background:var(--down-1)" title="-1~5 774 只"></div><div class="band-seg" style="flex:14.834770114942527;background:var(--down-0)" title="-0~1 826 只"></div><div class="band-seg" style="flex:2.227011494252874;background:var(--flat)" title="平 124 只"></div><div class="band-seg" style="flex:18.606321839080458;background:var(--up-0)" title="0~1 1036 只"></div><div class="band-seg" style="flex:42.151580459770116;background:var(--up-1)" title="1~5 2347 只"></div><div class="band-seg" style="flex:6.016522988505748;background:var(--up-2)" title="5~10 335 只"></div><div class="band-seg" style="flex:1.059626436781609;background:var(--up-d)" title="涨停 59 只"></div></div>
+      <div class="band-legend"><span class="band-chip"><i style="background:var(--down-d)"></i>跌停 <b>10</b></span><span class="band-chip"><i style="background:var(--down-2)"></i>-5~10 <b>57</b></span><span class="band-chip"><i style="background:var(--down-1)"></i>-1~5 <b>774</b></span><span class="band-chip"><i style="background:var(--down-0)"></i>-0~1 <b>826</b></span><span class="band-chip"><i style="background:var(--flat)"></i>平 <b>124</b></span><span class="band-chip"><i style="background:var(--up-0)"></i>0~1 <b>1036</b></span><span class="band-chip"><i style="background:var(--up-1)"></i>1~5 <b>2347</b></span><span class="band-chip"><i style="background:var(--up-2)"></i>5~10 <b>335</b></span><span class="band-chip"><i style="background:var(--up-d)"></i>涨停 <b>59</b></span></div>
+    </div>
+  </section>
+  <div class="main">
+    <nav class="rail">
+      <div class="rlogo">买</div>
+      <div class="ritem on" title="盯盘">📈</div>
+      <div class="rsep"></div>
+      <div class="ritem" title="大盘">🌏</div>
+      <div class="ritem" title="板块">🗂</div>
+      <div class="ritem" title="快讯">📰</div>
+      <div class="rsep"></div>
+      <div class="ritem" title="选股">🎯</div>
+      <div class="ritem" title="回测">📊</div>
+      <div class="ritem" title="盘前简报">☀️</div>
+      <div class="rsep"></div>
+      <div class="ritem" title="持仓">💼</div>
+      <div class="ritem" title="设置">⚙️</div>
+    </nav>
+    <section class="qlist">
+      <div class="qhead">
+        <input class="qsearch" placeholder="代码 / 名称">
+        <span class="qsort">涨幅 ▾</span>
+      </div>
+      <div class="qrows"><div class="qrow">
+      <div class="qleft">
+        <span class="qname">中电港<i class="tag-pos">持</i></span>
+        <span class="qcode">001287.SZ</span>
+      </div>
+      <span class="qprice mono up">19.330</span>
+      <span class="qpct mono up">+3.48%</span>
+    </div><div class="qrow active">
+      <div class="qleft">
+        <span class="qname">华天科技<i class="tag-pos">持</i></span>
+        <span class="qcode">002185.SZ</span>
+      </div>
+      <span class="qprice mono up">14.350</span>
+      <span class="qpct mono up">+3.31%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">豫能控股<i class="tag-pos">持</i></span>
+        <span class="qcode">001896.SZ</span>
+      </div>
+      <span class="qprice mono up">9.670</span>
+      <span class="qpct mono up">+0.42%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">中国长城<i class="tag-pos">持</i></span>
+        <span class="qcode">000066.SZ</span>
+      </div>
+      <span class="qprice mono up">13.430</span>
+      <span class="qpct mono up">+0.07%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">云铝股份<i class="tag-pos">持</i></span>
+        <span class="qcode">000807.SZ</span>
+      </div>
+      <span class="qprice mono down">25.320</span>
+      <span class="qpct mono down">-1.17%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">半导体设备ETF<i class="tag-pos">持</i></span>
+        <span class="qcode">561980.SH</span>
+      </div>
+      <span class="qprice mono down">0.548</span>
+      <span class="qpct mono down">-1.26%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">平安新兴产业LOF<i class="tag-pos">持</i></span>
+        <span class="qcode">501099.SH</span>
+      </div>
+      <span class="qprice mono down">2.523</span>
+      <span class="qpct mono down">-2.40%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">征和工业<i class="tag-fav">★</i></span>
+        <span class="qcode">003033.SZ</span>
+      </div>
+      <span class="qprice mono up">74.660</span>
+      <span class="qpct mono up">+3.77%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">亨通光电<i class="tag-fav">★</i></span>
+        <span class="qcode">600487.SH</span>
+      </div>
+      <span class="qprice mono up">52.070</span>
+      <span class="qpct mono up">+3.62%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">天孚通信<i class="tag-fav">★</i></span>
+        <span class="qcode">300394.SZ</span>
+      </div>
+      <span class="qprice mono up">204.540</span>
+      <span class="qpct mono up">+0.61%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">大唐发电<i class="tag-fav">★</i></span>
+        <span class="qcode">601991.SH</span>
+      </div>
+      <span class="qprice mono flat">5.100</span>
+      <span class="qpct mono flat">+0.00%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">紫金矿业<i class="tag-fav">★</i></span>
+        <span class="qcode">601899.SH</span>
+      </div>
+      <span class="qprice mono down">29.060</span>
+      <span class="qpct mono down">-2.45%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">洛阳钼业<i class="tag-fav">★</i></span>
+        <span class="qcode">603993.SH</span>
+      </div>
+      <span class="qprice mono down">14.350</span>
+      <span class="qpct mono down">-7.00%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">世嘉科技</span>
+        <span class="qcode">002796.SZ</span>
+      </div>
+      <span class="qprice mono up">21.730</span>
+      <span class="qpct mono up">+3.38%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">科士达</span>
+        <span class="qcode">002518.SZ</span>
+      </div>
+      <span class="qprice mono up">29.020</span>
+      <span class="qpct mono up">+3.02%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">晶方科技</span>
+        <span class="qcode">603005.SH</span>
+      </div>
+      <span class="qprice mono up">23.020</span>
+      <span class="qpct mono up">+2.54%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">消费电子ETF华夏</span>
+        <span class="qcode">159732.SZ</span>
+      </div>
+      <span class="qprice mono up">1.100</span>
+      <span class="qpct mono up">+2.52%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">科创新材ETF</span>
+        <span class="qcode">588160.SH</span>
+      </div>
+      <span class="qprice mono up">0.873</span>
+      <span class="qpct mono up">+2.22%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">恒铭达</span>
+        <span class="qcode">002947.SZ</span>
+      </div>
+      <span class="qprice mono up">49.140</span>
+      <span class="qpct mono up">+1.91%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">港股创新药ETF</span>
+        <span class="qcode">513120.SH</span>
+      </div>
+      <span class="qprice mono up">1.263</span>
+      <span class="qpct mono up">+1.69%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">中国卫星</span>
+        <span class="qcode">600118.SH</span>
+      </div>
+      <span class="qprice mono up">51.800</span>
+      <span class="qpct mono up">+1.65%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">长电科技</span>
+        <span class="qcode">600584.SH</span>
+      </div>
+      <span class="qprice mono up">57.250</span>
+      <span class="qpct mono up">+1.62%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">深科技</span>
+        <span class="qcode">000021.SZ</span>
+      </div>
+      <span class="qprice mono up">28.700</span>
+      <span class="qpct mono up">+1.59%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">多氟多</span>
+        <span class="qcode">002407.SZ</span>
+      </div>
+      <span class="qprice mono up">25.440</span>
+      <span class="qpct mono up">+1.39%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">能源化工ETF建信</span>
+        <span class="qcode">159981.SZ</span>
+      </div>
+      <span class="qprice mono up">1.827</span>
+      <span class="qpct mono up">+1.00%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">北方稀土</span>
+        <span class="qcode">600111.SH</span>
+      </div>
+      <span class="qprice mono up">35.580</span>
+      <span class="qpct mono up">+0.99%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">中天科技</span>
+        <span class="qcode">600522.SH</span>
+      </div>
+      <span class="qprice mono up">28.240</span>
+      <span class="qpct mono up">+0.64%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">中微公司</span>
+        <span class="qcode">688012.SH</span>
+      </div>
+      <span class="qprice mono up">278.500</span>
+      <span class="qpct mono up">+0.44%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">紫光股份</span>
+        <span class="qcode">000938.SZ</span>
+      </div>
+      <span class="qprice mono up">25.710</span>
+      <span class="qpct mono up">+0.43%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">香农芯创</span>
+        <span class="qcode">300475.SZ</span>
+      </div>
+      <span class="qprice mono up">114.440</span>
+      <span class="qpct mono up">+0.39%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">天齐锂业</span>
+        <span class="qcode">002466.SZ</span>
+      </div>
+      <span class="qprice mono up">36.500</span>
+      <span class="qpct mono up">+0.19%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">电池ETF汇添富</span>
+        <span class="qcode">159796.SZ</span>
+      </div>
+      <span class="qprice mono up">0.692</span>
+      <span class="qpct mono up">+0.14%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">上证指数</span>
+        <span class="qcode">000001.SH</span>
+      </div>
+      <span class="qprice mono up">3735.370</span>
+      <span class="qpct mono up">+0.12%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">华电辽能</span>
+        <span class="qcode">600396.SH</span>
+      </div>
+      <span class="qprice mono down">11.090</span>
+      <span class="qpct mono down">-0.27%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">京东方A</span>
+        <span class="qcode">000725.SZ</span>
+      </div>
+      <span class="qprice mono down">5.040</span>
+      <span class="qpct mono down">-0.40%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">华明装备</span>
+        <span class="qcode">002270.SZ</span>
+      </div>
+      <span class="qprice mono down">19.000</span>
+      <span class="qpct mono down">-0.42%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">恒生科技ETF华夏</span>
+        <span class="qcode">513180.SH</span>
+      </div>
+      <span class="qprice mono down">0.509</span>
+      <span class="qpct mono down">-0.78%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">寒武纪</span>
+        <span class="qcode">688256.SH</span>
+      </div>
+      <span class="qprice mono down">921.000</span>
+      <span class="qpct mono down">-0.81%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">电网设备ETF国泰</span>
+        <span class="qcode">561380.SH</span>
+      </div>
+      <span class="qprice mono down">0.634</span>
+      <span class="qpct mono down">-1.09%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">招商银行</span>
+        <span class="qcode">600036.SH</span>
+      </div>
+      <span class="qprice mono down">42.520</span>
+      <span class="qpct mono down">-1.23%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">亿纬锂能</span>
+        <span class="qcode">300014.SZ</span>
+      </div>
+      <span class="qprice mono down">44.040</span>
+      <span class="qpct mono down">-2.22%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">共达电声</span>
+        <span class="qcode">002655.SZ</span>
+      </div>
+      <span class="qprice mono down">31.500</span>
+      <span class="qpct mono down">-2.23%</span>
+    </div><div class="qrow">
+      <div class="qleft">
+        <span class="qname">宁德时代</span>
+        <span class="qcode">300750.SZ</span>
+      </div>
+      <span class="qprice mono down">259.080</span>
+      <span class="qpct mono down">-2.97%</span>
+    </div></div>
+      <div class="qfoot"><span>43 只</span><span>持仓 7</span></div>
+    </section>
+    <section class="stage">
+      <div class="empty">
+        <div>
+          <div class="big">📈</div>
+          <h4>选一只股票,这里会出现 K 线与 AI 解读</h4>
+          <p>左侧列表按涨幅排序,带「持」标记的是你的持仓。选中后这里会显示分时 / 日K / 周K 与关键价位。</p>
+          <div class="empty-hint">
+            <span>持仓 7 只</span><span>特别关注 6 只</span><span>今日涨停 59 家</span>
+          </div>
+        </div>
+      </div>
+    </section>
+    <aside class="decision">
+      <div class="dsec">
+        <div class="dhead"><span class="lbl">持仓概览</span><span style="font-size:10px;color:var(--text-3)">7 只</span></div>
+        <div class="dnum">
+          <div class="dnum-item"><u>总市值</u><b class="mono">¥35,847.90</b><span>股数 × 现价</span></div>
+          <div class="dnum-item"><u>总浮盈</u><b class="mono down">-31.65%</b><span>¥-16,595.90</span></div>
+          <div class="dnum-item"><u>今日盈亏</u><b class="mono up">+¥390.90</b><span>现价 − 昨收</span></div>
+        </div>
+        <div style="margin-top:9px"><div class="prow">
+      <div class="pl">
+        <span class="pname">豫能控股</span>
+        <span class="pcode">001896.SZ · 300股</span>
+      </div>
+      <div class="pr">
+        <span class="pmono mono down">-57.64%</span>
+        <span class="pmono mono up">+0.42%</span>
+      </div>
+    </div><div class="prow">
+      <div class="pl">
+        <span class="pname">云铝股份</span>
+        <span class="pcode">000807.SZ · 200股</span>
+      </div>
+      <div class="pr">
+        <span class="pmono mono up">+39.66%</span>
+        <span class="pmono mono down">-1.17%</span>
+      </div>
+    </div><div class="prow">
+      <div class="pl">
+        <span class="pname">中国长城</span>
+        <span class="pcode">000066.SZ · 300股</span>
+      </div>
+      <div class="pr">
+        <span class="pmono mono down">-40.03%</span>
+        <span class="pmono mono up">+0.07%</span>
+      </div>
+    </div><div class="prow">
+      <div class="pl">
+        <span class="pname">中电港</span>
+        <span class="pcode">001287.SZ · 400股</span>
+      </div>
+      <div class="pr">
+        <span class="pmono mono down">-17.01%</span>
+        <span class="pmono mono up">+3.48%</span>
+      </div>
+    </div><div class="prow">
+      <div class="pl">
+        <span class="pname">华天科技</span>
+        <span class="pcode">002185.SZ · 700股</span>
+      </div>
+      <div class="pr">
+        <span class="pmono mono down">-37.72%</span>
+        <span class="pmono mono up">+3.31%</span>
+      </div>
+    </div><div class="prow">
+      <div class="pl">
+        <span class="pname">半导体设备ETF</span>
+        <span class="pcode">561980.SH · 500股</span>
+      </div>
+      <div class="pr">
+        <span class="pmono mono down">-34.06%</span>
+        <span class="pmono mono down">-1.26%</span>
+      </div>
+    </div><div class="prow">
+      <div class="pl">
+        <span class="pname">平安新兴产业LOF</span>
+        <span class="pcode">501099.SH · 2300股</span>
+      </div>
+      <div class="pr">
+        <span class="pmono mono down">-38.19%</span>
+        <span class="pmono mono down">-2.40%</span>
+      </div>
+    </div></div>
+      </div>
+      <div class="dsec">
+        <div class="dhead"><span class="lbl">新手速看 · 5 步</span><span style="font-size:10px;color:var(--text-3)">待分析</span></div>
+        <div class="steps">
+          <div class="step"><div class="step-n">1</div><div><div class="step-q"><b>方向</b> 涨势 / 跌势 / 震荡</div>
+            <div class="step-a muted">先在左侧选一只股票</div></div></div>
+          <div class="step"><div class="step-n">2</div><div><div class="step-q"><b>量能</b> 放量上涨更可信</div>
+            <div class="step-a muted">先在左侧选一只股票</div></div></div>
+          <div class="step"><div class="step-n">3</div><div><div class="step-q"><b>价位</b> 近 120 日的相对位置</div>
+            <div class="step-a muted">先在左侧选一只股票</div></div></div>
+          <div class="step"><div class="step-n">4</div><div><div class="step-q"><b>支撑 / 压力</b> 关键位置决定买卖点</div>
+            <div class="step-a muted">先在左侧选一只股票</div></div></div>
+          <div class="step"><div class="step-n">5</div><div><div class="step-q"><b>信号确认</b> 机械信号 + 胜率 + AI</div>
+            <div class="step-a muted">先在左侧选一只股票</div></div></div>
+        </div>
+      </div>
+      <div class="dsec">
+        <div class="dhead"><span class="lbl">领涨 / 领跌</span></div>
+        <div class="mvrow"><span class="mv"><b>嘉晨智能</b><em class="mono up">+29.98%</em></span><span class="mv"><b>格利尔</b><em class="mono up">+29.97%</em></span><span class="mv"><b>博汇科技</b><em class="mono up">+20.01%</em></span></div>
+        <div class="mvrow" style="margin-top:4px"><span class="mv"><b>*ST泉为</b><em class="mono down">-19.24%</em></span><span class="mv"><b>善水科技</b><em class="mono down">-18.94%</em></span><span class="mv"><b>莱美药业</b><em class="mono down">-15.48%</em></span></div>
+      </div>
+    </aside>
+  </div>
+</div>
+</div>
+
+<script>
+document.getElementById('themeSeg').addEventListener('click',(e)=>{
+  const b=e.target.closest('button'); if(!b) return;
+  document.documentElement.dataset.theme=b.dataset.t;
+  [...e.currentTarget.children].forEach(x=>x.classList.toggle('on',x===b));
+  const f=document.querySelector('#vpwrap iframe');
+  if(f) f.contentWindow.postMessage({theme:b.dataset.t},'*');
+});
+document.getElementById('sceneSeg').addEventListener('click',(e)=>{
+  const b=e.target.closest('button'); if(!b) return;
+  document.getElementById('scene-'+b.dataset.s).classList.add('on');
+  document.getElementById('scene-'+(b.dataset.s==='main'?'cold':'main')).classList.remove('on');
+  [...e.currentTarget.children].forEach(x=>x.classList.toggle('on',x===b));
+  // 切场景时同步 iframe 内的场景
+  const f=document.querySelector('#vpwrap iframe');
+  if(f) f.contentWindow.postMessage({scene:b.dataset.s,theme:document.documentElement.dataset.theme},'*');
+  if(typeof renderCharts==='function') renderCharts();
+});
+document.getElementById('vpSeg').addEventListener('click',(e)=>{
+  const b=e.target.closest('button'); if(!b) return;
+  [...e.currentTarget.children].forEach(x=>x.classList.toggle('on',x===b));
+  const wrap=document.getElementById('vpwrap');
+  const scenes=[...document.querySelectorAll('.scene')];
+  if(b.dataset.w==='auto'){
+    wrap.classList.remove('on');
+    scenes.forEach(s=>s.style.display='');
+    return;
+  }
+  scenes.forEach(s=>s.style.display='none');
+  wrap.classList.add('on');
+  // 面板比模拟视口窄 → 整体等比缩放显示,保证能看到**完整**的四栏结构;
+  // iframe 高度按「可用高度 ÷ 缩放比」给,缩放后正好铺满面板,避免底部露出空白
+  // (那片空白会被误读成"设计留了虚空" —— 上一版深色终端就是这么被否掉的)
+  const availW=wrap.clientWidth||820, availH=wrap.clientHeight||700;
+  const w=parseInt(b.dataset.w,10);
+  const scale=Math.min(1,availW/w);
+  const fh=Math.round(availH/scale);
+  wrap.innerHTML='<div style="width:'+Math.round(w*scale)+'px;height:'+availH+'px;margin:0 auto;overflow:hidden">'
+    +'<iframe src="trading-desk.html?frame=1" style="width:'+w+'px;height:'+fh+'px;border:0;'
+    +'transform:scale('+scale+');transform-origin:top left"></iframe></div>';
+});
+// iframe 内:接收父页面的场景/主题指令
+if(new URLSearchParams(location.search).has('frame')){
+  document.body.classList.add('framed');
+  window.addEventListener('message',(e)=>{
+    if(e.data&&e.data.theme) document.documentElement.dataset.theme=e.data.theme;
+    if(e.data&&e.data.scene){
+      document.getElementById('scene-'+e.data.scene).classList.add('on');
+      document.getElementById('scene-'+(e.data.scene==='main'?'cold':'main')).classList.remove('on');
+    }
+    if(typeof renderCharts==='function') setTimeout(renderCharts,40);
+  });
+  // 初始主题跟随父页面
+  try{
+    const t=window.parent.document.documentElement.dataset.theme;
+    if(t) document.documentElement.dataset.theme=t;
+  }catch(e){}
+}
+document.querySelectorAll('.qrow').forEach(r=>{
+  r.addEventListener('click',()=>{
+    document.querySelectorAll('.qrow').forEach(x=>x.classList.remove('active'));
+    r.classList.add('active');
+  });
+});
+</script>
+<script id="kdata" type="application/json">{"items":[{"date":"2026-08-18","o":19,"h":19.22,"l":18.5,"c":18.7,"v":318263411},{"date":"2026-08-19","o":18.01,"h":18.77,"l":17.18,"c":17.36,"v":316686563},{"date":"2026-08-20","o":17.6,"h":17.89,"l":17.14,"c":17.35,"v":203135948},{"date":"2026-08-21","o":17.25,"h":17.62,"l":17.02,"c":17.42,"v":154722508},{"date":"2026-08-24","o":17.52,"h":17.68,"l":16.47,"c":16.88,"v":197946339},{"date":"2026-08-25","o":16.5,"h":17.06,"l":16,"c":16.84,"v":191422261},{"date":"2026-08-26","o":16.91,"h":16.97,"l":16.43,"c":16.66,"v":138673732},{"date":"2026-08-27","o":16.96,"h":17.26,"l":16.67,"c":17.18,"v":218271409},{"date":"2026-08-28","o":17.12,"h":17.44,"l":16.91,"c":16.92,"v":195253519},{"date":"2026-08-31","o":16.55,"h":17.05,"l":16.53,"c":17.05,"v":147061818},{"date":"2026-09-01","o":17.05,"h":17.05,"l":16.46,"c":16.52,"v":151631047},{"date":"2026-09-02","o":16.36,"h":16.37,"l":15.95,"c":16.05,"v":130542812},{"date":"2026-09-03","o":16.27,"h":16.29,"l":15.83,"c":16.02,"v":118142071},{"date":"2026-09-04","o":16.17,"h":16.28,"l":15.45,"c":15.57,"v":156522920},{"date":"2026-09-07","o":15.88,"h":16.13,"l":15.75,"c":16.08,"v":165898126},{"date":"2026-09-08","o":16.08,"h":16.37,"l":15.86,"c":15.97,"v":180640672},{"date":"2026-09-09","o":16.1,"h":16.45,"l":16.01,"c":16.17,"v":185387395},{"date":"2026-09-10","o":16,"h":16.56,"l":15.9,"c":16.38,"v":219944450},{"date":"2026-09-11","o":16.01,"h":16.26,"l":15.6,"c":16.2,"v":203894160},{"date":"2026-09-14","o":15.94,"h":16.2,"l":15.65,"c":16,"v":114469038},{"date":"2026-09-15","o":15.86,"h":16.53,"l":15.86,"c":16.36,"v":218076312},{"date":"2026-09-16","o":16.37,"h":16.93,"l":16.21,"c":16.85,"v":259626839},{"date":"2026-09-17","o":16.68,"h":16.91,"l":16.35,"c":16.39,"v":211134031},{"date":"2026-09-18","o":16.77,"h":18.03,"l":16.61,"c":18.03,"v":363108781},{"date":"2026-09-21","o":18.68,"h":18.83,"l":18.24,"c":18.55,"v":579522397},{"date":"2026-09-22","o":18.91,"h":18.95,"l":18.16,"c":18.28,"v":405446799},{"date":"2026-09-23","o":18.28,"h":18.62,"l":17.82,"c":18.37,"v":331465357},{"date":"2026-09-24","o":18.03,"h":18.17,"l":17.58,"c":17.58,"v":219584614},{"date":"2026-09-28","o":17.6,"h":17.68,"l":16.72,"c":16.99,"v":188239479},{"date":"2026-09-29","o":16.92,"h":17.32,"l":16.84,"c":17.02,"v":145388492},{"date":"2026-09-30","o":17.1,"h":17.15,"l":16.4,"c":16.46,"v":156878435},{"date":"2026-10-08","o":16.59,"h":16.83,"l":15.91,"c":16.03,"v":144012484},{"date":"2026-10-09","o":15.85,"h":15.98,"l":15.13,"c":15.85,"v":168854183},{"date":"2026-10-12","o":15.66,"h":15.77,"l":15.2,"c":15.22,"v":112677671},{"date":"2026-10-13","o":14.8,"h":15.55,"l":14.53,"c":15.29,"v":143386255},{"date":"2026-10-14","o":15.2,"h":15.32,"l":14.7,"c":14.72,"v":107032470},{"date":"2026-10-15","o":14.21,"h":14.45,"l":14.12,"c":14.17,"v":122778461},{"date":"2026-10-16","o":14.45,"h":14.54,"l":13.94,"c":14.03,"v":117521408},{"date":"2026-10-19","o":14.03,"h":14.09,"l":13.47,"c":13.89,"v":114152253},{"date":"2026-10-20","o":14,"h":14.49,"l":14,"c":14.35,"v":150800184}],"ma":{"5":[18.372,18.184,18.078000000000003,17.966,17.542,17.17,17.03,16.996,16.896,16.93,16.866,16.744,16.511999999999997,16.242,16.048,15.937999999999999,15.962,16.034,16.16,16.144,16.222,16.357999999999997,16.36,16.726,17.235999999999997,17.62,17.924,18.162,17.954,17.648,17.284,16.815999999999995,16.47,16.116,15.77,15.422,15.05,14.685999999999998,14.419999999999998,14.232],"10":[17.967999999999996,18.044999999999998,18.054,17.997999999999998,17.880000000000003,17.771,17.607000000000003,17.537,17.431,17.236,17.018000000000004,16.887000000000004,16.754,16.569,16.488999999999997,16.402,16.352999999999998,16.273000000000003,16.201,16.095999999999997,16.080000000000002,16.16,16.197000000000003,16.442999999999998,16.69,16.921,17.141,17.261000000000003,17.339999999999996,17.442,17.452000000000005,17.37,17.316,17.035,16.708999999999996,16.352999999999998,15.932999999999996,15.577999999999998,15.268,15.001],"20":[17.3845,17.331500000000002,17.314500000000002,17.256,17.1705,17.139000000000003,17.143500000000003,17.257,17.3295,17.4435,17.493,17.466,17.404,17.283499999999997,17.1845,17.0865,16.98,16.905000000000005,16.816000000000003,16.666000000000004,16.549,16.523500000000002,16.4755,16.506,16.5895,16.6615,16.747000000000003,16.767000000000003,16.770500000000002,16.769,16.766,16.764999999999997,16.7565,16.738999999999997,16.699500000000004,16.637000000000008,16.537000000000006,16.419500000000006,16.304,16.2215],"60":[19.174666666666674,19.152833333333337,19.10616666666667,19.038333333333334,18.997333333333334,18.970833333333328,18.942999999999998,18.910000000000004,18.871000000000006,18.853833333333338,18.849166666666672,18.82266666666667,18.804500000000004,18.78483333333333,18.785166666666665,18.76583333333333,18.738333333333333,18.693833333333334,18.637,18.563,18.509999999999998,18.441166666666664,18.340999999999998,18.265499999999992,18.209333333333333,18.14216666666666,18.083999999999996,18.039166666666663,17.99716666666666,17.948499999999992,17.85733333333333,17.764999999999997,17.633666666666663,17.4655,17.318166666666666,17.135499999999997,16.9865,16.873666666666665,16.793166666666664,16.7515]},"maColors":{"5":"var(--ma5)","10":"var(--ma10)","20":"var(--ma20)","60":"var(--ma60)"},"high20":19.22,"low20":13.47}</script>
+<script>
+/* K 线按容器实测尺寸渲染:viewBox 与像素 1:1,不做非等比缩放
+   —— 蜡烛不会被拉变形,Y 轴刻度与价格严格对应 */
+function renderCharts(){
+  const d=JSON.parse(document.getElementById('kdata').textContent);
+  document.querySelectorAll('.plot').forEach(plot=>{
+    const area=plot.querySelector('.chartarea');
+    if(!area) return;
+    const ya=plot.parentElement.querySelector('.yaxis');
+    const xa=plot.querySelector('.xaxis');
+    const W=area.clientWidth, H=area.clientHeight;
+    if(W<80||H<80) return;
+    const items=d.items, n=items.length;
+    const PAD=3, VHR=Math.max(36,Math.round(H*0.17)), XH=14;
+    const PH=H-VHR-XH;
+    let pMin=Infinity,pMax=-Infinity,vMax=0;
+    items.forEach(k=>{if(k.l<pMin)pMin=k.l;if(k.h>pMax)pMax=k.h;if(k.v>vMax)vMax=k.v;});
+    pMin=pMin*0.985; pMax=pMax*1.015;
+    const x=i=>PAD+(i*(W-PAD*2))/(n-1);
+    const y=p=>PAD+((pMax-p)/(pMax-pMin))*(PH-PAD*2);
+    const bw=Math.max(1.2,(W-PAD*2)/n-1.4);
+    let s='';
+    for(let i=0;i<=4;i++){
+      const p=pMin+(pMax-pMin)*i/4, yy=y(p);
+      s+='<line x1="0" y1="'+yy.toFixed(1)+'" x2="'+W+'" y2="'+yy.toFixed(1)+'" stroke="var(--grid)" stroke-width="0.6"/>';
+    }
+    items.forEach((k,i)=>{
+      const up=k.c>=k.o, col=up?'var(--up)':'var(--down)';
+      s+='<line x1="'+x(i).toFixed(1)+'" y1="'+y(k.h).toFixed(1)+'" x2="'+x(i).toFixed(1)+'" y2="'+y(k.l).toFixed(1)+'" stroke="'+col+'" stroke-width="1"/>';
+      const yo=y(Math.max(k.o,k.c)), yc=y(Math.min(k.o,k.c));
+      s+='<rect x="'+(x(i)-bw/2).toFixed(1)+'" y="'+yo.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(1,yc-yo).toFixed(1)+'" fill="'+col+'" rx="0.4"/>';
+      const vh=(k.v/vMax)*(VHR-6);
+      s+='<rect x="'+(x(i)-bw/2).toFixed(1)+'" y="'+(PH+VHR-vh).toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+vh.toFixed(1)+'" fill="'+col+'" opacity="0.4"/>';
+    });
+    Object.keys(d.ma).forEach(key=>{
+      const pts=[];
+      d.ma[key].forEach((v,i)=>{if(v==null)return;pts.push(x(i).toFixed(1)+','+y(v).toFixed(1));});
+      s+='<polyline points="'+pts.join(' ')+'" fill="none" stroke="'+d.maColors[key]+'" stroke-width="1.1" opacity="0.9"/>';
+    });
+    s+='<line x1="0" y1="'+PH+'" x2="'+W+'" y2="'+PH+'" stroke="var(--grid)" stroke-width="0.8"/>';
+    area.innerHTML='<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" role="img" aria-label="日K线图">'+s+'</svg>';
+    let yt='';
+    for(let i=0;i<=4;i++){const p=pMax-(pMax-pMin)*i/4;yt+='<span>'+p.toFixed(2)+'</span>';}
+    if(ya) ya.innerHTML=yt;
+    if(xa){
+      const idx=[0,Math.round(n*0.25),Math.round(n*0.5),Math.round(n*0.75),n-1];
+      xa.innerHTML=idx.map(i=>'<span>'+items[i].date.slice(5)+'</span>').join('');
+    }
+  });
+}
+renderCharts();
+setTimeout(renderCharts,60);
+window.addEventListener('resize',()=>{clearTimeout(window.__rt);window.__rt=setTimeout(renderCharts,80);});
+if(document.fonts&&document.fonts.ready) document.fonts.ready.then(()=>renderCharts());
+</script>
+</body>
+</html>

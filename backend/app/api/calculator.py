@@ -79,7 +79,7 @@ async def calculator(req: CalculatorRequest) -> CalculatorResponse:
     v2.1 §5.1
     """
     # 1. 取当前持仓(用于 before)
-    from app.services.position_service import get_position
+    from app.modules.portfolio.service import get_position
 
     position = await get_position(req.stock_code)
     shares_before = position.shares if position else 0

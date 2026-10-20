@@ -68,11 +68,28 @@ class MiniMaxClient(BaseLLM):
         max_retries: int = 2,
         max_tokens: int = 1500,
     ) -> str:
-        """纯文本 chat(走当前 _model,支持多轮 messages)"""
+        """纯文本 chat(走当前 _model,支持多轮 messages)
+
+        **JSON 模式**:默认带 `response_format={"type":"json_object"}` 请求,
+        让服务端强制输出合法 JSON,消除"LLM 偶发返回非法 JSON"(单引号 key /
+        未转义换行)导致的解析失败。
+        若当前模型/账号不支持该参数(HTTP 400 且响应体提到 response_format),
+        自动去掉重试一次,降级为普通模式 —— 不因 JSON 模式让整个功能不可用。
+        """
         last_err: Exception | None = None
         payload_messages = [{"role": "system", "content": system}, *messages]
+        json_mode = True
         async with httpx.AsyncClient(trust_env=False, timeout=30) as client:
             for attempt in range(max_retries):
+                body: dict = {
+                    "model": self._model,
+                    "messages": payload_messages,
+                    "temperature": temperature,
+                    "reasoning_split": True,
+                    "max_tokens": max_tokens,
+                }
+                if json_mode:
+                    body["response_format"] = {"type": "json_object"}
                 try:
                     resp = await client.post(
                         self.BASE_URL,
@@ -80,17 +97,24 @@ class MiniMaxClient(BaseLLM):
                             "Authorization": f"Bearer {self._api_key}",
                             "Content-Type": "application/json",
                         },
-                        json={
-                            "model": self._model,
-                            "messages": payload_messages,
-                            "temperature": temperature,
-                            "reasoning_split": True,
-                            "max_tokens": max_tokens,
-                        },
+                        json=body,
                     )
                 except (httpx.TimeoutException, httpx.NetworkError) as e:
                     last_err = e
                     await asyncio.sleep(BACKOFF_BASE * (2 ** attempt))
+                    continue
+
+                # 该模型/账号不支持 JSON 模式 → 去掉参数重试(不计入重试次数)
+                if (
+                    resp.status_code == 400
+                    and json_mode
+                    and "response_format" in resp.text
+                ):
+                    logger.warning(
+                        "%s 不支持 response_format=json_object,降级为普通模式",
+                        self.provider_label,
+                    )
+                    json_mode = False
                     continue
 
                 if resp.status_code == 200:

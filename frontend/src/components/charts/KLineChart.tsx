@@ -159,12 +159,22 @@ export function KLineChart({
   height = 420,
   overlay,
   showVolume = true,
+  fill = false,
 }: {
   stockCode: string;
   period?: KlinePeriod;
   height?: number;
   overlay?: ChartOverlay;
   showVolume?: boolean;
+  /**
+   * v0.8 交易台:图表撑满中栏剩余高度。
+   *
+   * **为什么需要**:此前 height 是固定像素(420),页面纵向堆叠时图表高度与
+   * 视口无关 —— 这正是 v0.7 深色终端「下半屏纯黑虚空」的成因之一。
+   * fill 模式下用 ResizeObserver 实测容器尺寸并 applyOptions,
+   * 图表高度随中栏剩余空间变化,且窗口缩放时同步(不再只监听 window.resize)。
+   */
+  fill?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -203,7 +213,7 @@ export function KLineChart({
     let disposed = false;
     const chart = createChart(containerRef.current, {
       width: containerRef.current.clientWidth,
-      height,
+      height: fill ? Math.max(containerRef.current.clientHeight, 240) : height,
       layout: {
         background: { color: 'transparent' },
         textColor: COLOR.text,
@@ -334,6 +344,24 @@ export function KLineChart({
       }
     };
     window.addEventListener('resize', onResize);
+
+    // fill 模式:容器高度由中栏剩余空间决定,必须实测而不是猜
+    let ro: ResizeObserver | null = null;
+    if (fill && containerRef.current) {
+      ro = new ResizeObserver((entries) => {
+        const rect = entries[0]?.contentRect;
+        if (!rect || !chartRef.current) return;
+        try {
+          chartRef.current.applyOptions({
+            width: Math.max(rect.width, 1),
+            height: Math.max(rect.height, 240),
+          });
+        } catch {
+          /* chart disposed */
+        }
+      });
+      ro.observe(containerRef.current);
+    }
 
     apiGet<KlineIndicatorsResponse>(
       `/kline/${encodeURIComponent(stockCode)}/indicators?period=${period}&limit=300`,
@@ -508,6 +536,7 @@ export function KLineChart({
     return () => {
       disposed = true;
       window.removeEventListener('resize', onResize);
+      ro?.disconnect();
       const cleanup = (chart as unknown as { __cleanupCrosshair?: () => void }).__cleanupCrosshair;
       if (cleanup) cleanup();
       chart.remove();
@@ -518,7 +547,7 @@ export function KLineChart({
         mom: [], wmsr: [], skt: [], fask: [],
       };
     };
-  }, [stockCode, period, height, showVolume, COLOR]);
+  }, [stockCode, period, height, showVolume, COLOR, fill]);
 
   // 切换整组显隐(同时驱动 React 状态与 lightweight-charts series)
   const toggleGroup = (g: OverlayGroup) => {
@@ -654,7 +683,7 @@ export function KLineChart({
   ];
 
   return (
-    <div>
+    <div className={clsx(fill && 'h-full flex flex-col min-h-0')}>
       {loadError && (
         <div className="mb-2 px-3 py-1.5 rounded-md bg-down/10 border border-down/30 text-xs text-down">
           ⚠ K 线加载失败:{loadError}(打开浏览器 Console 查看详情)
@@ -662,10 +691,10 @@ export function KLineChart({
       )}
       <div
         ref={containerRef}
-        style={{ width: '100%', height }}
-        className="rounded-sm overflow-hidden"
+        style={fill ? { width: '100%' } : { width: '100%', height }}
+        className={clsx('rounded-sm overflow-hidden', fill && 'flex-1 min-h-0')}
       />
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+      <div className={clsx('mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs', fill && 'shrink-0')}>
         {legendRows.map((row) => {
           const groupVisible = visibleGroups[row.group];
           return (

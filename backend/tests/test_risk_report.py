@@ -106,8 +106,8 @@ class TestRiskReportAPI:
     def test_with_transactions(self, client):
         from datetime import date
 
-        from app.repositories.transaction_repo import transaction_repo
-        from app.services.position_service import recalc_position
+        from app.modules.portfolio.repository import transaction_repo
+        from app.modules.portfolio.service import recalc_position
 
         async def seed():
             await transaction_repo.create(

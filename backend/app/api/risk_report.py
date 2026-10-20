@@ -4,7 +4,7 @@
 """
 from fastapi import APIRouter
 
-from app.services.position_service import get_all_positions
+from app.modules.portfolio.service import get_all_positions
 from app.services.risk_service import PositionExposure, calc_risk
 
 router = APIRouter(prefix="/risk-report", tags=["risk-report"])

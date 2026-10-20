@@ -10,9 +10,9 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.core.stock_code import normalize_code
 from app.data.ifind_events import IfindUnavailable
-from app.repositories.transaction_repo import transaction_repo
+from app.modules.portfolio.repository import transaction_repo
 from app.repositories.watchlist_repo import watchlist_repo
-from app.services.position_service import get_all_positions
+from app.modules.portfolio.service import get_all_positions
 from app.services.reflection_context_service import (
     build_reflection_context,
     get_reflection_context_summary,

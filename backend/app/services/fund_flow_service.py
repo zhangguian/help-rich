@@ -143,7 +143,7 @@ async def _fetch_and_persist_one_market(market: str | None) -> int:
             new_count += 1
         await session.commit()
     if new_count:
-        logger.info("资金流落库: market=%s 新增 %d 条", market or "all", new_count)
+        logger.info("资金流落库: market=%s 新增 %s 条", market or "all", new_count)
     return new_count
 
 

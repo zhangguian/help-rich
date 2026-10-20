@@ -23,13 +23,19 @@ export interface WatchItem {
   inPosition: boolean;
   quote: Quote | null;
   isFavorite: boolean;  // v0.5 特别关注
+  /** M3.2 持仓行轻提示:浮亏/高集中度等预警,来自 /holdings-health */
+  healthFlag?: 'loss' | 'concentration' | 'profit' | null;
 }
 
 /**
- * 左侧盯盘 aside(roadmap 功能1)
+ * 盯盘列表
  *
- * 自选(含持仓)列表:现价/涨跌幅,选中 layoutId 滑块 + 左边条。
- * 持仓行尾 🛑 清仓(LiquidModal,默认实时价)。
+ * 两种形态(v0.8 交易台):
+ * - `panel`(默认):卡片式大行,用于页面底部的独立列表区
+ * - `rail`:紧凑行(两行文字 + 右对齐现价/涨跌幅),用于交易台左侧 258px 窄栏
+ *
+ * 两种形态共用同一份交互逻辑(增删 / 特别关注 / 持仓编辑 / 右键菜单),
+ * 避免复制组件导致两边行为漂移。
  */
 export function WatchList({
   items,
@@ -37,12 +43,15 @@ export function WatchList({
   favoriteOnly,
   onSelect,
   onChanged,
+  variant = 'panel',
 }: {
   items: WatchItem[];
   activeCode: string | null;
   favoriteOnly: boolean;
   onSelect: (code: string) => void;
   onChanged: () => void;
+  /** rail = 窄栏紧凑行;panel = 卡片式大行 */
+  variant?: 'panel' | 'rail';
 }) {
   const showToast = useUIStore((s) => s.showToast);
   const [showAdd, setShowAdd] = useState(false);
@@ -225,18 +234,28 @@ export function WatchList({
     };
   }, [contextMenu]);
 
-  return (
-    <GlassCard
-      variant="default"
-      padding="md"
-      className="w-full flex flex-col overflow-hidden gap-2"
-    >
-      <div className="flex items-center justify-between px-1 flex-wrap gap-2">
-        <div className="flex items-baseline gap-2">
-          <span className="text-base font-semibold text-text-pri">盯盘列表</span>
-          <span className="text-xs text-text-ter">({items.length})</span>
+  const content = (
+    <>
+      <div
+        className={clsx(
+          'flex items-center justify-between gap-2 shrink-0',
+          variant === 'rail'
+            ? 'h-8 px-2.5 border-b border-border-def'
+            : 'px-1 flex-wrap',
+        )}
+      >
+        <div className="flex items-baseline gap-1.5 min-w-0">
+          <span
+            className={clsx(
+              'font-semibold text-text-pri whitespace-nowrap',
+              variant === 'rail' ? 'text-[11.5px]' : 'text-base',
+            )}
+          >
+            {variant === 'rail' ? '盯盘' : '盯盘列表'}
+          </span>
+          <span className="text-[10px] text-text-ter font-mono">({items.length})</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={() =>
@@ -244,10 +263,11 @@ export function WatchList({
                 d === 'default' ? 'desc' : d === 'desc' ? 'asc' : 'default',
               )
             }
-            className="flex items-center gap-1 text-xs text-text-ter hover:text-text-pri transition-colors"
+            className="flex items-center gap-1 text-[10.5px] text-text-ter hover:text-text-pri transition-colors"
             title="按涨幅排序(默认 / 降序 / 升序)"
           >
-            <span>按涨幅</span>
+            {/* 窄栏里只留箭头,否则表头会被挤成竖排 */}
+            {variant !== 'rail' && <span>按涨幅</span>}
             <ChevronDown
               size={12}
               strokeWidth={1.5}
@@ -258,13 +278,23 @@ export function WatchList({
               )}
             />
           </button>
-          <Button size="sm" onClick={() => setShowAdd(true)}>
-            ＋ 添加自选
+          <Button
+            size="sm"
+            onClick={() => setShowAdd(true)}
+            title="添加自选"
+            className={variant === 'rail' ? '!px-1.5 !py-0.5 !text-[11px]' : undefined}
+          >
+            {variant === 'rail' ? '＋' : '＋ 添加自选'}
           </Button>
         </div>
       </div>
 
-      <ul className="overflow-y-auto space-y-1 min-h-0 max-h-[460px] pr-1">
+      <ul
+        className={clsx(
+          'overflow-y-auto min-h-0',
+          variant === 'rail' ? 'flex-1' : 'space-y-1 max-h-[460px] pr-1',
+        )}
+      >
         {items.length === 0 && (
           <li className="text-text-ter text-sm text-center py-10">
             {favoriteOnly ? '暂无特别关注股票,点击自选股票旁的 ⭐ 加入' : '暂无自选股,点击右上角「添加自选」'}
@@ -280,15 +310,105 @@ export function WatchList({
               onContextMenu={(e) => onContextMenu(e, it)}
               className="relative"
             >
-              <button
-                onClick={() => onSelect(it.code)}
-                className={clsx(
-                  'w-full flex items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors border border-transparent',
-                  isActive
-                    ? 'bg-accent-subtle ring-1 ring-accent/25'
-                    : 'hover:bg-bg-subtle',
-                )}
-              >
+              {variant === 'rail' ? (
+                /* rail 形态:两行文字(名称 / 代码)+ 右对齐现价与涨跌幅。
+                   窄栏放不下大卡片,行高压到 ~34px,43 只自选也能一屏扫完。
+                   交互入口(设持仓 / 特别关注 / 清仓)收进右侧「⋯」菜单。 */
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelect(it.code)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onSelect(it.code);
+                    }
+                  }}
+                  className={clsx(
+                    'w-full flex items-center gap-1.5 px-2 py-1 text-left transition-colors border-b border-border-def/40 relative cursor-pointer',
+                    isActive ? 'bg-accent-subtle' : 'hover:bg-bg-elevated',
+                  )}
+                >
+                  {isActive && (
+                    <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-accent" aria-hidden />
+                  )}
+                  <span className="min-w-0 flex-1 flex flex-col min-w-0">
+                    <span className="flex items-center gap-1 min-w-0">
+                      <span className="text-[12.5px] text-text-pri truncate leading-tight">
+                        {it.name ?? it.code}
+                      </span>
+                      {it.inPosition && (
+                        <span className="text-[9px] px-1 rounded-xs bg-accent-subtle text-accent font-semibold shrink-0">
+                          持
+                        </span>
+                      )}
+                      {it.healthFlag === 'loss' && (
+                        <span
+                          className="w-1.5 h-1.5 rounded-full bg-down shrink-0"
+                          title="持仓浮亏"
+                          aria-label="浮亏预警"
+                        />
+                      )}
+                      {it.healthFlag === 'concentration' && (
+                        <span
+                          className="w-1.5 h-1.5 rounded-full bg-warn shrink-0"
+                          title="持仓集中度过高"
+                          aria-label="高集中度预警"
+                        />
+                      )}
+                      {it.isFavorite && (
+                        <Star size={11} weight="Filled" className="text-warn shrink-0" />
+                      )}
+                    </span>
+                    <span className="text-[9.5px] font-mono text-text-ter leading-tight">
+                      {it.code}
+                    </span>
+                  </span>
+                  <span className="text-[12px] font-mono tabular-nums text-text-pri w-[44px] text-right shrink-0">
+                    {!it.quote ? '--' : halted ? '停牌' : it.quote.currentPrice}
+                  </span>
+                  <span
+                    className={clsx(
+                      'text-[10.5px] font-mono tabular-nums w-[48px] text-right shrink-0',
+                      !it.quote || halted
+                        ? 'text-text-ter'
+                        : it.quote.changePct > 0
+                          ? 'text-up'
+                          : it.quote.changePct < 0
+                            ? 'text-down'
+                            : 'text-text-ter',
+                    )}
+                  >
+                    {!it.quote
+                      ? '--'
+                      : halted
+                        ? '停牌'
+                        : `${it.quote.changePct > 0 ? '+' : ''}${it.quote.changePct.toFixed(2)}%`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      setContextMenu({ x: Math.max(r.left - 90, 8), y: r.bottom, item: it });
+                    }}
+                    className="w-4 h-5 shrink-0 text-text-ter hover:text-text-pri transition-colors text-[13px] leading-none flex items-center justify-center"
+                    title="更多操作(设持仓 / 特别关注 / 删除)"
+                    aria-label="更多操作"
+                  >
+                    ⋯
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => onSelect(it.code)}
+                  className={clsx(
+                    'w-full flex items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors border border-transparent',
+                    isActive
+                      ? 'bg-accent-subtle ring-1 ring-accent/25'
+                      : 'hover:bg-bg-subtle',
+                  )}
+                >
                 <span
                   className={clsx(
                     'w-9 h-9 rounded-xl bg-gradient-to-br text-white text-sm font-bold flex items-center justify-center shrink-0 shadow-sm',
@@ -302,9 +422,26 @@ export function WatchList({
                     {it.name ?? it.code}
                   </span>
                   {it.inPosition && (
-                    <span className="text-[10px] px-1.5 py-px rounded-full bg-accent-subtle text-accent border border-accent/25 shrink-0">
-                      持仓
-                    </span>
+                    <>
+                      <span className="text-[10px] px-1.5 py-px rounded-full bg-accent-subtle text-accent border border-accent/25 shrink-0">
+                        持仓
+                      </span>
+                      {/* M3.2 持仓行轻提示红点:浮亏=down / 集中度=warn / 浮盈=up */}
+                      {it.healthFlag === 'loss' && (
+                        <span
+                          className="w-2 h-2 rounded-full bg-down shrink-0 animate-pulse"
+                          title="持仓浮亏:点击右侧编辑查看明细"
+                          aria-label="浮亏预警"
+                        />
+                      )}
+                      {it.healthFlag === 'concentration' && (
+                        <span
+                          className="w-2 h-2 rounded-full bg-warn shrink-0"
+                          title="持仓集中度过高:点击右侧编辑查看明细"
+                          aria-label="高集中度预警"
+                        />
+                      )}
+                    </>
                   )}
                   {it.isFavorite && (
                     <Star size={12} weight="Filled" className="text-yellow-400 shrink-0" />
@@ -382,6 +519,7 @@ export function WatchList({
                   </button>
                 )}
               </button>
+              )}
             </motion.li>
           );
         })}
@@ -482,6 +620,18 @@ export function WatchList({
               一键清仓
             </button>
           )}
+          {/* 特别关注开关也放进菜单 ——
+              rail 形态(窄栏)没有空间常驻星标按钮,右键菜单是它的等价入口 */}
+          <button
+            type="button"
+            onClick={() => {
+              void toggleFavorite(contextMenu.item.code, !contextMenu.item.isFavorite);
+              setContextMenu(null);
+            }}
+            className="w-full text-left px-3 py-1.5 rounded-lg text-xs text-text-sec hover:bg-bg-subtle hover:text-text-pri transition-colors"
+          >
+            {contextMenu.item.isFavorite ? '取消特别关注' : '加入特别关注'}
+          </button>
         </div>,
         document.body,
       )}
@@ -576,6 +726,20 @@ export function WatchList({
           </div>
         </LiquidModal>,
       )}
+    </>
+  );
+
+  return variant === 'rail' ? (
+    <div className="w-full h-full min-h-0 flex flex-col overflow-hidden bg-bg-surface border-r border-border-def">
+      {content}
+    </div>
+  ) : (
+    <GlassCard
+      variant="default"
+      padding="md"
+      className="w-full flex flex-col overflow-hidden gap-2"
+    >
+      {content}
     </GlassCard>
   );
 }

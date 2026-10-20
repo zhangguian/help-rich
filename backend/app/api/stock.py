@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.services.kline_service import KLineSourceUnavailable, fetch_klines
-from app.services.position_service import get_position
+from app.modules.portfolio.service import get_position
 from app.services.quote_service import QuoteService
 from app.services.stock_advice_service import (
     StockAdviceUnavailable,

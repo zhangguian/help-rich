@@ -119,7 +119,7 @@ async def get_sector_kline(
         "items": items,
     }
     _cache[cache_key] = (now, result)
-    logger.info("板块K线合成: %s %s (%d 根/%d 成分)", industry, period, len(items), len(rows_list))
+    logger.info("板块K线合成: %s %s (%s 根/%s 成分)", industry, period, len(items), len(rows_list))
     return result
 
 

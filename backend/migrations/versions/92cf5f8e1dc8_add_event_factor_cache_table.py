@@ -1,7 +1,7 @@
 """add event_factor_cache table
 
 Revision ID: 92cf5f8e1dc8
-Revises: k3f4g5h6i7j8
+Revises: j2e3f4g5h6i7
 Create Date: 2026-09-23 17:52:56.490365
 
 """
@@ -13,7 +13,10 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '92cf5f8e1dc8'
-down_revision: Union[str, None] = 'k3f4g5h6i7j8'
+# 2026-10 修正:原值 'k3f4g5h6i7j8' 指向一个从未提交到仓库的本地分支版本,
+# 导致 `alembic heads/upgrade` 直接 KeyError,启动钩子失败 → 后端无法启动。
+# 真实前驱是 j2e3f4g5h6i7(screener_picks_reason)。
+down_revision: Union[str, None] = 'j2e3f4g5h6i7'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

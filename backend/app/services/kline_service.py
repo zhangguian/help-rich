@@ -254,7 +254,7 @@ async def fetch_klines(
         expected = _last_trading_day()
         is_stale = post_close and latest_date < expected
         if not is_stale:
-            logger.debug("K 线缓存命中: %s %s (%d 根, 最新 %s)",
+            logger.debug("K 线缓存命中: %s %s (%s 根, 最新 %s)",
                          stock_code, period, len(cached), latest_date)
             rows = [
                 {
@@ -313,7 +313,7 @@ async def fetch_klines(
                 )
             )
         await session.commit()
-    logger.info("K 线新浪落库: %s %s (%d 根)", stock_code, period, len(rows))
+    logger.info("K 线新浪落库: %s %s (%s 根)", stock_code, period, len(rows))
     return rows
 
 

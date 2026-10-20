@@ -5,12 +5,12 @@
 @layer base {
   body {
     background-color: var(--bg-base);
-    /* 浅蓝渐变画布 + 固定光斑(企业版工作台;清淡通透) */
+    /* 交易台画布:纯色 + 顶部一道极淡冷光。
+       刻意去掉 v0.5 的三团大光斑 —— 那是消费级 SaaS 味的来源,
+       且在长时盯盘时形成无意义的视觉噪音(见 docs/design/trading-desk-v2.md) */
     background-image:
-      radial-gradient(60rem 40rem at 10% -8%, rgba(186, 214, 248, 0.5), transparent 55%),
-      radial-gradient(50rem 34rem at 95% 0%, rgba(202, 236, 250, 0.35), transparent 55%),
-      radial-gradient(50rem 36rem at 50% 115%, rgba(203, 224, 250, 0.42), transparent 60%),
-      linear-gradient(180deg, #e9f1fc 0%, #eff5fd 45%, #f3f8ff 100%);
+      linear-gradient(180deg, rgba(34, 211, 238, 0.04) 0%, transparent 180px),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, transparent 400px);
     background-attachment: fixed;
     color: var(--text-primary);
     min-height: 100vh;
@@ -28,56 +28,52 @@
 }
 
 @layer components {
-  /* 软卡材质(企业浅色白卡:近实白、无感描边、柔和投影) */
+  /* 终端面板:不透明表面 + 1px 细线,无毛玻璃、无高光、无内描边。
+     层级靠分隔线与极弱投影建立,不靠玻璃拟态。 */
   .liquid-glass {
     position: relative;
-    background: var(--glass-fill);
-    backdrop-filter: blur(var(--blur-liquid)) saturate(140%);
-    -webkit-backdrop-filter: blur(var(--blur-liquid)) saturate(140%);
-    border: 1px solid rgba(255, 255, 255, 0.65);
-    background-clip: padding-box;
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: var(--glass-radius);
     box-shadow: var(--glass-shadow);
-    transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.35s cubic-bezier(0.22, 1, 0.36, 1), background 0.35s ease, border-color 0.35s ease;
-  }
-
-  /* 顶缘高光 */
-  .liquid-glass::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    pointer-events: none;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.6) 0%, rgba(255, 255, 255, 0) 22%);
-    opacity: 0.5;
-  }
-
-  /* 内描边 */
-  .liquid-glass::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    pointer-events: none;
-    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.05);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
   }
 
   .liquid-glass-hover:hover {
-    transform: translateY(-2px);
-    box-shadow:
-      0 2px 4px rgba(30, 64, 138, 0.05),
-      0 24px 52px -16px rgba(37, 99, 235, 0.26);
+    border-color: var(--border-strong);
+    background: var(--surface-2);
   }
 
   .liquid-glass-active {
-    background:
-      linear-gradient(165deg,
-        rgba(59, 130, 246, 0.12) 0%,
-        rgba(255, 255, 255, 0.9) 55%,
-        rgba(255, 255, 255, 0.92) 100%);
-    box-shadow:
-      0 0 0 1px rgba(59, 130, 246, 0.3) inset,
-      var(--glass-shadow);
+    background: var(--surface-2);
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 1px var(--accent-subtle);
+  }
+
+  /* .panel —— Card 组件默认 variant 的样式钩子。
+     **此前这个类在整个前端没有定义**:Card.tsx 的 variantClasses.default = 'panel',
+     但 .css 里搜不到 .panel,于是所有 Card / GlassCard 渲染成无背景无边框的裸 div,
+     卡片层级全靠各页面手写 border 才能出现。
+     v0.8 交易台统一改为「不透明面板 + 1px 细线」,这里补上定义,
+     让全站卡片有一致的终端质感。 */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--glass-radius);
+    box-shadow: var(--shadow-card);
+  }
+
+  .panel-hover {
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .panel-hover:hover {
+    border-color: var(--border-strong);
+    background: var(--surface-2);
+  }
+
+  .panel-active {
+    border-color: var(--accent-primary);
+    background: var(--surface-2);
   }
 
   /* 21 档盈亏热力图:21 等分 */
@@ -92,10 +88,10 @@
   }
 }
 
-/* 滚动条(浅色主题:细、蓝灰半透明、圆角) */
+/* 滚动条(终端:细、蓝灰半透明、圆角) */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(74, 92, 119, 0.28) transparent;
+  scrollbar-color: rgba(143, 160, 184, 0.28) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -108,14 +104,14 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(74, 92, 119, 0.24);
+  background: rgba(143, 160, 184, 0.24);
   border-radius: 999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(74, 92, 119, 0.42);
+  background: rgba(143, 160, 184, 0.42);
   background-clip: padding-box;
 }
 

@@ -23,7 +23,7 @@ from app.core.db_lock import safe_write
 from app.core.stock_code import normalize_code
 from app.models.schemas import DiagnoseOut, FeedbackUpdate, ReplaySummaryOut
 from app.repositories.trade_score_repo import trade_score_repo
-from app.repositories.transaction_repo import transaction_repo
+from app.modules.portfolio.repository import transaction_repo
 from app.services.daily_analysis_service import (
     compute_view_winrate,
     get_latest_as_analysis_result,
@@ -31,7 +31,7 @@ from app.services.daily_analysis_service import (
 )
 from app.services.diagnose_service import diagnose_service
 from app.services.kline_service import KLineSourceUnavailable, fetch_klines
-from app.services.position_service import get_position
+from app.modules.portfolio.service import get_position
 from app.services.quote_service import QuoteService
 from app.services.replay_service import (
     WINDOWS,

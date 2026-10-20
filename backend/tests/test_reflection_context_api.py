@@ -50,7 +50,7 @@ async def test_get_reflection_context_returns_503_on_ifind_failure():
     # 使用未来日期避免 cache 冲突 (与其他 test 在同一 session-scoped DB 上跑)
     target_day = date.today() + timedelta(days=1)
     # seed 1 只持仓,使 _collect_relevant_codes 返回非空集,确保 build_reflection_context 真的调用 ifind
-    from app.services.position_service import upsert_position
+    from app.modules.portfolio.service import upsert_position
     await upsert_position(
         stock_code="600519.SH", shares=100, cost_price=Decimal("1000.00"), stock_name="贵州茅台",
     )

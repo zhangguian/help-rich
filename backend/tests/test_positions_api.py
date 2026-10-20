@@ -74,7 +74,7 @@ class FakeQuoteService:
 @pytest.fixture()
 def patch_quotes(monkeypatch):
     monkeypatch.setattr(
-        "app.api.positions.get_quote_service", lambda: FakeQuoteService()
+        "app.modules.portfolio.api_positions.get_quote_service", lambda: FakeQuoteService()
     )
 
 
@@ -141,7 +141,7 @@ class TestQuotesDegraded:
             async def get_quotes(self, codes):
                 return []
 
-        monkeypatch.setattr("app.api.positions.get_quote_service", lambda: DownService())
+        monkeypatch.setattr("app.modules.portfolio.api_positions.get_quote_service", lambda: DownService())
         _seed_tx(client)
         r = client.get("/api/positions")
         assert r.status_code == 200

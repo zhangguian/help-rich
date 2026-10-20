@@ -565,6 +565,78 @@ class TestParseLlmJson:
         with pytest.raises(ValueError, match="非对象 JSON"):
             stock_advice_service._parse_llm_json('[1, 2, 3]')
 
+    # ── 2026-10-21:补回被漏掉的 JSON 分隔符(实测 MiniMax M2.5 偶发) ──
+
+    def test_bare_key_quote_repaired(self):
+        """LLM 漏掉键的**起始引号**({type":"x"}) → 补回,解析成功
+
+        实测样本(2026-10-21,后端日志捕获的原文):
+            ..."key_levels":[{"type":"support",...},{type":"stabilize",...}]
+        解析报 "Expecting property name enclosed in double quotes"。
+        补的只是引号,字面内容一个字节没改 → 语义不变。
+        """
+        raw = (
+            '{"view":"bullish","key_levels":['
+            '{"type":"support","price":13.47,"note":"x"},'
+            '{type":"stabilize","price":14.55,"note":"y"}]}'
+        )
+        d = stock_advice_service._parse_llm_json(raw)
+        assert d["view"] == "bullish"
+        assert [lv["type"] for lv in d["key_levels"]] == ["support", "stabilize"]
+
+    def test_missing_comma_repaired(self):
+        """成员之间缺逗号({"a":1 "b":2}) → 补回,解析成功"""
+        raw = '{"view":"bullish","score":80 "trend":"上涨"}'
+        d = stock_advice_service._parse_llm_json(raw)
+        assert d == {"view": "bullish", "score": 80, "trend": "上涨"}
+
+    def test_extra_brace_before_key_removed(self):
+        """键前面多了一个 '{'(,{"price":{...}}) → 删掉,解析成功
+
+        实测样本(2026-10-21,后端日志捕获的原文):
+            ..."advice":{"rationale":"...元",{"price":{"entry_or_exit_range":"..."}
+        解析报 "Expecting property name enclosed in double quotes"。
+        """
+        raw = (
+            '{"view":"neutral","advice":{"rationale":"解套需等突破16.22元",'
+            '{"price":{"entry_or_exit_range":"反弹至14.55~16.22元"}}}'
+        )
+        d = stock_advice_service._parse_llm_json(raw)
+        assert d["advice"]["price"]["entry_or_exit_range"] == "反弹至14.55~16.22元"
+
+    def test_array_element_object_not_broken(self):
+        """数组里的对象元素([{"a":1}])是**合法**的,不能被当成畸形删掉
+
+        这是 5b 的防误伤用例:判据里必须区分「数组里的对象」与「对象里的成员」。
+        """
+        raw = '{"key_levels":[{"type":"support","price":13.47},{"type":"pressure","price":16.22}]}'
+        d = stock_advice_service._parse_llm_json(raw)
+        assert len(d["key_levels"]) == 2
+        assert d["key_levels"][0]["type"] == "support"
+
+    def test_nested_object_value_not_broken(self):
+        """对象作为成员值({"price":{...}})是合法的,不能被误删 '{'"""
+        raw = '{"advice":{"price":{"entry":"14.80~15.50"},"risk":"x"}}'
+        d = stock_advice_service._parse_llm_json(raw)
+        assert d["advice"]["price"]["entry"] == "14.80~15.50"
+
+    def test_chinese_quoted_word_in_value_not_broken(self):
+        """中文正文里的引号(如 他说"重要")不能被当成漏逗号/裸键
+
+        守的是「不改变语义」这条线:中文字符不计入「值的结尾」,
+        否则 `他说"重要"是` 会被误插一个逗号,内容就变了。
+        """
+        raw = '{"view":"bullish","note":"他说"重要"是"}'
+        d = stock_advice_service._parse_llm_json(raw)
+        assert d["note"] == '他说"重要"是'
+
+    def test_valid_json_untouched(self):
+        """合法 JSON 不被修复层改动(防止新规则误伤)"""
+        raw = '{"view":"bullish","key_levels":[{"type":"support","price":13.47}],"n":1,"ok":true}'
+        d = stock_advice_service._parse_llm_json(raw)
+        assert d["key_levels"][0]["type"] == "support"
+        assert d["n"] == 1 and d["ok"] is True
+
 
 def make_fake_client_class(responses: list[httpx.Response]) -> type:
     state = {"idx": 0}

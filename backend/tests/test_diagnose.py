@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.repositories.transaction_repo import transaction_repo
+from app.modules.portfolio.repository import transaction_repo
 from app.services.diagnose_service import (
     INDEX_BENCHMARK,
     _fetch_index_change_pct,

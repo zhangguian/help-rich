@@ -19,8 +19,8 @@ from app.models.orm import (
     ScreenerWatchlist,
     ScreenerWatchlistDaily,
 )
-from app.repositories import screener_repo
-from app.services.screener_service import (
+from app.modules.screener import repository as screener_repo
+from app.modules.screener.service import (
     _iso_month_label,
     _iso_week_label,
 )
@@ -213,7 +213,7 @@ def test_compute_watchlist_summary_empty():
     async def _do():
         result = await screener_service.compute_watchlist_summary() \
             if False else None
-        from app.services import screener_service as svc
+        from app.modules.screener import service as svc
         result = await svc.compute_watchlist_summary()
         assert result["summary"]["totalWatched"] == 0
         assert result["weeks"] == []
@@ -225,7 +225,7 @@ def test_compute_watchlist_summary_weekly_buckets(monkeypatch):
     """mock K 线 + K 线真实拉,验证周聚合 + hit_rate"""
 
     async def _do():
-        from app.services import screener_service as svc
+        from app.modules.screener import service as svc
 
         # 加 2 只股
         w1 = await screener_repo.add_watchlist(
@@ -270,7 +270,7 @@ def test_refresh_watchlist_daily_mocked(monkeypatch):
     """mock kline_service.fetch_klines,验证 pct_from_marked 计算"""
 
     async def _do():
-        from app.services import screener_service as svc
+        from app.modules.screener import service as svc
 
         w = await screener_repo.add_watchlist(
             stock_code="688981.SH", stock_name="中芯",
@@ -376,7 +376,7 @@ def test_api_latest_picks_include_is_watched(client):
 def test_compute_watchlist_summary_today_change():
     """v2.6.1:今日单日涨跌 = 最新 pct - 上一个 pct"""
     async def _do():
-        from app.services import screener_service as svc
+        from app.modules.screener import service as svc
 
         # 加 2 只股
         w1 = await screener_repo.add_watchlist(
@@ -423,7 +423,7 @@ def test_compute_watchlist_summary_today_change():
 def test_compute_watchlist_summary_today_change_insufficient_history():
     """v2.6.1:每日记录 < 2 条时,今日涨跌不计入(todayCounted=0)"""
     async def _do():
-        from app.services import screener_service as svc
+        from app.modules.screener import service as svc
 
         w = await screener_repo.add_watchlist(
             stock_code="688981.SH", stock_name="中芯",

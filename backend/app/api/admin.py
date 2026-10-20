@@ -230,17 +230,48 @@ async def backup() -> dict:
     return {"ok": True, "path": str(path), "size_bytes": path.stat().st_size}
 
 
+def resolve_db_file() -> Path | None:
+    """从 settings.database_url 解析出 sqlite 数据库文件路径。
+
+    **不要**再用 `Path(__file__).resolve().parents[N] / "data.db"` 推算:
+    从 app/api/admin.py 往外数一级只到 backend/app/,拿到的是不存在的
+    `backend/app/data.db` —— 这曾让 GB-001 启动快照备份长期静默失效
+    (日志只有一行"启动快照备份失败",库里其实一份快照都没有)。
+
+    相对路径按"当前进程工作目录"解析,与 SQLAlchemy 解析 `sqlite:///./x.db`
+    的方式保持一致。
+    """
+    from app.core.config import settings
+
+    url = settings.database_url or ""
+    markers = ("sqlite+aiosqlite:///", "sqlite:///")
+    for marker in markers:
+        if url.startswith(marker):
+            raw = url[len(marker):]
+            break
+    else:
+        return None  # 非 sqlite,没有单文件可备份
+
+    raw = raw.split("?")[0]
+    if not raw or ":memory:" in raw:
+        return None
+    path = Path(raw)
+    return path if path.is_absolute() else (Path.cwd() / path)
+
+
 def create_db_snapshot(db_path: Path | None = None, max_keep: int = 30) -> Path | None:
     """二进制快照 data.db → backups/db/pre-{ts}.db(GB-001 防丢失)
 
     用 sqlite3 在线备份 API,即使库正被写入也得到一致性副本。
     仅保留最近 max_keep 份。失败返回 None(不阻断启动)。
     """
-    import shutil
     import sqlite3
 
-    src = db_path or (Path(__file__).resolve().parents[1] / "data.db")
-    if not src.exists():
+    from app.core.logging import logger
+
+    src = db_path or resolve_db_file()
+    if src is None or not src.exists():
+        logger.warning(f"启动快照备份跳过:找不到数据库文件({src})")
         return None
     try:
         backup_dir = get_backup_dir() / "db"
@@ -257,7 +288,8 @@ def create_db_snapshot(db_path: Path | None = None, max_keep: int = 30) -> Path 
         for old in sorted(backup_dir.glob("pre-*.db"))[:-max_keep]:
             old.unlink(missing_ok=True)
         return dest
-    except Exception:
+    except Exception as e:  # noqa: BLE001 — 备份失败不阻断启动
+        logger.warning(f"启动快照备份失败(已忽略): {type(e).__name__}: {e}")
         return None
 
 

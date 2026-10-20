@@ -16,11 +16,11 @@ from app.llm.factory import provider_factory
 from app.llm.sanitizer import sanitize_for_llm
 from app.repositories.llm_settings_repo import llm_settings_repo
 from app.repositories.trade_score_repo import trade_score_repo
-from app.repositories.transaction_repo import transaction_repo
+from app.modules.portfolio.repository import transaction_repo
 from app.repositories.watchlist_repo import watchlist_repo
 from app.services.event_bus import event_bus
 from app.services.market_overview_service import get_market_index_service
-from app.services.position_service import Position, aggregate_positions, get_all_positions, get_position
+from app.modules.portfolio.service import Position, aggregate_positions, get_all_positions, get_position
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,20 @@ def _merge_delta_and_flow(
         total_cost=d_cost + f_cost,
         realized_pnl=d_pnl + f_pnl,
     )
+
+
+def _resolve_model_name(llm) -> str:
+    """安全解析 LLM 模型名。
+
+    历史问题:此处曾直接 `llm.model_name`,一旦 provider client 或测试桩
+    没实现该属性就抛 AttributeError,把"评语已生成"的最后一步持久化打断,
+    整条 SSE 推送也丢失。改为按优先级兜底取名,取不到不影响主流程。
+    """
+    for attr in ("model_name", "model", "name"):
+        value = getattr(llm, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return "unknown"
 
 
 class DiagnoseService:
@@ -297,12 +311,15 @@ class DiagnoseService:
             return
 
         # 9. safe_write 写评语
+        # 模型名取不到不能影响主流程(评语已生成,这是最后一步持久化)
+        model_name = _resolve_model_name(llm)
+
         async def _do_comment():
             return await trade_score_repo.update_ai_comment(
                 trade_id,
                 ai_comment,
                 ai_status="success",
-                ai_model=llm.model_name,
+                ai_model=model_name,
                 ai_latency_ms=latency_ms,
             )
 
@@ -314,7 +331,7 @@ class DiagnoseService:
             "trade_id": trade_id,
             "comment": ai_comment,
             "provider": llm.name,
-            "model": llm.model_name,
+            "model": model_name,
             "latency_ms": latency_ms,
         })
 

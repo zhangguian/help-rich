@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.repositories.stop_loss_repo import stop_loss_repo
-from app.repositories.transaction_repo import transaction_repo
+from app.modules.portfolio.repository import transaction_repo
 from app.repositories.trade_score_repo import trade_score_repo
 
 

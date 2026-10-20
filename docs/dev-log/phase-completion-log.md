@@ -142,3 +142,50 @@
   - **解决**:从 `decimal` 直接 `import Decimal`,文件顶部,不要嵌字符串
 - **坑**:tsx 文件 `tsx` 类型严格导致 `useForm<FormData>` 不接受 `zodResolver(schema)` 的 resolver 类型
   - **解决**:resolver cast `as never`(RHF + Zod 的类型不匹配是 RHF 老问题,官方推荐用 type assertion)
+
+---
+
+## 2026-10-17 — 启动链路排障(脚本"起不来项目")
+
+现象:`scripts\dev.ps1` 跑完显示 `backend: TIMEOUT (>180s)`,但日志里明明有
+`Application startup complete`。
+
+### 真因:端口 8000 被别的程序以 `127.0.0.1` 绑走
+
+```
+TCP  0.0.0.0:8000     LISTENING  46592   ← 我们的 uvicorn
+TCP  127.0.0.1:8000   LISTENING  45468   ← 另一个项目 Merchant AI
+```
+
+Windows 允许两者同时监听,但 `127.0.0.1:8000` 的请求会优先命中**绑定地址更具体**
+的那个 socket。于是后端"启动成功",健康检查却永远打不通。
+
+- **解决**:`dev.ps1` 启动前查端口归属,只有本项目进程(命令行含
+  `uvicorn` + `app.main:app`,或 `next dev`)才杀,别人的进程报错退出;
+  健康检查改为按 `openapi.json` 的 `info.title`(买股工具室)+ ASCII 路由指纹
+  校验身份,避免"别的程序冒充成功"。新增 `-BackendPort/-FrontendPort/-HealthTimeout`。
+
+### 连带查出四个真实缺陷
+
+1. **`retention.py` 崩在 `ScreenerPick.created_at`**:该表没有这个字段(日期在父表
+   `screener_runs.run_date` 上),异常抛穿整个 `run_retention`,连 VACUUM 一起跳过。
+   同时 `_prune_fund_flow` 的条件写成 `FundFlow.stock_code == FundFlow.stock_code`
+   (恒真),语义从"每只股票留 N 条"错成"全库只留 N 条"。
+   - **解决**:按表分别 try/except,VACUUM 独立判定;补充 12 个回归测试。
+2. **库被撑到 411 MB(真实数据 < 1 MB)**:删行只还页给 freelist,文件不缩。
+   - **解决**:`python -m app.services.retention --vacuum` → 0.6 MB,启动 80s → 6s。
+3. **启动快照备份长期静默失效**:`create_db_snapshot` 用
+   `Path(__file__).parents[1] / "data.db"` 算成 `backend/app/data.db`(不存在),
+   而 `except` 直接 `return None` 不写原因。
+   - **解决**:新增 `resolve_db_file()` 从 `settings.database_url` 解析,并把异常原因写进日志。
+4. **日志占位符风格混用**:loguru(认 `{}`)与标准库 logging(认 `%s`)并存,
+   写错就是字面 `%s`(信息丢失)或 `TypeError: not all arguments converted`
+   (后台调度器表现为 `Task exception was never retrieved` + 数据不更新)。
+   - **解决**:按模块的 logger 来源统一风格;新增 `tests/test_logging_style.py` 守卫。
+
+### 环境侧(不是代码问题)
+
+- `dev.ps1` 无签名 + 本机 `RemoteSigned` → 直接跑报 `is not digitally signed`。
+  新增 `scripts\dev.cmd` 用 `-ExecutionPolicy Bypass` 只作用于该进程。
+- 日志按系统 locale(zh-CN = GBK)落盘 → 启动器固定 `PYTHONIOENCODING=utf-8`,
+  否则 UTF-8 读日志全是乱码。

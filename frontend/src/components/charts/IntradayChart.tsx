@@ -49,9 +49,12 @@ function toTs(date: string, time: string): Time {
 export function IntradayChart({
   stockCode,
   height = 420,
+  fill = false,
 }: {
   stockCode: string;
   height?: number;
+  /** v0.8 交易台:撑满中栏剩余高度(同 KLineChart 的 fill) */
+  fill?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const COLOR = useChartTheme();
@@ -73,7 +76,7 @@ export function IntradayChart({
 
     const chart = createChart(container, {
       width: container.clientWidth,
-      height,
+      height: fill ? Math.max(container.clientHeight, 240) : height,
       layout: {
         background: { color: 'transparent' },
         textColor: COLOR.text,
@@ -123,6 +126,24 @@ export function IntradayChart({
       }
     };
     window.addEventListener('resize', onResize);
+
+    // fill 模式:实测容器高度(中栏剩余空间),而不是写死像素
+    let ro: ResizeObserver | null = null;
+    if (fill) {
+      ro = new ResizeObserver((entries) => {
+        const rect = entries[0]?.contentRect;
+        if (!rect) return;
+        try {
+          chart.applyOptions({
+            width: Math.max(rect.width, 1),
+            height: Math.max(rect.height, 240),
+          });
+        } catch {
+          /* chart disposed */
+        }
+      });
+      ro.observe(container);
+    }
 
     const handleCrosshair = (param: MouseEventParams) => {
       if (!param.time) {
@@ -201,10 +222,11 @@ export function IntradayChart({
     return () => {
       disposed = true;
       window.removeEventListener('resize', onResize);
+      ro?.disconnect();
       chart.remove();
       chartRef.current = null;
     };
-  }, [stockCode, height]);
+  }, [stockCode, height, fill]);
 
   const pts = data?.items ?? [];
   const latest = hover ?? pts[pts.length - 1] ?? null;
@@ -222,7 +244,7 @@ export function IntradayChart({
           : 'text-text-sec';
 
   return (
-    <div>
+    <div className={clsx(fill && 'h-full flex flex-col min-h-0')}>
       {error && (
         <div className="mb-2 px-3 py-1.5 rounded-md bg-down/10 border border-down/30 text-xs text-down">
           ⚠ {error}
@@ -230,10 +252,10 @@ export function IntradayChart({
       )}
       <div
         ref={containerRef}
-        style={{ width: '100%', height }}
-        className="rounded-sm overflow-hidden"
+        style={fill ? { width: '100%' } : { width: '100%', height }}
+        className={clsx('rounded-sm overflow-hidden', fill && 'flex-1 min-h-0')}
       />
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+      <div className={clsx('mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs', fill && 'shrink-0')}>
         <span className="text-text-ter">时间 {showTime ?? '--'}</span>
         <span className={clsx('font-mono', pctCls)}>
           价格 {latest ? latest.price.toFixed(2) : '--'}

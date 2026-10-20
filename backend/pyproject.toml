@@ -1,7 +1,7 @@
 [project]
-name = "backend"
-version = "0.1.0"
-description = "Add your description here"
+name = "rich-backend"
+version = "0.5.0"
+description = "买股工具室 — 个人股票投资辅助工具后端"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -13,8 +13,6 @@ dependencies = [
     "loguru==0.7.2",
     "pydantic==2.9.2",
     "pydantic-settings==2.6.1",
-    "pytest==8.3.3",
-    "pytest-asyncio==0.24.0",
     "python-dotenv==1.0.1",
     "sqlalchemy==2.0.36",
     "uvicorn[standard]==0.32.0",
@@ -22,9 +20,56 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "pytest>=8.3.3",
+    "pytest-asyncio>=0.24.0",
     "pytest-cov>=7.1.0",
+    "ruff>=0.8.0",
 ]
+
+# ============================================================
+# 工具链配置(2026-10 新增,对标 PanWatch 的工程门禁)
+# ============================================================
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv", "migrations/versions"]
+
+[tool.ruff.lint]
+# 起步只启用高价值、低误报的规则;风格类(F401 未使用导入等)先不阻塞
+select = [
+    "E",    # pycodestyle 错误
+    "F",    # pyflakes
+    "B",    # bugbear:可变默认参数 / 循环变量绑定等真实 bug
+    "C4",   #  comprehensions
+    "SIM",  # simplify
+    "UP",   # pyupgrade
+    "ASYNC",# asyncio 误用(async 函数里用 time.sleep 等)
+    "S",    # bandit:安全(忽略 S101 assert)
+]
+ignore = [
+    "E501",   # 行长由 formatter 管
+    "B008",   # FastAPI Depends()/Query() 惯用法
+    "SIM108", # 三元表达式,不强制
+    "UP038",  # isinstance 元组写法已过时
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试里大量 monkeypatch / 魔法值 / 未使用变量是合理的
+"tests/**" = ["S", "B", "E", "SIM", "F401", "F841"]
+# 迁移脚本由 alembic autogenerate,风格不统一属正常
+"migrations/**" = ["E", "F", "B", "UP", "I"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"   # 消除 pytest-asyncio 弃用告警
 testpaths = ["tests"]
+# 失败即停:CI 里早暴露第一个问题
+addopts = "-ra --strict-markers"
+filterwarnings = [
+    "ignore::DeprecationWarning:starlette.*",
+]

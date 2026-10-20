@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>盯盘台 · 宽屏验证</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px;
+    background: #05080d; color: #8fa0b8;
+    font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  .bar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .bar b { color: #e2e8f2; font-size: 13px; }
+  .bar button {
+    background: #121a26; border: 1px solid #1e2836; color: #8fa0b8;
+    border-radius: 5px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+  }
+  .bar button.on { border-color: #22d3ee; color: #22d3ee; background: rgba(34,211,238,.12); }
+  .hint { font-size: 11px; color: #5c6b84; font-family: ui-monospace, Consolas, monospace; }
+  .stage { width: 100%; overflow: hidden; border: 1px solid #1e2836; border-radius: 8px; background: #070b12; }
+  .frame { border: 0; display: block; transform-origin: top left; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <b>盯盘台 · 宽屏验证</b>
+  <button data-w="1440" class="on">1440px</button>
+  <button data-w="1280">1280px</button>
+  <button data-w="1024">1024px</button>
+  <button data-w="820">820px</button>
+  <span class="hint" id="hint"></span>
+</div>
+<div class="stage" id="stage">
+  <iframe class="frame" id="frame" src="http://localhost:5173/" title="盯盘台"></iframe>
+</div>
+<script>
+  const frame = document.getElementById('frame');
+  const stage = document.getElementById('stage');
+  const hint = document.getElementById('hint');
+  let W = 1440;
+
+  function reloadFrame() {
+    // 加时间戳穿透缓存 —— 否则 dev server 的 Fast Refresh 改动不会进 iframe
+    frame.src = 'http://localhost:5173/?t=' + Date.now();
+  }
+
+  function render() {
+    // iframe 按真实宽度渲染,再用 transform 等比缩放到容器宽度 ——
+    // 这样媒体查询看到的是真实视口宽度,不是被缩放后的假宽度。
+    const avail = stage.clientWidth;
+    const scale = Math.min(1, avail / W);
+    frame.style.width = W + 'px';
+    frame.style.height = Math.round(window.innerHeight * 0.92) + 'px';
+    frame.style.transform = 'scale(' + scale + ')';
+    stage.style.height = Math.round(frame.style.height.replace('px','') * scale) + 'px';
+    hint.textContent = '渲染宽度 ' + W + 'px · 缩放 ' + (scale * 100).toFixed(0) + '% · 实际视口 ' + W + 'px';
+  }
+
+  document.querySelectorAll('.bar button').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('.bar button').forEach((x) => x.classList.remove('on'));
+      b.classList.add('on');
+      W = parseInt(b.dataset.w, 10);
+      render();
+      reloadFrame();
+    });
+  });
+
+  window.addEventListener('resize', render);
+  frame.addEventListener('load', render);
+  render();
+  reloadFrame();
+</script>
+</body>
+</html>

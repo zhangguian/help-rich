@@ -4,6 +4,7 @@ import { ExportImportCard } from '@/components/settings/ExportImportCard';
 import { HistoryToolsCard } from '@/components/settings/HistoryToolsCard';
 import { LlmKeysCard } from '@/components/settings/LlmKeysCard';
 import { LlmProviderCard } from '@/components/settings/LlmProviderCard';
+import { NotifySettings } from '@/components/settings/NotifySettings';
 import { ScreenshotPanel } from '@/components/screenshot/ScreenshotPanel';
 
 /**
@@ -43,6 +44,8 @@ export function SettingsPanel() {
         <LlmKeysCard />
 
         <ScreenshotPanel />
+
+        <NotifySettings />
 
         <HistoryToolsCard />
 

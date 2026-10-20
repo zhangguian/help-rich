@@ -24,6 +24,18 @@ class Settings(BaseSettings):
     # 数据库
     database_url: str = "sqlite+aiosqlite:///./data.db"
 
+    # CORS
+    # "*" = 开发期允许任意来源(此时必须关闭 credentials,见 main.py)
+    # 逗号分隔白名单,例如 "http://127.0.0.1:5173,http://localhost:5173"
+    cors_allow_origins: str = "*"
+
+    # 数据保留策略
+    # fund_flow 每分钟写约 150 条,前端只读每只股票最近 30 条;
+    # 不裁剪会让本地库无限膨胀(实测可达数百 MB),因此按"每只股票最近 N 条"截断
+    fund_flow_keep_per_stock: int = 500
+    # 裁剪后是否执行 VACUUM 回收空间(会短暂锁库,默认仅启动时执行一次)
+    retention_vacuum: bool = True
+
     # 日志
     log_dir: str = "./logs"
 

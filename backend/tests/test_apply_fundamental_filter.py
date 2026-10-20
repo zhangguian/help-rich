@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 @pytest.mark.asyncio
 async def test_apply_filter_all_pass_keeps_order():
-    from app.services.screener_service import _apply_fundamental_filter
+    from app.modules.screener.service import _apply_fundamental_filter
 
     picks = [
         SimpleNamespace(stock_code="600519.SH", score=100, fundamental_filter_status=None),
@@ -16,7 +16,7 @@ async def test_apply_filter_all_pass_keeps_order():
     async def _hit(code, query):
         return True
 
-    with patch("app.services.screener_service.is_hit_fundamental_filter", new=_hit):
+    with patch("app.modules.screener.service.is_hit_fundamental_filter", new=_hit):
         result = await _apply_fundamental_filter(picks)
 
     assert len(result) == 2
@@ -25,7 +25,7 @@ async def test_apply_filter_all_pass_keeps_order():
 
 @pytest.mark.asyncio
 async def test_apply_filter_kicked_gets_penalty_and_resorts():
-    from app.services.screener_service import _apply_fundamental_filter
+    from app.modules.screener.service import _apply_fundamental_filter
 
     picks = [
         SimpleNamespace(stock_code="600519.SH", score=100, fundamental_filter_status=None),
@@ -35,7 +35,7 @@ async def test_apply_filter_kicked_gets_penalty_and_resorts():
     async def _hit(code, query):
         return code != "000001.SZ"  # 000001 被踢
 
-    with patch("app.services.screener_service.is_hit_fundamental_filter", new=_hit):
+    with patch("app.modules.screener.service.is_hit_fundamental_filter", new=_hit):
         result = await _apply_fundamental_filter(picks)
 
     assert result[0].stock_code == "600519.SH"
@@ -48,7 +48,7 @@ async def test_apply_filter_kicked_gets_penalty_and_resorts():
 @pytest.mark.asyncio
 async def test_apply_filter_failure_raises():
     """任一票基本面查失败 → 整体抛 IfindUnavailable"""
-    from app.services.screener_service import _apply_fundamental_filter
+    from app.modules.screener.service import _apply_fundamental_filter
     from app.data.ifind_events import IfindUnavailable
 
     picks = [
@@ -61,7 +61,7 @@ async def test_apply_filter_failure_raises():
             raise IfindUnavailable("mocked")
         return True
 
-    with patch("app.services.screener_service.is_hit_fundamental_filter", new=_hit):
+    with patch("app.modules.screener.service.is_hit_fundamental_filter", new=_hit):
         with pytest.raises(IfindUnavailable):
             await _apply_fundamental_filter(picks)
 
@@ -69,7 +69,7 @@ async def test_apply_filter_failure_raises():
 @pytest.mark.asyncio
 async def test_apply_filter_disabled_short_circuits():
     """SCREENER_FUNDAMENTAL_FILTER_ENABLED=False 时原样返回"""
-    from app.services.screener_service import _apply_fundamental_filter
+    from app.modules.screener.service import _apply_fundamental_filter
     from app.core import config
 
     picks = [SimpleNamespace(stock_code="600519.SH", score=100, fundamental_filter_status=None)]
@@ -118,7 +118,7 @@ def _stub_upsert_run():
 @pytest.mark.asyncio
 async def test_run_daily_pick_calls_fundamental_filter():
     """run_daily_pick 必须在 replace_picks 之前调用 _apply_fundamental_filter"""
-    from app.services import screener_service
+    from app.modules.screener import service as screener_service
     from datetime import date
 
     async def _hit(code, query):
@@ -145,7 +145,7 @@ async def test_run_daily_pick_calls_fundamental_filter():
 @pytest.mark.asyncio
 async def test_run_daily_pick_skips_persist_on_fundamental_filter_failure():
     """基本面过滤失败 → run_daily_pick 不持久化 (spec §6)"""
-    from app.services import screener_service
+    from app.modules.screener import service as screener_service
     from app.data.ifind_events import IfindUnavailable
     from datetime import date
 

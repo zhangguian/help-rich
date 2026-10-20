@@ -202,13 +202,13 @@ async def summarize_stock(stock_code: str, window: str) -> ReplaySnapshot:
     suggestions = _derive_suggestions(top_issues)
 
     # 5. 持仓占比 + 窗口内已实现盈亏
-    from app.services.position_service import get_position, aggregate_positions
+    from app.modules.portfolio.service import get_position, aggregate_positions
 
     pos = await get_position(norm)
     concentration_pct = "0.00"
     if pos and pos.shares > 0:
         # 简化:单股持仓占比 = 该股市值 / (所有持仓 + 窗口内交易市值)
-        from app.services.position_service import get_all_positions
+        from app.modules.portfolio.service import get_all_positions
 
         all_pos = await get_all_positions()
         total_value = Decimal("0")

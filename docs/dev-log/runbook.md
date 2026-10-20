@@ -62,11 +62,87 @@ Copy-Item backups\data-YYYY-MM-DD.db -Destination data.db -Force
 ## 4. 故障排查
 
 ### 端口 8000 被占用
+
+先看清楚"到底是谁占着",不要直接杀:
+
 ```powershell
-netstat -ano | findstr :8000
-# 找到 PID 后:
-Stop-Process -Id <PID> -Force
+scripts\dev.cmd -Action status   # 会标出 (本项目) / (其它程序!本项目自动顺延到别的端口)
+                                  # 并额外列出本项目实际在跑的进程(与端口无关)
 ```
+
+**2026-10-17 真实事故**:后端日志打印 `Application startup complete`,
+健康检查却连续 180 秒超时。原因是另一个项目(Merchant AI)先绑了
+`127.0.0.1:8000`,我们的 uvicorn 绑 `0.0.0.0:8000` 依然成功 ——
+Windows 允许两者并存,但 `127.0.0.1:8000` 的请求会优先命中"绑定地址更具体"
+的那个程序,于是永远 404/超时。
+
+```powershell
+# 确认占用者身份(不要盲杀,可能是你其它项目)
+netstat -ano | findstr :8000
+# 应用身份可用 openapi 标题判断:本项目 title = 买股工具室
+(Invoke-WebRequest http://127.0.0.1:8000/openapi.json -UseBasicParsing).Content | ConvertFrom-Json | % { $_.info.title }
+```
+
+**默认行为(不用改任何配置)**:`scripts\dev.cmd` 发现后端端口被别的程序占着时,
+自动顺延到下一个空闲端口,并同步 `frontend/.env.local` 的
+`NEXT_PUBLIC_API_URL`。所以那台机器上 8000 被 Merchant AI 常驻占着也不影响使用。
+
+想固定端口:
+
+```powershell
+scripts\dev.cmd -BackendPort 8010
+# 想让"端口被别人占着"直接报错而不是顺延:
+scripts\dev.cmd -StrictPort
+```
+
+**判据说明(重要)**:脚本只杀命令行里出现本项目路径(`backend\` / `frontend\`)
+的进程。只认 `uvicorn app.main:app` 这种通用命令是不够的 —— 任何 FastAPI 项目
+都是这条命令,Merchant AI 的 8000 曾因此被当成本项目旧进程杀掉。宁可认不出、
+不杀,也不要误杀其它项目。
+
+### 进程台账 `logs/dev-state.json`
+
+`start` 会把自己拉起的 PID 记进 `logs/dev-state.json`(连同进程启动时刻,
+用来防 PID 回收复用),`stop` / `status` 以它作为归属判断的权威依据。
+再加一层"子孙进程"认亲:真正监听端口的往往是子进程
+(`next dev` fork 出来的 `start-server` worker、uvicorn 的实际监听进程),
+按 `ParentProcessId` 一路收下去。
+
+之所以要有台账:2026-10-17 实测这台机器上 **519 个进程里有 167 个
+`CommandLine` 是空的**(`Get-CimInstance` 和 `Get-WmiObject` 表现一致,
+同用户也能读到其它字段,不是权限提示),而这些进程用 taskkill 会
+`Access is denied`。也就是说"按命令行认进程"在这里本身就不可靠。
+
+### 端口被占但脚本认不出来时
+
+这种情况通常意味着台账丢失(例如手工 kill 过脚本、或用别的工具起过服务)。
+脚本会拒绝动手并打印 PID,确认是自己的之后手动处理:
+
+```powershell
+scripts\dev.cmd -Action status      # 先看 PID
+taskkill /PID <PID> /T /F          # 确认后再执行
+```
+
+### 后端启动慢(1~2 分钟)
+
+`data.db` 被撑爆:删除行只把页还给 freelist,文件不会自己缩小,启动时要打开
+巨大的库 + 巨大的 WAL。实测 411 MB 的库里 410 MB 是空页。
+
+```powershell
+cd backend; python -m app.services.retention --vacuum
+# 实测 411.3 MB -> 0.6 MB,启动 80s -> 6s
+```
+
+### 日志里全是 `%s` / 中文乱码
+
+- 两套 logger 并存:`app/core/logging.py` 是 loguru(认 `{}`),
+  其余 service/api 是标准库 `logging`(认 `%s`)。风格写错不会报错,
+  只会留下字面 `%s` —— `backend/tests/test_logging_style.py` 已加守卫。
+- 标准库 logger 写 `{}` 会抛
+  `TypeError: not all arguments converted during string formatting`,
+  在后台调度器里表现为 `Task exception was never retrieved` + 数据不更新。
+- 日志编码:启动脚本固定 `PYTHONIOENCODING=utf-8`;否则按 zh-CN 的 GBK 落盘,
+  用 UTF-8 读就是乱码。结构化日志在 `logs/rich-<日期>.log`(JSON,含 DEBUG)。
 
 ### 后端启动报错
 1. 检查 `.env` 是否存在(首次会自动生成 FERNET_KEY)

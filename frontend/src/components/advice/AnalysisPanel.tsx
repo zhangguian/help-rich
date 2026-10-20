@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import clsx from 'clsx';
 
@@ -66,6 +67,7 @@ export function AnalysisPanel({
   onRefresh,
   onForceRefresh,
   onRetry,
+  showBeginners = true,
 }: {
   analysis: AnalysisResult | null;
   started: boolean;
@@ -75,11 +77,25 @@ export function AnalysisPanel({
   onRefresh: () => void;
   onForceRefresh?: () => void;
   onRetry?: () => void;
+  /**
+   * v0.8 交易台:右栏把「新手速看」拆成独立区块(见 components/desk/DecisionColumn.tsx),
+   * 所以这里允许关掉内嵌的那一份,避免同一屏出现两张新手速看。
+   * 其他页面(深度分析页等)默认仍然内嵌,行为不变。
+   */
+  showBeginners?: boolean;
 }) {
   const ind = analysis?.indicators;
 
   return (
     <div className="space-y-3">
+      {/* M3.1 新手速看卡:5 步阅读顺序(给小白的第一眼指引) */}
+      {showBeginners && (
+        <BeginnersGuide
+          signal={ind?.signal}
+          volumeRatio={ind?.volume.ratio ?? null}
+          position={ind?.position}
+        />
+      )}
       {/* 顶部置顶:机械信号卡(确定性引擎,与 AI 卡并存) */}
       {ind && (
         <SignalPanel
@@ -89,6 +105,17 @@ export function AnalysisPanel({
           liar={ind.liar}
           position={ind.position}
           patterns={ind.patterns}
+        />
+      )}
+      {/* M1.2 买卖位置参考卡:近 120 日 P20/P80 风险带 + 参考支撑 + 建议止损 */}
+      {ind && (
+        <PositionRiskCard
+          position={ind.position}
+          currentPrice={
+            analysis?.currentPrice != null
+              ? Number(analysis.currentPrice)
+              : null
+          }
         />
       )}
 
@@ -772,25 +799,6 @@ function PositionCard({ position }: { position: PositionIndicator | undefined })
       : position.band === 'low'
         ? { label: '低位(关注)', cls: 'text-accent' }
         : { label: '中位', cls: 'text-text-sec' };
-  // v0.5 M1.2:近120日分位风险带(P80/P20)+ 白话提示
-  const riskMeta =
-    position.riskBand === 'high'
-      ? {
-          label: '高位风险区',
-          cls: 'text-warn border-warn/30 bg-warn/10',
-          hint: '当前处于近 120 日高位区间,追涨风险偏高,注意止盈/减仓',
-        }
-      : position.riskBand === 'low'
-        ? {
-            label: '低位机会区',
-            cls: 'text-accent border-accent/30 bg-accent/10',
-            hint: '当前处于近 120 日低位区间,注意是否趋势下行,不宜盲目抄底',
-          }
-        : {
-            label: '中位观察区',
-            cls: 'text-text-sec border-border-def bg-bg-subtle',
-            hint: '当前处于近 120 日中位区间,结合量价与信号再做判断',
-          };
   return (
     <div>
       <div className="flex items-center justify-between text-sm">
@@ -809,31 +817,256 @@ function PositionCard({ position }: { position: PositionIndicator | undefined })
           近 250 日高低分位 {position.rangePct.toFixed(0)}%
         </p>
       )}
+      {/* v0.5 M1.2 风险带详情已上移至顶部 PositionRiskCard */}
+    </div>
+  );
+}
 
-      {/* v0.5 M1.2 买卖位置参考卡(P80/P20 风险带 + 参考支撑 + 止损) */}
-      {position.riskBand && (
-        <div className="mt-2 border-t border-border-def pt-2">
-          <div className="flex items-center gap-2">
-            <span
-              className={clsx(
-                'inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-semibold',
-                riskMeta.cls,
-              )}
-            >
-              {riskMeta.label}
-            </span>
-            <span className="text-xs text-text-ter">
-              P20 {position.p20?.toFixed(2) ?? '--'} · P80 {position.p80?.toFixed(2) ?? '--'}
-            </span>
+/**
+ * M1.2 买卖位置参考卡(roadmap §4 M1.2)
+ *
+ * 显示近 120 日 P20/P80 风险带:
+ *  - 高位区间 = 当前价 ≥ P80
+ *  - 中位区间 = P20 ≤ 当前价 < P80
+ *  - 低位区间 = 当前价 < P20
+ *
+ * 附带:参考支撑价(近 20 日最低 × 0.98)、建议止损价(支撑 × 0.97)
+ * 数据全部由 ta_service._position 计算,前端仅展示
+ */
+function PositionRiskCard({
+  position,
+  currentPrice,
+}: {
+  position: PositionIndicator;
+  currentPrice: number | null;
+}) {
+  const band = position.riskBand ?? 'mid';
+  const BAND_META: Record<
+    'high' | 'mid' | 'low',
+    { label: string; chipCls: string; hint: string; color: string }
+  > = {
+    high: {
+      label: '高位风险区',
+      chipCls: 'text-warn border-warn/40 bg-warn-bg/40',
+      hint: '当前处于近 120 日高位区间,追涨风险偏高,注意止盈/减仓节奏',
+      color: 'bg-warn',
+    },
+    mid: {
+      label: '中位观察区',
+      chipCls: 'text-text-sec border-border-def bg-bg-subtle',
+      hint: '当前处于近 120 日中位区间,结合量价与下方机械信号再做判断',
+      color: 'bg-accent',
+    },
+    low: {
+      label: '低位机会区',
+      chipCls: 'text-accent border-accent/40 bg-accent-bg/40',
+      hint: '当前处于近 120 日低位区间,注意是否趋势下行,不宜盲目抄底',
+      color: 'bg-accent',
+    },
+  };
+  const meta = BAND_META[band];
+
+  const p20 = position.p20 ?? null;
+  const p80 = position.p80 ?? null;
+  const cur =
+    currentPrice != null
+      ? Number(currentPrice)
+      : null;
+  const hasBand = p20 != null && p80 != null && p80 > (p20 as number);
+  const pctInBand =
+    hasBand && cur != null
+      ? Math.max(0, Math.min(100, ((cur - (p20 as number)) / ((p80 as number) - (p20 as number))) * 100))
+      : null;
+  const stopAbove = (v: number) => hasBand && cur != null && cur >= v;
+
+  return (
+    <GlassCard padding="md" className="space-y-3 border border-border-def">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-semibold text-text-pri inline-flex items-center">
+          📍 买卖位置参考<TermHint term="position_band" />
+        </span>
+        <span
+          className={clsx(
+            'text-xs px-2 py-0.5 rounded-full border font-semibold',
+            meta.chipCls,
+          )}
+        >
+          {meta.label}
+        </span>
+      </div>
+      <p className="text-xs text-text-sec leading-relaxed">{meta.hint}</p>
+
+      {/* P20 - P80 位置条 */}
+      {hasBand && (
+        <div>
+          <div className="relative h-2 rounded-full bg-gradient-to-r from-accent/30 via-text-ter/15 to-warn/30 overflow-hidden">
+            {pctInBand != null && (
+              <div
+                className={clsx(
+                  'absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full ring-2 ring-bg-pri shadow-md',
+                  band === 'high' ? 'bg-warn' : band === 'mid' ? 'bg-accent' : 'bg-accent',
+                )}
+                style={{ left: `calc(${pctInBand}% - 6px)` }}
+                title={`当前价 ¥${cur?.toFixed(2)}`}
+              />
+            )}
           </div>
-          <p className="text-xs text-text-ter mt-1.5">{riskMeta.hint}</p>
-          <div className="grid grid-cols-2 gap-1.5 mt-1.5">
-            <Mini label="参考支撑" value={position.supportPrice ?? null} />
-            <Mini label="建议止损" value={position.stopLossPrice ?? null} />
+          <div className="flex justify-between text-[10px] text-text-ter font-mono mt-1">
+            <span>P20 ¥{p20.toFixed(2)}</span>
+            <span>P80 ¥{p80.toFixed(2)}</span>
           </div>
         </div>
       )}
-    </div>
+
+      {/* 参考支撑 + 建议止损 */}
+      <div className="grid grid-cols-2 gap-2">
+        <div className="rounded-xl bg-bg-subtle px-3 py-2">
+          <div className="text-[10px] text-text-ter">参考支撑(近 20 日最低 × 0.98)</div>
+          <div className="text-base font-mono text-text-pri mt-0.5">
+            {position.supportPrice != null ? (
+              `¥${position.supportPrice.toFixed(2)}`
+            ) : (
+              <span className="text-text-ter text-xs">数据不足</span>
+            )}
+          </div>
+          {position.supportPrice != null && stopAbove(position.supportPrice) && (
+            <div className="text-[10px] text-up mt-0.5">现价高于支撑 ✓</div>
+          )}
+        </div>
+        <div className="rounded-xl bg-bg-subtle px-3 py-2">
+          <div className="text-[10px] text-text-ter">建议止损(支撑 × 0.97)</div>
+          <div className="text-base font-mono text-down mt-0.5">
+            {position.stopLossPrice != null ? (
+              `¥${position.stopLossPrice.toFixed(2)}`
+            ) : (
+              <span className="text-text-ter text-xs">数据不足</span>
+            )}
+          </div>
+          {position.stopLossPrice != null && stopAbove(position.stopLossPrice) && (
+            <div className="text-[10px] text-text-ter mt-0.5">跌破请考虑减仓</div>
+          )}
+        </div>
+      </div>
+    </GlassCard>
+  );
+}
+
+/**
+ * M3.1 新手速看卡(roadmap §4 M3.1)
+ *
+ * 5 步阅读顺序,让小白知道"先看什么后看什么":
+ *  方向 → 量能 → 价位 → 位置 → 信号
+ *
+ * 每步带一个基于当前股票实际数据的例子 + ? tooltip
+ * 默认折叠,点击展开;移动端友好(无 hover 依赖)
+ */
+export function BeginnersGuide({
+  signal,
+  volumeRatio,
+  position,
+}: {
+  signal: SignalFusion | undefined;
+  volumeRatio: number | null;
+  position: PositionIndicator | undefined;
+}) {
+  const [open, setOpen] = useState(true);
+  // 基于实际数据生成每个步骤的"当前例子"
+  const direction =
+    signal?.view === 'bullish'
+      ? '看多'
+      : signal?.view === 'bearish'
+        ? '看空'
+        : signal
+          ? '中性'
+          : '点击「开始分析」后给出';
+  const volLabel =
+    volumeRatio == null
+      ? '先分析后才会有'
+      : volumeRatio >= 1.5
+        ? `放量 ${volumeRatio.toFixed(2)} —— 资金在加码`
+        : volumeRatio <= 0.7
+          ? `缩量 ${volumeRatio.toFixed(2)} —— 资金在退潮`
+          : `量能平稳 ${volumeRatio.toFixed(2)}`;
+  const bandLabel =
+    position?.riskBand === 'high'
+      ? '当前处于高位区间,慎追'
+      : position?.riskBand === 'low'
+        ? '当前处于低位区间,慎接飞刀'
+        : position?.riskBand
+          ? '当前处于中位区间,空间大'
+          : '先分析后才会有';
+  const signalLabel = signal ? `${signal.viewLabel} · ${signal.score}分` : '先分析后才会有';
+
+  const steps = [
+    {
+      title: '1. 方向',
+      hint: '股票当下是涨势、跌势,还是震荡?这是"看多/看空/中性"的第一判断。',
+      example: `机械信号:${direction}`,
+    },
+    {
+      title: '2. 量能',
+      hint: '成交量是否在放大?放量上涨更可信,缩量上涨容易回调;放量下跌要警惕。',
+      example: volLabel,
+    },
+    {
+      title: '3. 价位',
+      hint: '当前价相对近 120 日是高位、中位还是低位?同样一支票,60 块和 30 块买意义不同。',
+      example: bandLabel,
+    },
+    {
+      title: '4. 支撑/压力',
+      hint: '下面有支撑就跌不深,上面有压力就涨不动;关键位置决定买卖点。',
+      example:
+        position?.supportPrice != null
+          ? `参考支撑 ¥${position.supportPrice.toFixed(2)}`
+          : '先分析后才会有',
+    },
+    {
+      title: '5. 信号确认',
+      hint: '机械信号 + 历史胜率 + AI 白话解读,三者一致时才值得动手。',
+      example: signalLabel,
+    },
+  ];
+
+  return (
+    <GlassCard padding="sm" className="space-y-2 border border-accent/25 bg-accent-subtle/40">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between gap-2 text-left"
+        aria-expanded={open}
+      >
+        <span className="text-xs font-semibold text-text-pri inline-flex items-center gap-1.5">
+          📖 新手速看 · 5 步读懂一只股
+          <span className="text-[10px] font-normal text-text-ter">(点击收起)</span>
+        </span>
+        <span
+          className={clsx(
+            'text-text-ter text-xs transition-transform',
+            open ? 'rotate-180' : '',
+          )}
+          aria-hidden
+        >
+          ▾
+        </span>
+      </button>
+      {open && (
+        <ol className="space-y-2 text-xs">
+          {steps.map((s) => (
+            <li key={s.title} className="flex flex-col gap-1">
+              <div className="flex items-start gap-2">
+                <span className="font-semibold text-accent shrink-0">{s.title}</span>
+                <span className="text-text-sec leading-relaxed flex-1">{s.hint}</span>
+              </div>
+              <div className="ml-0 pl-0 rounded-lg bg-bg-subtle/60 border border-border-def/40 px-2.5 py-1.5">
+                <span className="text-[10px] text-text-ter mr-1.5">当前:</span>
+                <span className="font-mono text-text-pri">{s.example}</span>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </GlassCard>
   );
 }
 

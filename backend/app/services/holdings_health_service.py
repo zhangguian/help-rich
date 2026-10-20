@@ -8,7 +8,7 @@
 import logging
 from decimal import Decimal
 
-from app.services.position_service import get_all_positions
+from app.modules.portfolio.service import get_all_positions
 from app.services.quote_service import QuoteService
 from app.services.risk_service import PositionExposure, calc_risk
 

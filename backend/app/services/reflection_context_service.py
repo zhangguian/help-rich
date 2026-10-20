@@ -87,7 +87,7 @@ async def build_reflection_context(
         ifind_calls=calls,
     )
     logger.info(
-        "reflection context built: date=%s stocks=%d announcements=%d news=%d",
+        "reflection context built: date=%s stocks=%s announcements=%s news=%s",
         today, len(stock_codes), len(all_announcements), len(all_news),
     )
     return row

@@ -6,6 +6,7 @@ LLM 不可用 / 输出非法 → ai=None,由前端降级纯指标展示(页面�
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -19,12 +20,24 @@ from app.services.ta_service import compute_indicators
 logger = logging.getLogger(__name__)
 
 # LLM 调用总时间预算(秒):超过直接降级/503,保证接口快速返回,不被慢模型拖死
-# v2.5 放宽至 300s:覆盖 MiniMax-M2.5 思考链典型30~70s + 长尾抖动;
-# 配合 max_tokens=1500/2000 进一步压缩输出耗时,流式 /analysis/stream 提供进度反馈
-LLM_ANALYSIS_BUDGET = 300.0
-LLM_QUESTION_BUDGET = 300.0
+# v2.5 原为 300s:覆盖 MiniMax-M2.5 思考链典型30~70s + 长尾抖动。
+# v0.5.0 收紧到 150s:实测正常耗时 20~35s,150s 仍有 4 倍余量;
+# 但实测偶发单次调用拖到 499s(300s 预算 + provider 重试/backoff),
+# 用户要盯着转圈近 8 分钟才有结果 —— 超时越久不等于成功率越高,
+# 快速失败并让用户点「重试」体验更好。
+LLM_ANALYSIS_BUDGET = 150.0
+LLM_QUESTION_BUDGET = 150.0
 # 多轮对话上下文窗口:超过此轮数的旧问答会被丢弃,防止 LLM context 撑爆
 MAX_HISTORY_TURNS = 6
+
+# LLM 输出 token 预算。
+# ⚠️ 必须给足:本项目的 provider 走 MiniMax `reasoning_split: True`,
+# **思考链与正文共享 max_tokens 预算**。原先设 1500 时,思考链吃掉大半,
+# 留给 JSON 正文的额度不足 → JSON 在约 1200 字符处被截断,
+# 前端只能显示「AI 解析失败,请点重试」(实测于 2026-10-20)。
+# 4000 可容纳「思考链 + 完整 JSON 正文」,配合下方 prompt 的精简约束够用。
+LLM_ANALYSIS_MAX_TOKENS = 4000
+LLM_QUESTION_MAX_TOKENS = 4000
 
 ANALYSIS_SYSTEM = """你是股票技术分析助理,面向完全不懂 K 线的小白股民。
 硬性规则:
@@ -33,6 +46,8 @@ ANALYSIS_SYSTEM = """你是股票技术分析助理,面向完全不懂 K 线的�
 3. 输出必须是合法 JSON(无 markdown 代码块包裹)
 4. 结论客观,不承诺收益,结尾必须包含风险提示
 5. 术语用大白话:"均线"可解释为"一段时间平均成本价","企稳点"解释为"价格站住不破的位置"
+6. **输出务必精简**:每个字符串字段控制在 60 字以内,整份 JSON 不超过 1200 字;
+   不要展开长篇分析过程,只给结论和依据。输出过长会被截断导致解析失败。
 
 输入字段 position_status 表示该股相对当前用户的持仓状态(关键,决定 advice 角色段):
   - empty: 用户未持仓,advice_role 输出「建仓参考」
@@ -164,12 +179,254 @@ async def check_llm_available() -> None:
         raise StockAdviceUnavailable("未配置 LLM Key,无法回答;可先查看技术指标")
 
 
-def _parse_llm_json(raw: str) -> dict:
-    """解析 LLM 返回 JSON(只接受纯 JSON 或 ```json...``` markdown 包裹)
+def _repair_json_text(text: str) -> str:
+    """修复 LLM 输出的**语法级**瑕疵(不改变语义)
 
-    取消花括号配对提取:LLM 输出 "以下是分析:\\n{...}" 这类带前置自然语言的格式
-    不再被静默修复,直接报错。这迫使 LLM 必须严格返回标准 JSON 或 markdown 代码块,
-    否则前端走"AI 解析失败,请重试"路径,不再用非法抽取的内容蒙混过关。
+    用统一词法状态机处理字符串边界,只做这几件不可能改变语义的事:
+    1. 单引号字符串 → 双引号字符串(内容里的 `"` 转义成 `\\"`,`\\'` 还原成 `'`)
+    2. 字符串内的裸换行 / 回车 / 制表符 → 转义成 \\n \\r \\t
+       (JSON 规范不允许字面控制符出现在字符串里,LLM 写多行文案时高发)。
+    3. 双引号字符串内的**裸双引号** → 转义成 `\\"`
+       (JSON 规范要求转义;用"后面是否跟 : , } ] 或 EOF"来区分结束引号与裸引号)
+    4. 去掉对象/数组末尾的多余逗号。
+    5. **补回被漏掉 / 写错的 JSON 分隔符**(2026-10-21 实测补):
+       a. 键的**起始引号**被漏掉 → 写成 `{type":"x"}`
+       b. 键的**起始引号**被写成 `{` → 写成 `,{"price":{...}}`
+       c. 成员之间**缺逗号** → 写成 `{"a":1 "b":2}`
+
+    5 的判据(为什么不会误伤合法 JSON):
+       - 合法 JSON 里,`"` 后面紧跟 `:` 的那个引号**必定是键的收尾引号**,
+         而键的收尾引号一定是在"字符串内"状态被处理的 —— 所以当我们在
+         "字符串外"遇到一个后面跟 `:` 的引号时,它只可能是畸形产物。
+       - 同理,合法 JSON 里一个值的后面只能跟 `,` `}` `]` 或空白,
+         不会出现 `"` —— 所以"值后面紧跟 `"`"必然是漏了逗号。
+       - 5b 要区分「数组里的对象元素」(合法:`[{"a":1}]`)与
+         「对象里的成员键」(畸形:`,{"a":1}`)—— 靠**容器栈**判断当前位置
+         在对象里还是在数组里:在对象里、且紧跟在成员分隔符 `,` 之后、
+         且其后形如 `"name":` → 这个 `{` 就是被写成 `{` 的键起始引号。
+       - 中文正文里的引号不能算作「值的结尾」:如 `他说"重要"是`,
+         若把中文字符算成值尾就会误插逗号,内容就变了。
+         故「值尾」判定只认 ASCII 数字 / ASCII 字母 / `}` / `]`。
+       - 补的只是**分隔符**,字面内容一个字节都不改 → 语义不变。
+
+    **刻意不做**:截取"第一个 `{` 到最后一个 `}`"之间的内容。
+    前置/后置自然语言("以下是分析:" / "希望对您有帮助")说明模型没在遵循 JSON 模式,
+    那是**语义层**的问题;靠截取把它捞出来等于自己骗自己 —— 捞出来的 JSON 内容
+    也可能不是模型真正的结论(项目纪律:不用花括号配对抽取蒙混过关)。
+    这类输出直接判失败 → 由调用方走"严格重试"(换更严格的指令让 LLM 重新输出)。
+
+    修完仍必须能被 json.loads 解析成 dict,且还要过 `_validate_analysis` 的
+    schema 校验 —— 垃圾内容无法冒充分析结果(项目纪律:不蒙混过关)。
+    """
+    n = len(text)
+    out: list[str] = []
+    state = "out"  # out | dq(双引号串) | sq(单引号串)
+    i = 0
+    # 裸词游标:用于「键的起始引号被漏掉」的修补。
+    # 记录当前这段连续标识符在 text / out 里的起点(只认 ASCII 标识符,
+    # 避免把中文正文误判成裸键)。
+    word_text_start: int | None = None
+    word_out_start = 0
+    # 容器栈:记录当前嵌套的是对象('{')还是数组('[')。
+    # 5b(把误写成 '{' 的键起始引号改回来)必须靠它区分
+    # 「数组里的对象元素」(合法)与「对象里的成员键」(畸形)。
+    stack: list[str] = []
+
+    def next_nonspace(j: int) -> str:
+        while j < n and text[j] in " \t\r\n":
+            j += 1
+        return text[j] if j < n else ""
+
+    def prev_nonspace_out() -> str:
+        """out 里最后一个非空白字符(用于判断"上一个值是什么")"""
+        j = len(out) - 1
+        while j >= 0:
+            s = out[j]
+            if s.strip() == "":
+                j -= 1
+                continue
+            return s[-1]
+        return ""
+
+    def is_value_end(ch: str) -> bool:
+        """这个字符能否作为一个「值」的结尾(数字 / 布尔字面量 / 对象 / 数组)
+
+        刻意不把中文算进去:中文正文里出现引号很常见
+        (如 `他说"重要"`) —— 把它当值尾会误插逗号,改变语义。
+        """
+        if ch in "}]":
+            return True
+        return ch.isascii() and (ch.isdigit() or ch.isalpha())
+
+    def looks_like_key_after_brace(j: int) -> bool:
+        """text[j] 应是 '{';判断其后是否形如 `"name":`
+
+        是 → 说明这个 '{' 是「被写成 '{' 的键起始引号」(5b)。
+        合法 JSON 里 '{' 后面不会出现 `"name":` 这种"键"形态 ——
+        对象的键前必须是 '"'。
+        """
+        if j >= n or text[j] != "{":
+            return False
+        k = j + 1
+        while k < n and text[k] in " \t\r\n":
+            k += 1
+        if k >= n or text[k] != '"':
+            return False
+        k += 1
+        while k < n:
+            if text[k] == "\\":
+                k += 2
+                continue
+            if text[k] == '"':
+                return next_nonspace(k + 1) == ":"
+            k += 1
+        return False
+
+    while i < n:
+        ch = text[i]
+
+        if state == "out":
+            if ch == '"':
+                # ── 修补 5a:键的起始引号被漏掉({type":"x"})
+                # 注意:必须在重置裸词游标**之前**判断 ——
+                # 游标记录的是紧贴在这个引号之前的那段标识符。
+                if next_nonspace(i + 1) == ":" and word_text_start is not None:
+                    p = word_text_start - 1
+                    while p >= 0 and text[p] in " \t\r\n":
+                        p -= 1
+                    if p >= 0 and text[p] in "{,":
+                        out.insert(word_out_start, '"')
+                        out.append('"')
+                        i += 1
+                        word_text_start = None
+                        continue
+                # ── 修补 5b:成员之间缺逗号({"a":1 "b":2})
+                prev = prev_nonspace_out()
+                if prev and is_value_end(prev):
+                    out.append(",")
+                word_text_start = None
+                out.append(ch)
+                state = "dq"
+                i += 1
+                continue
+            else:
+                # ── 修补 5b:键前面多了一个 '{'(,{"price":{...}})
+                # 判据:当前在**对象**里(栈顶是 '{')、紧跟在成员分隔符 ',' 之后、
+                #       且其后形如 "name": → 这个 '{' 是多出来的,删掉即可。
+                #       (键本身的引号是好的,所以是"删"不是"换成引号")
+                if (
+                    ch == "{"
+                    and stack
+                    and stack[-1] == "{"
+                    and prev_nonspace_out() == ","
+                    and looks_like_key_after_brace(i)
+                ):
+                    i += 1
+                    continue
+
+                # 维护容器栈
+                if ch in "{[":
+                    stack.append(ch)
+                elif ch in "}]":
+                    if stack:
+                        stack.pop()
+
+                # 维护裸词游标(仅 ASCII 标识符;中文正文不算裸键)
+                if ch.isascii() and (ch.isalnum() or ch == "_"):
+                    if word_text_start is None:
+                        word_text_start = i
+                        word_out_start = len(out)
+                elif ch not in " \t\r\n":
+                    word_text_start = None
+
+                if ch == "'":
+                    state = "sq"
+                    out.append('"')
+                    i += 1
+                    continue
+                out.append(ch)
+                i += 1
+                continue
+
+        if state == "dq":
+            if ch == "\\":
+                out.append(text[i : i + 2])
+                i += 2
+                continue
+            if ch == '"':
+                # 后面跟 : , } ] 或 EOF → 结束引号;否则是裸双引号,需转义
+                if next_nonspace(i + 1) in (":", ",", "}", "]", ""):
+                    state = "out"
+                else:
+                    out.append('\\"')
+                    i += 1
+                    continue
+            elif ch == "\n":
+                out.append("\\n")
+                i += 1
+                continue
+            elif ch == "\r":
+                out.append("\\r")
+                i += 1
+                continue
+            elif ch == "\t":
+                out.append("\\t")
+                i += 1
+                continue
+            out.append(ch)
+            i += 1
+            continue
+
+        # state == "sq":单引号字符串,统一输出为双引号字符串
+        if ch == "\\":
+            nxt = text[i + 1] if i + 1 < n else ""
+            if nxt == "'":
+                out.append("'")  # \' 在双引号 JSON 里是非法转义 → 还原为裸 '
+            else:
+                out.append(text[i : i + 2])
+            i += 2
+            continue
+        if ch == "'":
+            state = "out"
+            out.append('"')
+            i += 1
+            continue
+        if ch == '"':
+            out.append('\\"')
+            i += 1
+            continue
+        if ch == "\n":
+            out.append("\\n")
+            i += 1
+            continue
+        if ch == "\r":
+            out.append("\\r")
+            i += 1
+            continue
+        if ch == "\t":
+            out.append("\\t")
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+
+    text = "".join(out)
+    # 尾部多余逗号
+    text = re.sub(r",(\s*[}\]])", r"\1", text)
+    return text
+
+
+def _parse_llm_json(raw: str) -> dict:
+    """解析 LLM 返回 JSON(严格优先 + 安全修复兜底)
+
+    严格路径:纯 JSON 或 ```json...``` markdown 包裹。
+    修复路径:上面 `_repair_json_text` 的语法级修补(不改语义)。
+
+    实测 MiniMax M2.5 即便带 `response_format=json_object` 也会偶发:
+      - 单引号字符串 / 尾部多余逗号 / 字符串内裸换行 → **语法级**,修复即可
+      - 前置自然语言 + 带缩进换行的格式化 JSON(Expecting value at char 0)
+        → **语义级**,修复器刻意不碰,交调用方的"严格重试"
+    所以这里先做安全修复再解析;修不动就走调用方的"严格重试"。
     """
     text = raw.strip()
     # 仅容忍 markdown ```json...``` 包裹(LLM 结构化输出协议)
@@ -180,8 +437,15 @@ def _parse_llm_json(raw: str) -> dict:
         text = fenced
     try:
         data = json.loads(text)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"LLM 返回非法 JSON: {e}") from e
+    except json.JSONDecodeError:
+        # 安全修复后重试一次
+        repaired = _repair_json_text(text)
+        if repaired == text:
+            raise ValueError("LLM 返回非法 JSON(且安全修复无效)")
+        try:
+            data = json.loads(repaired)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"LLM 返回非法 JSON: {e}") from e
     if not isinstance(data, dict):
         raise ValueError("LLM 返回非对象 JSON")
     return data
@@ -303,6 +567,22 @@ def _build_context(
     }
 
 
+def _log_raw_on_parse_fail(tag: str, stock_code: str, raw: str, err: Exception) -> None:
+    """解析失败时把**原始 LLM 输出**落日志(截断 4000 字)
+
+    为什么必须有:解析失败时只记异常信息是完全不够的 ——
+    "Expecting ',' delimiter: char 302" 说的是**位置**,不是**原因**,
+    没有原文就只能靠猜。实测 MiniMax M2.5 同一份 prompt 会偶发返回
+    少逗号 / 多逗号 / 串内裸引号,只有原文能区分。
+
+    落日志而不是直接改内容:原文是排查依据,不能动它。
+    """
+    logger.warning(
+        "%s JSON 解析失败(%s): %s | 原文(%d 字):%s",
+        tag, stock_code, err, len(raw), raw[:4000],
+    )
+
+
 async def get_stock_analysis(
     stock_code: str,
     klines: list[dict[str, Any]],
@@ -353,11 +633,30 @@ async def get_stock_analysis(
             pass
     try:
         raw = await asyncio.wait_for(
-            llm.chat(ANALYSIS_SYSTEM, user_msg, max_tokens=1500),
+            llm.chat(ANALYSIS_SYSTEM, user_msg, max_tokens=LLM_ANALYSIS_MAX_TOKENS),
             timeout=LLM_ANALYSIS_BUDGET,
         )
-        parsed = _parse_llm_json(raw)
-        result["ai"] = _validate_analysis(parsed)
+        try:
+            result["ai"] = _validate_analysis(_parse_llm_json(raw))
+        except Exception as e:
+            # 解析/校验失败 → 用更严格的指令重试一次(三步顺序固定:
+            # 严格解析 → 安全修复 → 严格重试,与流式路径一致)。
+            # 不用"花括号配对抽取"那种宽松修复(项目纪律:不蒙混过关),
+            # 而是让 LLM 重新按规范输出一次 —— 重试结果仍走严格解析 + schema 校验。
+            _log_raw_on_parse_fail("个股分析", stock_code, raw, e)
+            raw2 = await asyncio.wait_for(
+                llm.chat(
+                    ANALYSIS_SYSTEM,
+                    user_msg
+                    + "\n\n【重要】上一次输出不是合法 JSON。"
+                    "请只输出一个 JSON 对象,所有 key 和字符串值都用双引号,"
+                    "不要输出任何解释文字、不要用单引号、不要省略任何字段。",
+                    max_tokens=LLM_ANALYSIS_MAX_TOKENS,
+                ),
+                timeout=LLM_ANALYSIS_BUDGET,
+            )
+            result["ai"] = _validate_analysis(_parse_llm_json(raw2))
+            logger.info("个股分析严格重试成功(%s)", stock_code)
         result["ai_source"] = "live"
     except asyncio.TimeoutError:
         logger.warning("个股分析 LLM 超时(>%ss): %s", LLM_ANALYSIS_BUDGET, stock_code)
@@ -399,12 +698,12 @@ async def ask_stock_question(
     )
     messages = _to_llm_messages(history) + [{"role": "user", "content": prompt}]
     logger.info(
-        "chat %s q=%r history_turns=%d messages=%d",
+        "chat %s q=%s history_turns=%s messages=%s",
         stock_code, question[:40], len(history) if history else 0, len(messages),
     )
     try:
         raw = await asyncio.wait_for(
-            llm.chat_with_messages(system, messages, temperature=0.4, max_tokens=2000),
+            llm.chat_with_messages(system, messages, temperature=0.4, max_tokens=LLM_QUESTION_MAX_TOKENS),
             timeout=LLM_QUESTION_BUDGET,
         )
     except asyncio.TimeoutError as e:
@@ -612,7 +911,7 @@ async def stream_stock_analysis(
 
     async def _do_llm() -> str:
         return await asyncio.wait_for(
-            llm.chat(ANALYSIS_SYSTEM, user_msg, max_tokens=1500),
+            llm.chat(ANALYSIS_SYSTEM, user_msg, max_tokens=LLM_ANALYSIS_MAX_TOKENS),
             timeout=LLM_ANALYSIS_BUDGET,
         )
 
@@ -647,10 +946,33 @@ async def stream_stock_analysis(
         parsed = _parse_llm_json(raw)
         ai = _validate_analysis(parsed)
     except Exception as e:
-        logger.warning("流式分析 JSON 解析失败(%s): %s", stock_code, e)
-        yield {"event": "ai_error", "code": "failed", "message": f"JSON 解析失败: {e}"}
-        yield {"event": "done"}
-        return
+        # JSON 解析失败 → 自动用更严格的指令重试一次。
+        # 不用"花括号配对抽取"那种宽松修复(项目纪律:不蒙混过关),
+        # 而是让 LLM 重新按规范输出一次 —— 重试结果仍走严格解析。
+        logger.warning("流式分析 JSON 解析失败(%s): %s — 触发严格重试", stock_code, e)
+        _log_raw_on_parse_fail("流式分析", stock_code, raw, e)
+        raw2 = ""
+        try:
+            raw2 = await asyncio.wait_for(
+                llm.chat(
+                    ANALYSIS_SYSTEM,
+                    user_msg
+                    + "\n\n【重要】上一次输出不是合法 JSON。"
+                    "请只输出一个 JSON 对象,所有 key 和字符串值都用双引号,"
+                    "不要输出任何解释文字、不要用单引号、不要省略任何字段。",
+                    max_tokens=LLM_ANALYSIS_MAX_TOKENS,
+                ),
+                timeout=LLM_ANALYSIS_BUDGET,
+            )
+            parsed = _parse_llm_json(raw2)
+            ai = _validate_analysis(parsed)
+            logger.info("流式分析严格重试成功(%s)", stock_code)
+        except Exception as e2:
+            logger.warning("流式分析严格重试仍失败(%s): %s", stock_code, e2)
+            _log_raw_on_parse_fail("流式分析重试", stock_code, raw2, e2)
+            yield {"event": "ai_error", "code": "failed", "message": f"JSON 解析失败: {e2}"}
+            yield {"event": "done"}
+            return
 
     # 落库守卫:仅 ai 解析成功且为 live 时写库
     try:

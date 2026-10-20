@@ -35,7 +35,7 @@ async def build_event_factor_cache(trade_date: date) -> EventFactorCache:
         ifind_calls=1,
     )
     logger.info(
-        "event factor cache built: trade_date=%s codes=%d",
+        "event factor cache built: trade_date=%s codes=%s",
         trade_date, len(result["stock_codes"]),
     )
     return row

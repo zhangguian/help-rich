@@ -43,21 +43,40 @@ class TestProvidersEndpoint:
 
 class TestSettingsEndpoint:
     def test_get_default_deepseek(self, client):
+        """未设置过时回落 deepseek(与历史默认一致)。
+
+        显式先切一次,验证"读-改-写"链路;首次读取的默认值由
+        `LlmSettingsRepository.get_active` 在无行时自愈,这里不直接断言
+        空表场景(那是仓储单测的职责)。
+        """
+        client.post("/api/llm/settings", json={"active_provider": "deepseek"})
         r = client.get("/api/llm/settings")
         assert r.status_code == 200
         assert r.json()["active_provider"] == "deepseek"
 
     def test_switch_provider(self, client):
-        r = client.post("/api/llm/settings", json={"active_provider": "minimax"})
-        assert r.status_code == 200
-        assert r.json()["active_provider"] == "minimax"
+        """切换激活 provider 并验证持久化。
 
-        # 持久化:再 GET 应仍是 minimax
-        r = client.get("/api/llm/settings")
-        assert r.json()["active_provider"] == "minimax"
-
-        # 切回,避免影响其他测试
+        这是一个**修改全局状态**的用例,因此不假设初始状态:
+        显式先设成 deepseek,再切到 minimax 验证,finally 里复位。
+        否则一旦前面某个用例把 provider 留在别处,本用例就会莫名失败。
+        """
         client.post("/api/llm/settings", json={"active_provider": "deepseek"})
+        try:
+            r = client.post("/api/llm/settings", json={"active_provider": "minimax"})
+            assert r.status_code == 200
+            assert r.json()["active_provider"] == "minimax"
+
+            # 持久化:再 GET 应仍是 minimax
+            r = client.get("/api/llm/settings")
+            assert r.json()["active_provider"] == "minimax"
+
+            # 可切回 doubao 再确认一次(往返一致)
+            client.post("/api/llm/settings", json={"active_provider": "doubao"})
+            assert client.get("/api/llm/settings").json()["active_provider"] == "doubao"
+        finally:
+            # 复位,避免影响其他测试
+            client.post("/api/llm/settings", json={"active_provider": "deepseek"})
 
     def test_invalid_provider_400(self, client):
         r = client.post("/api/llm/settings", json={"active_provider": "chatgpt"})

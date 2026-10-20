@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services import screener_service
+from app.modules.screener import service as screener_service
 from app.services.scoring import event_score
 
 
@@ -63,10 +63,10 @@ async def test_run_daily_pick_calls_build_event_factor_first(_patch_screener_io)
     """screener 启动时必须先 build_event_factor_cache"""
     today = date.today()
     with patch(
-        "app.services.screener_service.build_event_factor_cache",
+        "app.modules.screener.service.build_event_factor_cache",
         new=AsyncMock(),
     ) as mock_build, patch(
-        "app.services.screener_service.get_event_factor_codes",
+        "app.modules.screener.service.get_event_factor_codes",
         new=AsyncMock(return_value=set()),
     ):
         await screener_service.run_daily_pick(target_date=today)
@@ -84,10 +84,10 @@ async def test_run_daily_pick_event_score_overrides_when_failure_falls_back(_pat
     today = date.today()
 
     with patch(
-        "app.services.screener_service.build_event_factor_cache",
+        "app.modules.screener.service.build_event_factor_cache",
         new=AsyncMock(side_effect=IfindUnavailable("mocked")),
     ), patch(
-        "app.services.screener_service.get_event_factor_codes",
+        "app.modules.screener.service.get_event_factor_codes",
         new=AsyncMock(return_value=set()),
     ):
         # 必须不抛 IfindUnavailable (被 try/except 吞掉)

@@ -323,6 +323,10 @@ amountYi: number;
   /** M2.5:涨停/跌停家数单列 */
   limitUp?: number;
   limitDown?: number;
+  /** 数据口径:sina_full=全市场统计 / sina_partial=首页采样(不可信) */
+  source?: string;
+  /** true 表示样本不完整(首页采样),前端必须显式提示,不得当作全市场 */
+  partial?: boolean;
 }
 
 /** M2.5 两市量能 N 日趋势(/api/market/amount-trend) */

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from app.core.config import (
     SCREENER_CHANGE_PCT_RANGE,
@@ -30,6 +31,9 @@ from app.core.config import (
     SCREENER_VOLUME_RATIO_BREAKPOINTS,
     SCREENER_VOLUME_RATIO_MAX,
 )
+
+if TYPE_CHECKING:  # 避免运行时循环导入
+    from app.modules.screener.scoring import ScoringWeights
 
 logger = logging.getLogger(__name__)
 
@@ -163,15 +167,40 @@ def apply_sector_cluster_bonus(breakdown: ScoreBreakdown, n_in_top: int) -> None
             breakdown.triggered_rules.append(f"同板块{n_in_top}只入榜(+{delta})")
 
 
-def score_stock(features: StockFeatures) -> ScoreBreakdown:
+def _rescale(raw: float, default_max: float, weight: float) -> float:
+    """把某因子的原始分按权重线性缩放。
+
+    原始分是「默认满分」下的 0..default_max;用户把该因子满分调到 weight 后,
+    分数应等比例缩放到 0..weight,保持相对强弱不变。
+    """
+    if default_max <= 0:
+        return 0.0
+    return min(raw / default_max, 1.0) * weight
+
+
+def score_stock(
+    features: StockFeatures, weights: "ScoringWeights | None" = None
+) -> ScoreBreakdown:
     """单只候选股评分主入口(纯函数)
 
-    Returns:ScoreBreakdown(total 是 0..SCREENER_MAX_SCORE)
+    weights: 可选的因子满分配置(阶段2)。None = 用 config 默认常量,
+    此时结果与历史版本逐位一致(向后兼容)。
+
+    Returns:ScoreBreakdown(total 是 0..weights.max_total)
     """
     mi_score, mi_chips = _score_main_inflow(features.main_net_inflow_yi)
     vr_score, vr_chips = _score_volume_ratio(features.volume_ratio)
     mo_score, mo_chips = _score_momentum(features.change_pct, features.consecutive_up_days)
     se_score, se_chips = _score_sector_strength(features.sector_inflow_rank)
+
+    if weights is not None:
+        from app.modules.screener.scoring import default_weights
+
+        d = default_weights()
+        mi_score = _rescale(mi_score, d.main_inflow, weights.get("main_inflow"))
+        vr_score = _rescale(vr_score, d.volume_ratio, weights.get("volume_ratio"))
+        mo_score = _rescale(mo_score, d.momentum, weights.get("momentum"))
+        se_score = _rescale(se_score, d.sector_strength, weights.get("sector_strength"))
 
     total = mi_score + vr_score + mo_score + se_score
     return ScoreBreakdown(
@@ -262,22 +291,32 @@ def build_reason(features: StockFeatures, bd: ScoreBreakdown | None = None) -> s
     return truncated[:97] + "..."
 
 
-def event_score(stock_code: str, event_stock_codes: set[str], event_keywords: set[str]) -> int:
+def event_score(
+    stock_code: str,
+    event_stock_codes: set[str],
+    event_keywords: set[str],
+    weights: "ScoringWeights | None" = None,
+) -> int:
     """事件命中分 (改动 A)
 
-    命中热门事件相关股: SCREENER_EVENT_FACTOR_WEIGHT (默认 15)
+    命中热门事件相关股: 默认 SCREENER_EVENT_FACTOR_WEIGHT(默认 15)
     未命中: 0
+    阶段2: 传入 weights 时按用户配置的事件因子满分给分。
 
     Args:
         stock_code: 当前候选股票代码(规整后)
         event_stock_codes: 当日热门事件相关股代码集合 (来自 event_factor_cache)
         event_keywords: 当日热门事件关键词 (保留参数, 未来扩展用)
+        weights: 可选权重配置;None 用默认常量
 
     Returns:
-        int: 0 或 SCREENER_EVENT_FACTOR_WEIGHT
+        int: 0 或该因子的满分
     """
     if not stock_code or not event_stock_codes:
         return 0
+    weight = SCREENER_EVENT_FACTOR_WEIGHT
+    if weights is not None:
+        weight = int(weights.get("event"))
     if stock_code.upper() in {c.upper() for c in event_stock_codes}:
-        return SCREENER_EVENT_FACTOR_WEIGHT
+        return weight
     return 0

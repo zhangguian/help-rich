@@ -4,7 +4,7 @@
 """
 from fastapi import APIRouter
 
-from app.services.position_service import get_all_positions
+from app.modules.portfolio.service import get_all_positions
 from app.services.rebalance_service import PositionLite, calculate_rebalance
 
 router = APIRouter(prefix="/rebalance-suggestion", tags=["rebalance"])

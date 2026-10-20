@@ -170,7 +170,11 @@ async def fetch_market_movers(direction: str = "up", num: int = 3) -> list[dict]
     """沪深 A 股涨幅排行(direction='up' 领涨 / 'down' 领跌,num 取前 N)
 
     接口:https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData
-    返回字段(关键):symbol, name, trade, pricechange, changeratio
+    返回字段(关键):symbol, name, trade, pricechange, changepercent
+
+    注:排序字段必须用 `changepercent`;旧的 `changeratio` 已不被该接口识别,
+    传错时接口退化为按代码排序、且返回的 changeratio 为空 → 排行永远为空
+    (实测于 2026-10-20,ADR-0011)。
     """
     if direction not in {"up", "down"}:
         raise ValueError(f"direction 应为 up/down,不是 {direction}")
@@ -181,7 +185,7 @@ async def fetch_market_movers(direction: str = "up", num: int = 3) -> list[dict]
     )
     params = {
         "node": "hs_a",
-        "sort": "changeratio",
+        "sort": "changepercent",
         "asc": asc,
         "num": num,
         "page": 1,

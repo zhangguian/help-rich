@@ -22,8 +22,8 @@ from app.models.orm import (
     ScreenerPick,
     ScreenerRun,
 )
-from app.repositories import screener_repo
-from app.services.screener_llm_prompt import _validate_picks
+from app.modules.screener import repository as screener_repo
+from app.modules.screener.llm_prompt import _validate_picks
 
 
 # ============================================================
@@ -324,7 +324,7 @@ def test_api_llm_pick_cached(client, monkeypatch):
     asyncio.run(_seed())
 
     # 把 trigger_llm_pick monkeypatch 成会失败以便验证没被调用
-    # 注意:endpoint 内部 `from app.services.screener_llm_prompt import trigger_llm_pick`
+    # 注意:endpoint 内部 `from app.modules.screener.llm_prompt import trigger_llm_pick`
     # 所以 patch 源模块才对
     calls = {"n": 0}
 
@@ -332,7 +332,7 @@ def test_api_llm_pick_cached(client, monkeypatch):
         calls["n"] += 1
         return {"status": "failed", "error": "should not be called"}
     monkeypatch.setattr(
-        "app.services.screener_llm_prompt.trigger_llm_pick", _fake_trigger
+        "app.modules.screener.llm_prompt.trigger_llm_pick", _fake_trigger
     )
 
     r = client.post("/api/screener/latest/llm-pick")

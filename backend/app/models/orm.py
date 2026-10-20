@@ -82,13 +82,16 @@ class CostSettings(Base):
 # ============================================================
 
 class Transaction(Base):
-    """交易流水表(P2.1 实施)
+    """交易流水表(P2.1 实施;阶段5 起支持多账户)
 
     v2.1 §4.1.1 / backend-arch §6.1
     """
     __tablename__ = "transactions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False, default=1
+    )
     stock_code: Mapped[str] = mapped_column(String, nullable=False)
     stock_name: Mapped[str | None] = mapped_column(String, nullable=True)
     action: Mapped[str] = mapped_column(String, nullable=False)  # 'buy' / 'sell'
@@ -109,10 +112,14 @@ class Transaction(Base):
     __table_args__ = (
         Index("idx_transactions_code", "stock_code"),
         Index("idx_transactions_date", "trade_date"),
+        Index("idx_transactions_account", "account_id"),
     )
 
     def __repr__(self) -> str:
-        return f"<Transaction {self.id} {self.action} {self.stock_code}@{self.price}>"
+        return (
+            f"<Transaction {self.id} acct={self.account_id} "
+            f"{self.action} {self.stock_code}@{self.price}>"
+        )
 
 
 class Watchlist(Base):
@@ -178,16 +185,23 @@ class TradeScore(Base):
 # ============================================================
 
 class Position(Base):
-    """持仓表(v0.4.0 主数据)
+    """持仓表(v0.4.0 主数据;阶段5 起支持多账户)
 
     股民真实持仓:手动录入 / 截图导入 / 流水同步维护。
     流水是事件记录(复盘用),持仓由 recalc_position 保证一致:
       持仓 = 导入基准(delta) + 全部流水聚合
+
+    阶段5 变更:新增 account_id。原本 `stock_code` 全局唯一,
+    改为 (account_id, stock_code) 组合唯一 —— 同一只票可同时持在两个账户。
+    存量数据由迁移 e5f60718293a 回填到 account_id=1(默认账户)。
     """
     __tablename__ = "positions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    stock_code: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    account_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False, default=1
+    )
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
     stock_name: Mapped[str | None] = mapped_column(String, nullable=True)
     shares: Mapped[int] = mapped_column(Integer, nullable=False)
     # 总成本(金额):Decimal 存为字符串(精度保护,与 Transaction.price 一致)
@@ -199,8 +213,41 @@ class Position(Base):
         DateTime, default=datetime.now, onupdate=datetime.now
     )
 
+    __table_args__ = (
+        UniqueConstraint("account_id", "stock_code", name="uq_position_account_code"),
+    )
+
     def __repr__(self) -> str:
-        return f"<Position {self.stock_code} {self.shares}股 @成本={self.total_cost}>"
+        return (
+            f"<Position acct={self.account_id} {self.stock_code} "
+            f"{self.shares}股 @成本={self.total_cost}>"
+        )
+
+
+class Account(Base):
+    """投资账户(阶段5)
+
+    用于区分「不同券商」「A股/港股账户」等场景。
+    存量持仓/流水在迁移时统一归属 id=1 的默认账户,用户无感知。
+    注意:与阶段3 的 `paper_account`(模拟盘)是**两套东西**,不要混用。
+    """
+    __tablename__ = "account"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False, default="默认账户")
+    # 账户类型:broker(券商)/ other
+    kind: Mapped[str] = mapped_column(String, nullable=False, default="broker")
+    broker: Mapped[str | None] = mapped_column(String, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 标记默认账户(不可删除);恒有且仅有一个
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    def __repr__(self) -> str:
+        return f"<Account {self.id} {self.name} kind={self.kind}>"
 
 
 # ============================================================
@@ -674,3 +721,273 @@ class ReflectionContextCache(Base):
 
     def __repr__(self) -> str:
         return f"<ReflectionContextCache {self.fetch_date} calls={self.ifind_calls}>"
+
+
+# ============================================================
+# === v0.2.1:K 线缓存表(D) ===
+# ============================================================
+
+class KlineCache(Base):
+    """日/周/月/分钟 K 线缓存(kline_service:DB 优先,miss 走真实接口后落库)
+
+    与迁移 a9b8c7d6e5f4_kline_cache_table 对齐:
+    - 价格列用 String 保留原始精度(与 ScreenerWatchlistDaily 一致,避免 float 丢精度)
+    - 唯一性由 (stock_code, period, trade_date) 索引保证;写入策略是
+      "先按 (stock_code, period) 整段删除再重插",因此不加 UNIQUE 约束
+    """
+    __tablename__ = "kline_cache"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    period: Mapped[str] = mapped_column(String, nullable=False, default="daily")
+    open_price: Mapped[str] = mapped_column(String, nullable=False)
+    high_price: Mapped[str] = mapped_column(String, nullable=False)
+    low_price: Mapped[str] = mapped_column(String, nullable=False)
+    close_price: Mapped[str] = mapped_column(String, nullable=False)
+    volume: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    source: Mapped[str | None] = mapped_column(String, nullable=True, default="sina")
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=datetime.now)
+
+    __table_args__ = (
+        Index("idx_kline_code_period_date", "stock_code", "period", "trade_date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<KlineCache {self.stock_code} {self.period} {self.trade_date}>"
+
+
+# ============================================================
+# === 阶段1:通知渠道配置 + 价格提醒 ===
+# ============================================================
+
+class NotifyChannelConfig(Base):
+    """推送渠道配置(每渠道一行)
+
+    - config_json 存加密后的凭据(webhook / device_key / url)
+      与 LLM API Key 同一套 Fernet 加密,不落明文
+    - console 渠道无需凭据,恒可用
+    """
+    __tablename__ = "notify_channel_config"
+
+    channel: Mapped[str] = mapped_column(String, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Fernet 密文(JSON 结构);None 表示未配置
+    config_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 渠道未加密的展示信息(如 webhook 域名、server 地址),便于前端辨认
+    config_hint: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_ok_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    def __repr__(self) -> str:
+        return f"<NotifyChannelConfig {self.channel} enabled={self.enabled}>"
+
+
+class PriceAlert(Base):
+    """价格提醒规则(AND/OR 组合条件)
+
+    conditions_json 结构::
+
+        {
+          "op": "and",
+          "conditions": [
+            {"metric": "price", "op": "<=", "value": 12.5},
+            {"metric": "volume_ratio", "op": ">", "value": 2.0}
+          ]
+        }
+
+    metric 取值:price / change_pct / volume_ratio / turnover
+    condition op 取值:> >= < <= == !=
+    顶层 op 取值:and / or(支持嵌套 groups)
+    """
+    __tablename__ = "price_alert"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False, default="")
+    conditions_json: Mapped[str] = mapped_column(Text, nullable=False)
+    # 冷却窗口(秒):同规则两次触发最小间隔,默认 30 分钟
+    cooldown_sec: Mapped[int] = mapped_column(Integer, nullable=False, default=1800)
+    # 每日触发上限,防止规则写太宽导致刷屏
+    daily_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    # 到期时间(UTC);NULL = 永不过期
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # 实际使用的推送渠道(JSON 数组);空表示跟随全局配置
+    channels_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    triggered_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_triggered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    __table_args__ = (
+        Index("idx_price_alert_code_enabled", "stock_code", "enabled"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<PriceAlert {self.stock_code} {self.name} enabled={self.enabled}>"
+
+
+class PriceAlertTrigger(Base):
+    """提醒触发流水(用于前端展示"为什么推了这条")。"""
+    __tablename__ = "price_alert_trigger"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    alert_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("price_alert.id", ondelete="CASCADE"), nullable=False
+    )
+    triggered_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # 触发时的行情快照(JSON),便于事后核对
+    snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 送达结果(JSON:每渠道 ok/detail)
+    results_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # matched / skipped(被去重) / failed
+    status: Mapped[str] = mapped_column(String, nullable=False, default="matched")
+
+    __table_args__ = (
+        Index("idx_alert_trigger_alert_time", "alert_id", "triggered_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<PriceAlertTrigger alert={self.alert_id} status={self.status}>"
+
+
+# ============================================================
+# === 阶段2:选股权重(把 config 常量外置为用户可调) ===
+# ============================================================
+
+class ScreenerWeight(Base):
+    """选股因子权重配置(每因子一行)
+
+    weight = 该因子的满分。缺行 = 回落 config 默认常量(向后兼容)。
+    enabled=False 表示该因子不参与加分,但保留 weight 值便于恢复。
+    """
+    __tablename__ = "screener_weight"
+
+    factor_name: Mapped[str] = mapped_column(String, primary_key=True)
+    weight: Mapped[float] = mapped_column(Float, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    def __repr__(self) -> str:
+        return f"<ScreenerWeight {self.factor_name}={self.weight} enabled={self.enabled}>"
+
+
+# ============================================================
+# === 阶段3:模拟盘 ===
+# ============================================================
+# 隔离原则:模拟盘**不复用** transactions / positions 表,所有表名以 paper_ 开头。
+# 原因:模拟盘会被调度器自动写流水,与真实持仓混表后极易误操作污染真实数据。
+# 代码层面同样禁止 paper_* service 导入真实 position/transaction repo(架构守卫覆盖)。
+
+
+class PaperAccount(Base):
+    """模拟盘账户(资金 + 绩效快照)。"""
+
+    __tablename__ = "paper_account"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False, default="默认模拟账户")
+    initial_capital: Mapped[str] = mapped_column(String, nullable=False)
+    # 当前可用现金
+    cash: Mapped[str] = mapped_column(String, nullable=False)
+    # 累计已实现盈亏(字符串存 Decimal)
+    realized_pnl: Mapped[str] = mapped_column(String, nullable=False, default="0")
+    # 累计交易费
+    total_fees: Mapped[str] = mapped_column(String, nullable=False, default="0")
+    # 是否启用自动跟单(由选股信号驱动)
+    auto_follow: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    def __repr__(self) -> str:
+        return f"<PaperAccount {self.id} {self.name} cash={self.cash}>"
+
+
+class PaperOrder(Base):
+    """模拟盘订单流水。origin: manual(手动) / signal(选股信号自动)"""
+
+    __tablename__ = "paper_order"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("paper_account.id", ondelete="CASCADE"), nullable=False
+    )
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
+    stock_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    action: Mapped[str] = mapped_column(String, nullable=False)  # buy / sell
+    shares: Mapped[int] = mapped_column(Integer, nullable=False)
+    price: Mapped[str] = mapped_column(String, nullable=False)
+    fee: Mapped[str] = mapped_column(String, nullable=False, default="0")
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    origin: Mapped[str] = mapped_column(String, nullable=False, default="manual")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index("idx_paper_order_account_date", "account_id", "trade_date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<PaperOrder {self.action} {self.stock_code} x{self.shares}>"
+
+
+class PaperPosition(Base):
+    """模拟盘持仓。avg_cost 含买入费用(与真实持仓口径一致)。"""
+
+    __tablename__ = "paper_position"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("paper_account.id", ondelete="CASCADE"), nullable=False
+    )
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
+    stock_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    shares: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 持仓均价(已摊入买入费用)
+    avg_cost: Mapped[str] = mapped_column(String, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    __table_args__ = (
+        Index("idx_paper_position_account_code", "account_id", "stock_code"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<PaperPosition {self.stock_code} x{self.shares} @{self.avg_cost}>"
+
+
+class PaperEquitySnapshot(Base):
+    """每日净值快照(用于净值曲线)。"""
+
+    __tablename__ = "paper_equity_snapshot"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("paper_account.id", ondelete="CASCADE"), nullable=False
+    )
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # 总资产 = 现金 + 持仓市值
+    total_equity: Mapped[str] = mapped_column(String, nullable=False)
+    cash: Mapped[str] = mapped_column(String, nullable=False)
+    market_value: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index("idx_paper_equity_account_date", "account_id", "snapshot_date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<PaperEquitySnapshot {self.snapshot_date} equity={self.total_equity}>"
