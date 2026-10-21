@@ -542,7 +542,14 @@ export interface PositionIndicator {
   riskBand?: 'high' | 'mid' | 'low';
   p20?: number | null;
   p80?: number | null;
-  /** 参考支撑 = 近20日最低收盘 × 0.98 */
+  /**
+   * 参考支撑 = **当前这根 K 线之前** 20 日最低收盘 × 0.98
+   *
+   * 为什么排除当前根:若把当前根也算进支撑窗口,支撑 ≤ 当前收盘 × 0.98,
+   * 止损位就 ≤ 当前收盘 × 0.9506,止损触发条件 `现价 < 止损位`
+   * 在收盘价口径下**永不可能成立**(实测 15900 个信号日命中 0 次)。
+   * 后端 `ta_service._position` 已按此口径实现(2026-10-21)。
+   */
   supportPrice?: number | null;
   /** 建议止损 = 参考支撑 × 0.97 */
   stopLossPrice?: number | null;
