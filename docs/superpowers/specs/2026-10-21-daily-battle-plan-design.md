@@ -312,6 +312,12 @@ def build_todos(decision: dict) -> list[dict]
 
 **`blocked` 转为「解锁条件」**，因为 `blocked` 的 basis 里明确写了缺什么（如「量能仅 0.9 倍，未达 1.5 倍确认标准」）——这就是明天的观察点。
 
+> **口径修正（2026-10-21 T3 评审发现）**：不是所有 blocked 动作的 basis 都能用 `basis[1:]` 推导缺失条件。
+> 真实反例：L4 补仓摊薄 blocked 时，basis 是两条**事实**（「持仓 600 股 @ 成本 15.58 元」「补 100 股后均价 9.87 元」），
+> 真正的缺失条件在 `reasons` 里（下跌通道 / 无企稳信号 / 大盘偏冷）。
+> 若照 `basis[1:]` 拼，解锁依据会变成「补 100 股后均价 9.87 元未满足则不解锁」——那不是条件，是事实，用户读到的是**假前提**。
+> 故决策层必须显式产出 `action["missing"]`（缺失条件列表），转换层优先读它，读不到才退回 `basis[1:]`。
+
 #### 4.4.3 失效条件 `invalid_if`（必须算出来，不能空着）
 
 | item_kind | direction | `invalid_if` 规则 | 示例 |
@@ -335,7 +341,7 @@ def build_todos(decision: dict) -> list[dict]
   "trigger_price": 9.62,
   "trigger_condition": "回踩 9.62 元不破且 MACD 绿柱缩短时,首仓建仓",
   "basis": ["企稳价 9.62 元(现价 9.920 +3.1%)", "stabilize.state=true"],
-  "invalid_if": "跌破 9.33 则本条作废(不接下跌中的刀)",
+  "invalid_if": "跌破 9.63 则本条作废(不接下跌中的刀)",
   "status_now": "armed",
   "source": "decision.actions",   # 溯源用
 }

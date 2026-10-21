@@ -942,6 +942,8 @@ git commit -m "feat(outlook): 明日市场预期四维度规则推断(纯函数�
 **Files:**
 - Create: `backend/app/services/plan_item_builder.py`
 - Test: `backend/tests/test_plan_item_builder.py`
+- Modify: `backend/app/services/decision_service.py`（blocked 动作补 `missing` 键 = 真正没满足的条件）
+- Test: `backend/tests/test_decision_service.py`（补 1 条：blocked 动作必须带 `missing`）
 
 **Interfaces:**
 - Consumes: `build_decision` 的输出 dict（结构见「跨任务锁定的接口契约」）
@@ -1023,10 +1025,27 @@ def test_now_action_goes_to_todos():
 
 
 def test_todos_and_items_never_overlap():
-    d = _decision([_action(status="now", price=1.0), _action(status="armed", price=2.0)])
-    item_prices = {i["trigger_price"] for i in build_items(d, None)}
-    todo_prices = {t["price"] for t in build_todos(d)}
-    assert not (item_prices & todo_prices)
+    """用**动作身份**(label + condition)判不重叠,不用价格。
+
+    为什么不用价格:同一个价位可能同时出现在「今日待办」与「明日预案」
+    (如止损动作 status=now 与 stop_loss 字段同价) —— 价格集合会误判成重叠,
+    这条测试就永远抓不到真正的动作级回归。
+    """
+    d = _decision([_action(status="now", price=1.0, label="分批止盈"),
+                   _action(status="armed", price=2.0, label="支撑企稳建仓")])
+    item_keys = {(i["label"], i["trigger_condition"]) for i in build_items(d, None)}
+    todo_keys = {(t["label"], t["condition"]) for t in build_todos(d)}
+    assert not (item_keys & todo_keys)
+
+
+def test_todos_and_items_never_overlap_even_with_same_price():
+    """同价位、不同动作 → 仍必须不重叠(价格集合法在这里会误判)"""
+    d = _decision([_action(status="now", price=9.62, label="分批止盈"),
+                   _action(status="armed", price=9.62, label="支撑企稳建仓")])
+    item_keys = {(i["label"], i["trigger_condition"]) for i in build_items(d, None)}
+    todo_keys = {(t["label"], t["condition"]) for t in build_todos(d)}
+    assert not (item_keys & todo_keys)
+    assert len(item_keys) == 1 and len(todo_keys) == 1
 
 
 def test_blocked_action_becomes_unlock_item():
@@ -1176,6 +1195,85 @@ def test_basis_preserved_verbatim():
     d = _decision([_action(status="armed", price=9.62, basis=basis)])
     items = build_items(d, None)
     assert items[0]["basis"] == basis
+
+
+def test_unlock_uses_explicit_missing_when_provided():
+    """决策层给了 missing → 解锁依据必须是**真正没满足的条件**,不是 basis 里的事实"""
+    a = _action(status="blocked", price=9.92, label="补仓摊薄",
+                basis=["持仓 600 股 @ 成本 15.58 元", "补 100 股后均价 9.87 元"])
+    a["missing"] = ["下跌通道(趋势未破条件不成立)", "尚无企稳信号"]
+    d = _decision([a])
+    it = build_items(d, None)[0]
+    assert it["item_kind"] == "unlock"
+    assert "下跌通道" in it["invalid_if"]
+    assert "尚无企稳信号" in it["invalid_if"]
+    assert "均价" not in it["invalid_if"]      # ← 事实不是条件
+
+
+def test_unlock_invalid_if_has_no_duplicate_suffix():
+    """缺失依据里已含「未达」就别再叠一句「未满足则不解锁」"""
+    a = _action(status="blocked", price=12.5,
+                basis=["压力位 12.50 元", "量能仅 0.90 倍,未达 1.50 倍确认标准"])
+    a["missing"] = ["量能仅 0.90 倍,未达 1.50 倍确认标准"]
+    it = build_items(_decision([a]), None)[0]
+    assert it["invalid_if"].count("未满足") == 0
+    assert it["invalid_if"].endswith("则不解锁")
+
+
+def test_stop_item_wording_reflects_already_triggered_stop():
+    """止损位今天已被击穿 → 明日预案不能写「跌破 X 元无条件减仓」(那是过期建议)"""
+    now_stop = _action(kind="stop", status="now", price=9.62, label="无条件止损")
+    d = _decision([now_stop], stop_loss={"price": 9.62, "basis": "参考支撑 9.92 元 × 0.97"})
+    items = build_items(d, _Pos(600, 15.578))
+    stop = next(i for i in items if i["item_kind"] == "stop")
+    assert "已跌破 9.62" in stop["trigger_condition"]
+    assert "跌破 9.62 元无条件减仓" not in stop["trigger_condition"]
+
+
+def test_stop_item_wording_normal_when_stop_not_yet_triggered():
+    """止损位未击穿 → 正常写「跌破 X 元无条件减仓」"""
+    d = _decision(stop_loss={"price": 9.62, "basis": "参考支撑 9.92 元 × 0.97"})
+    items = build_items(d, _Pos(600, 15.578))
+    stop = next(i for i in items if i["item_kind"] == "stop")
+    assert stop["trigger_condition"] == "跌破 9.62 元无条件减仓"
+
+
+def test_every_item_carries_source():
+    """溯源字段(spec §4.4.4):每条预案都要能说清来自决策引擎的哪一块"""
+    d = _decision([_action(status="armed", price=9.62)],
+                  stop_loss={"price": 9.62, "basis": "b"},
+                  t_plan={"suitable": True, "t_high": 10.5, "t_low": 9.2,
+                          "amplitude_pct": 12.0, "sell_trigger": "s", "buyback_trigger": "b",
+                          "base_position_pct": "≥50%", "unsuitable_signals": "",
+                          "needs_position": False},
+                  do_not=["下跌通道中不要抄底"])
+    items = build_items(d, _Pos(600, 15.578))
+    assert items, "至少要有一条"
+    assert all(i.get("source") for i in items)
+    by_kind = {i["item_kind"]: i["source"] for i in items}
+    assert by_kind["entry"] == "decision.actions"
+    assert by_kind["stop"] == "decision.stop_loss"
+    assert by_kind["t_sell"] == "decision.t_plan"
+
+
+def test_item_labels_use_mingri_wording():
+    """spec §4.4.5:预案项措辞统一用「明日」,避免与生成时点混淆"""
+    d = _decision([_action(status="armed", price=9.62)],
+                  stop_loss={"price": 9.62, "basis": "b"},
+                  t_plan={"suitable": True, "t_high": 10.5, "t_low": 9.2,
+                          "amplitude_pct": 12.0, "sell_trigger": "s", "buyback_trigger": "b",
+                          "base_position_pct": "≥50%", "unsuitable_signals": "",
+                          "needs_position": False},
+                  do_not=["下跌通道中不要抄底"])
+    items = build_items(d, _Pos(600, 15.578))
+    assert all(i["label"].startswith("明日") for i in items)
+
+
+def test_malformed_shares_raises_instead_of_silently_no_position():
+    """形状对但值畸形(如 'abc')→ 响亮失败,不能静默当成空仓(否则止损/做T整条消失)"""
+    d = _decision(stop_loss={"price": 9.62, "basis": "b"})
+    with pytest.raises(TypeError):
+        build_items(d, _Pos("abc", 15.578))
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -1235,7 +1333,7 @@ ENTRY_INVALID_FACTOR = 0.97   # 跌破 触发价×0.97 → 建仓预案作废
 EXIT_INVALID_FACTOR = 1.03    # 回落至 触发价×1.03 以上未达成 → 不追高
 
 
-def _f(v: Any) -> Optional[float]:
+def _f(v: Any) -> float | None:
     try:
         if v is None:
             return None
@@ -1267,13 +1365,19 @@ def _has_position(position) -> bool:
             "position 须为含 .shares 属性的对象(如 PositionView / Position),"
             f"收到 {type(position).__name__} —— 传 dict 会静默漏掉止损与做T子项"
         )
-    try:
-        return int(getattr(position, "shares", 0) or 0) > 0
-    except (TypeError, ValueError):
-        return False
+    shares = getattr(position, "shares", 0)
+    if not isinstance(shares, (int, float)):
+        # 形状对了但**值畸形**(如 'abc' / None):同样必须响亮失败。
+        # 静默当成「无持仓」会让止损与做T子项整条消失 —— 与 position_status 的契约一致
+        # (那里 `position.shares <= 0` 特意放在 try 之外,字符串会抛 TypeError)。
+        raise TypeError(
+            f"position.shares 须为数值(与 position_status 同契约),"
+            f"收到 {type(shares).__name__}: {shares!r}"
+        )
+    return float(shares) > 0
 
 
-def _invalid_if(item_kind: str, direction: str, price: Optional[float],
+def _invalid_if(item_kind: str, direction: str, price: float | None,
                 label: str) -> str:
     """算失效条件(不得为空,除非是恒成立的别动项)"""
     if item_kind == "do_not":
@@ -1295,11 +1399,12 @@ def _item(
     item_kind: str,
     direction: str,
     label: str,
-    trigger_price: Optional[float],
+    trigger_price: float | None,
     trigger_condition: str,
     basis: list[str],
     invalid_if: str,
     status_now: str,
+    source: str = "decision.actions",
 ) -> dict[str, Any]:
     return {
         "stock_code": stock_code,
@@ -1312,6 +1417,7 @@ def _item(
         "basis": basis,
         "invalid_if": invalid_if,
         "status_now": status_now,
+        "source": source,          # 溯源用(spec §4.4.4)
         "fulfillment": "pending",
         "fulfillment_note": "",
     }
@@ -1370,12 +1476,14 @@ def build_items(decision: dict, position) -> list[dict]:
         direction = KIND_DIRECTION.get(kind, "none")
         price = _f(a.get("price"))
         basis = list(a.get("basis") or [])
+        raw_label = a.get("label") or ""
         items.append(_item(
             code, name, kind, direction,
-            a.get("label") or "", price,
+            f"明日{raw_label}", price,
             a.get("condition") or "", basis,
-            _invalid_if(kind, direction, price, a.get("label") or ""),
+            _invalid_if(kind, direction, price, raw_label),
             "armed",
+            "decision.actions",
         ))
 
     # 2) blocked → 解锁条件(方向继承原动作)
@@ -1384,30 +1492,65 @@ def build_items(decision: dict, position) -> list[dict]:
         direction = KIND_DIRECTION.get(kind, "none")
         price = _f(a.get("price"))
         basis = list(a.get("basis") or [])
-        # 缺的依据 = 除首条(价位)外的其余依据;没有则用标签兜底
-        missing = basis[1:] if len(basis) > 1 else basis
-        unlock_txt = "、".join(missing) if missing else f"{a.get('label') or ''}的前置条件"
+        raw_label = a.get("label") or ""
+        # 缺的依据:优先用决策层显式给出的 `missing`(那是**真正没满足的条件**);
+        # 没有才退回「除首条(价位)外的其余依据」。
+        # 为什么必须有 missing:真实 blocked 动作(如 L4 补仓摊薄)的 basis 是两条**事实**
+        # (「持仓 600 股 @ 成本 15.58 元」「补 100 股后均价 9.87 元」),
+        # 把 basis[1:] 当缺失条件会写出「补 100 股后均价 9.87 元未满足则不解锁」——
+        # 那不是条件,是事实,用户读到的是假前提。
+        explicit = [str(x) for x in (a.get("missing") or []) if str(x)]
+        if explicit:
+            missing = explicit
+        else:
+            missing = basis[1:] if len(basis) > 1 else basis
+        unlock_txt = "、".join(missing) if missing else f"{raw_label}的前置条件"
+        # 文案去重复:缺失依据里已经写了「未达/未满足/未站回/尚未」就别再叠一句
+        if any(k in unlock_txt for k in ("未达", "未满足", "未站回", "尚未")):
+            invalid_txt = f"{unlock_txt}则不解锁"
+        else:
+            invalid_txt = f"{unlock_txt}未满足则不解锁"
         items.append(_item(
             code, name, "unlock", direction,
-            f"解锁后:{a.get('label') or ''}",
+            f"明日解锁后:{raw_label}",
             price,
             a.get("condition") or "", basis,
-            f"{unlock_txt}未满足则不解锁",
+            invalid_txt,
             "blocked",
+            "decision.actions",
         ))
 
     # 3) 止损(仅持仓票)
     stop = decision.get("stop_loss")
     if isinstance(stop, dict) and _has_position(position):
         price = _f(stop.get("price"))
+        # 止损位**已被击穿**时(决策层同时给了 status=="now" 的止损动作),
+        # 明日预案不能再写「跌破 X 元无条件减仓」—— 那个条件今天就已经成立,
+        # 写进明日预案就是一条过期建议。改成「仍在 X 下方则继续减仓」。
+        already = any(
+            str(a.get("kind") or "") == "stop"
+            and a.get("status") == "now"
+            and price is not None
+            and _f(a.get("price")) == price
+            for a in (decision.get("actions") or [])
+            if isinstance(a, dict)
+        )
+        if price is not None:
+            cond = (
+                f"已跌破 {price:.2f} 元,明日仍在该位置下方则继续无条件减仓"
+                if already else f"跌破 {price:.2f} 元无条件减仓"
+            )
+        else:
+            cond = "跌破止损位无条件减仓"
         items.append(_item(
-            code, name, "stop", "sell", "止损",
+            code, name, "stop", "sell", "明日止损",
             price,
-            f"跌破 {price:.2f} 元无条件减仓" if price is not None else "跌破止损位无条件减仓",
+            cond,
             [stop.get("basis") or ""],
             (f"收盘站回 {price:.2f} 元上方则明日不看止损" if price is not None
              else "止损位未知,明日不执行"),
             "armed",
+            "decision.stop_loss",
         ))
 
     # 4) 做T(仅持仓票;拆上沿/下沿两条)
@@ -1422,19 +1565,21 @@ def build_items(decision: dict, position) -> list[dict]:
             basis.append(f"底仓要求 {base}")
         if th is not None:
             items.append(_item(
-                code, name, "t_sell", "sell", "做T减仓",
-                th, t_plan.get("sell_trigger") or "", basis,
+                code, name, "t_sell", "sell", "明日做T减仓",
+                th, t_plan.get("sell_trigger") or "", list(basis),
                 (f"上沿 {th:.2f} 未触及则不做减仓;下沿 {tl:.2f} 未触及则不做回补"
                  if tl is not None else "上沿未触及则不做减仓"),
                 "armed",
+                "decision.t_plan",
             ))
         if tl is not None:
             items.append(_item(
-                code, name, "t_buyback", "buy", "做T回补",
-                tl, t_plan.get("buyback_trigger") or "", basis,
+                code, name, "t_buyback", "buy", "明日做T回补",
+                tl, t_plan.get("buyback_trigger") or "", list(basis),
                 (f"下沿 {tl:.2f} 未触及则不做回补;上沿 {th:.2f} 未触及则今日只减不接"
                  if th is not None else "下沿未触及则不做回补"),
                 "armed",
+                "decision.t_plan",
             ))
 
     # 5) 别动清单
@@ -1442,10 +1587,11 @@ def build_items(decision: dict, position) -> list[dict]:
         if not txt:
             continue
         items.append(_item(
-            code, name, "do_not", "none", "别动", None,
+            code, name, "do_not", "none", "明日别动", None,
             str(txt), [str(txt)],
             "该别动项恒成立,明日仍然有效",
             "armed",
+            "decision.do_not",
         ))
 
     return items
@@ -1453,6 +1599,50 @@ def build_items(decision: dict, position) -> list[dict]:
 
 __all__ = ["build_items", "build_todos"]
 ```
+
+- [ ] **Step 3b: 决策层显式产出「真正没满足的条件」(改既有文件)**
+
+`plan_item_builder` 的解锁依据优先读 `action["missing"]`（决策层给的缺失条件）。
+决策层必须真的产出这个键,否则转换层只能猜 `basis[1:]` —— 而真实 blocked 动作
+（L4 补仓摊薄）的 basis 是**两条事实**,不是缺失条件,猜出来的解锁依据是假前提。
+
+改 `backend/app/services/decision_service.py` 两处 blocked 动作:
+
+```python
+    # C3 突破确认(judge_entry 内)
+    else:
+        status = "blocked"
+        basis_extra = [f"量能仅 {vol_ratio:.2f} 倍,未达 {ENTRY_MIN_VOLUME_RATIO} 倍确认标准"]
+    actions.append(_guard({
+        "kind": "entry",
+        ...
+        "basis": [f"压力位 {pressure:.2f} 元"] + basis_extra,
+        "missing": basis_extra,          # ← 新增:真正没满足的条件
+        "status": status,
+    }))
+```
+
+```python
+    # L4 补仓摊薄(judge_loss_plan 内)
+    actions.append({
+        "kind": "add",
+        "label": "补仓摊薄",
+        ...
+        "basis": [
+            f"持仓 {shares} 股 @ 成本 {cost:.2f} 元",
+            f"补 {add_shares} 股后均价 {new_cost:.2f} 元",
+        ],
+        "missing": reasons,               # ← 新增:真正没满足的条件(下跌通道/无企稳/大盘偏冷)
+        "status": "now" if not reasons else "blocked",
+    })
+```
+
+- `missing` 是**加键**,不改任何既有键的值 → 既有消费方(前端 DecisionCard、api/stock.py)不受影响。
+- 只有 blocked 语义才需要它;`now` / `armed` 动作可以不带该键(转换层会忽略)。
+
+在 `backend/tests/test_decision_service.py` 补 1 条测试(L4 补仓摊薄 blocked 时):
+断言该动作带 `missing` 键,且 `missing` 内容是**条件**(如「下跌通道」「企稳」「大盘」)
+而不是 basis 里那种事实(「持仓 600 股」「均价」)。
 
 - [ ] **Step 4: 运行测试确认通过**
 
@@ -1464,7 +1654,7 @@ $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_plan_item_builder.py -q --no-header -p no:cacheprovider
 ```
 
-Expected: 全部 PASS（22 passed）。
+Expected: 全部 PASS（30 passed）。
 
 - [ ] **Step 5: 静态检查 + Commit**
 
@@ -1580,8 +1770,10 @@ def test_executed_when_sell_transaction_present():
 
 
 def test_transaction_for_other_stock_ignored():
+    # ⚠️ 脚手架数字必须是 low=9.5(<= 触发价 9.62 → 触及):写 9.7 会与
+    # test_buy_missed_when_low_above_trigger(同 9.70 → missed)构成同输入两期望的互斥断言
     out = check_fulfillment([_item(direction="buy", price=9.62)],
-                            {"001896.SZ": [_kline(low=9.7)]},
+                            {"001896.SZ": [_kline(low=9.5)]},
                             [_txn(code="000807.SZ", action="buy")])
     assert out[0]["fulfillment"] == "touched"
 
@@ -1669,6 +1861,13 @@ def test_transaction_without_price_still_counts_as_executed():
                             [{"stock_code": "001896.SZ", "action": "buy", "shares": 100,
                               "price": None, "trade_date": "2026-10-22"}])
     assert out[0]["fulfillment"] == "executed"
+
+
+def test_t_item_without_trigger_price_does_not_raise():
+    """T 子项没有触发价时不能炸:price×容差 会 TypeError,必须先判 price is None"""
+    items = [_item(kind="t_sell", direction="sell", price=None, label="做T减仓")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline()]}, [])
+    assert out[0]["fulfillment"] == "n_a"
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -1807,6 +2006,9 @@ def check_fulfillment(
         if kind in DISCIPLINE_KINDS:
             # 别动 / 未解锁类:买卖任一方向都算"动了手"(spec §4.5 第四步)
             executed = _has_txn(transactions, code, "buy") or _has_txn(transactions, code, "sell")
+        elif price is None:
+            # ⚠️ 必须先判无触发价:T 子项下面要算 `price × 容差`,price 为 None 会抛 TypeError
+            executed = False
         elif kind == "t_sell":
             executed = _executed_at_price(
                 transactions, code, "sell", price * T_SELL_TOLERANCE, at_least=True
@@ -1905,7 +2107,7 @@ $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_fulfillment_checker.py -q --no-header -p no:cacheprovider
 ```
 
-Expected: 全部 PASS（19 passed）。
+Expected: 全部 PASS（20 passed）。
 
 - [ ] **Step 5: 静态检查 + Commit**
 
@@ -2079,6 +2281,7 @@ class BattlePlanItem(Base):
     basis_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     invalid_if: Mapped[str | None] = mapped_column(Text, nullable=True)
     status_now: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str | None] = mapped_column(String, nullable=True)  # 溯源用(spec §4.4.4)
     fulfillment: Mapped[str] = mapped_column(
         String, default="pending", nullable=False
     )  # pending/touched/executed/missed/n_a
@@ -2132,6 +2335,7 @@ def upgrade() -> None:
             sa.Column("basis_json", sa.Text, nullable=True),
             sa.Column("invalid_if", sa.Text, nullable=True),
             sa.Column("status_now", sa.String, nullable=False),
+            sa.Column("source", sa.String, nullable=True),
             sa.Column("fulfillment", sa.String, nullable=False, server_default="pending"),
             sa.Column("fulfillment_note", sa.Text, nullable=True),
         )
@@ -2195,6 +2399,7 @@ def _row_to_item(r: BattlePlanItem) -> dict[str, Any]:
         "basis": _loads(r.basis_json) or [],
         "invalid_if": r.invalid_if or "",
         "status_now": r.status_now,
+        "source": r.source or "",
         "fulfillment": r.fulfillment or "pending",
         "fulfillment_note": r.fulfillment_note or "",
     }
@@ -2258,6 +2463,7 @@ class BattlePlanRepo:
                     basis_json=_dumps(it.get("basis") or []),
                     invalid_if=it.get("invalid_if") or "",
                     status_now=str(it.get("status_now") or "armed"),
+                    source=it.get("source") or None,
                     fulfillment=str(it.get("fulfillment") or "pending"),
                     fulfillment_note=it.get("fulfillment_note") or "",
                 )
@@ -2398,7 +2604,13 @@ async def test_resolve_scope_merges_positions_and_favorites(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resolve_scope_truncates_and_flags(monkeypatch):
+async def test_resolve_scope_merges_without_truncating(monkeypatch):
+    """resolve_target_stocks 只做**合并去重**,不做上限截断。
+
+    为什么:截断与「是否真的截断」这个标志必须由同一处产出。
+    若这里先切一刀,build_plan 里再切一次就永远切不动(len 恰好 == MAX_SCOPE),
+    meta["truncated"] 恒为 False —— 等于向用户谎称「一只票都没砍掉」。
+    """
     async def _pos():
         return [_stock(f"00000{i}.SZ", f"票{i}", 10.0, 100, 9.0) for i in range(25)]
     async def _fav():
@@ -2406,9 +2618,10 @@ async def test_resolve_scope_truncates_and_flags(monkeypatch):
     monkeypatch.setattr(svc, "_load_positions", _pos)
     monkeypatch.setattr(svc, "_load_favorites", _fav)
     scope = await svc.resolve_target_stocks()
-    assert len(scope) == svc.MAX_SCOPE
+    assert len(scope) == 25
     # 截断标志必须精确:只有真的砍掉了票才为 True
-    _full, truncated = svc._truncate_scope([_stock(f"00000{i}.SZ") for i in range(25)])
+    cut, truncated = svc._truncate_scope(scope)
+    assert len(cut) == svc.MAX_SCOPE
     assert truncated is True
     _exact, not_truncated = svc._truncate_scope(
         [_stock(f"00000{i}.SZ") for i in range(svc.MAX_SCOPE)]
@@ -2432,7 +2645,10 @@ async def test_build_plan_degrades_when_one_stock_fails(monkeypatch):
                  "close": 9.9, "volume": 100}]
     monkeypatch.setattr(svc, "fetch_klines", _one)
 
-    async def _ind(klines):
+    def _ind(klines):
+        """⚠️ `compute_indicators` 是**同步**函数(ta_service.py: `def compute_indicators`),
+        这里必须用同步 mock —— 写成 async 会让 indicators 变成协程对象,
+        build_decision 访问 ctx.indicators.xxx 时炸 AttributeError。"""
         return {"latest_close": 9.9, "ma": {"ma5": 9.8, "ma10": 9.5},
                 "position": {"p20": 8.5, "p80": 11.0, "stop_loss_price": 8.26,
                              "support_price": 8.5, "risk_band": "mid"},
@@ -2481,7 +2697,10 @@ async def test_build_plan_returns_three_sections(monkeypatch):
         return [{"date": "2026-10-21", "open": 9.0, "high": 10.0, "low": 8.8,
                  "close": 9.9, "volume": 100}]
     monkeypatch.setattr(svc, "fetch_klines", _k)
-    async def _ind(klines):
+    def _ind(klines):
+        """⚠️ `compute_indicators` 是**同步**函数(ta_service.py: `def compute_indicators`),
+        这里必须用同步 mock —— 写成 async 会让 indicators 变成协程对象,
+        build_decision 访问 ctx.indicators.xxx 时炸 AttributeError。"""
         return {"latest_close": 9.9, "ma": {"ma5": 9.8, "ma10": 9.5},
                 "position": {"p20": 8.5, "p80": 11.0, "stop_loss_price": 8.26,
                              "support_price": 8.5, "risk_band": "mid"},
@@ -2535,7 +2754,10 @@ async def test_build_plan_puts_now_actions_into_review_pending_todos(monkeypatch
                  "close": 9.9, "volume": 100}]
     monkeypatch.setattr(svc, "fetch_klines", _k)
 
-    async def _ind(klines):
+    def _ind(klines):
+        """⚠️ `compute_indicators` 是**同步**函数(ta_service.py: `def compute_indicators`),
+        这里必须用同步 mock —— 写成 async 会让 indicators 变成协程对象,
+        build_decision 访问 ctx.indicators.xxx 时炸 AttributeError。"""
         return {"latest_close": 9.9, "ma": {"ma5": 9.8, "ma10": 9.5},
                 "position": {"p20": 8.5, "p80": 11.0, "stop_loss_price": 9.95,
                              "support_price": 8.5, "risk_band": "mid"},
@@ -2571,6 +2793,102 @@ async def test_build_plan_puts_now_actions_into_review_pending_todos(monkeypatch
     assert todos[0]["label"]
     # now 动作不得出现在明日预案里
     assert all(i["status_now"] != "now" for i in plan["items"])
+
+
+@pytest.mark.asyncio
+async def test_build_plan_meta_truncated_flag_is_true_when_scope_exceeds_max(monkeypatch):
+    """端到端:股票池超上限时 meta["truncated"] 必须为 True —— 不许谎称没砍票"""
+    async def _pos():
+        return [_stock(f"00000{i}.SZ", f"票{i}", 10.0, 100, 9.0) for i in range(25)]
+    async def _fav():
+        return []
+    monkeypatch.setattr(svc, "_load_positions", _pos)
+    monkeypatch.setattr(svc, "_load_favorites", _fav)
+
+    async def _k(code, *a, **kw):
+        return [{"date": "2026-10-21", "open": 9.0, "high": 10.0, "low": 8.8,
+                 "close": 9.9, "volume": 100}]
+    monkeypatch.setattr(svc, "fetch_klines", _k)
+
+    def _ind(klines):
+        return {"latest_close": 9.9, "ma": {"ma5": 9.8, "ma10": 9.5},
+                "position": {"p20": 8.5, "p80": 11.0, "stop_loss_price": 8.26,
+                             "support_price": 8.5, "risk_band": "mid"},
+                "volume": {"ratio": 1.0}, "kdj": {"zone": "neutral", "cross": None},
+                "channel": {"state": "flat"}, "support_pressure": {"pressure": [11.0]},
+                "stabilize": {"state": False, "price": None}, "signal": {"score": 50}}
+    monkeypatch.setattr(svc, "compute_indicators", _ind)
+
+    async def _quote(codes):
+        return []
+    monkeypatch.setattr(svc, "_load_quotes", _quote)
+    async def _ctx(code, *a, **kw):
+        from app.services.decision_service import MarketContext
+        return MarketContext(degraded=[])
+    monkeypatch.setattr(svc, "get_market_context", _ctx)
+    async def _sent():
+        return {"up_total": 50, "down_total": 50}
+    monkeypatch.setattr(svc, "fetch_market_sentiment", _sent)
+    async def _flows(*a, **kw):
+        return [{"name": "电子", "netamount_yi": 1.0}]
+    monkeypatch.setattr(svc, "get_sector_fund_flow", _flows)
+    async def _txns(*a, **kw):
+        return []
+    monkeypatch.setattr(svc, "_load_transactions", _txns)
+    async def _save(*a, **kw):
+        return 1
+    monkeypatch.setattr(svc, "_persist", _save)
+
+    plan = await svc.build_plan(date(2026, 10, 21))
+    assert plan["meta"]["truncated"] is True
+    assert plan["meta"]["scope_count"] == svc.MAX_SCOPE
+
+
+@pytest.mark.asyncio
+async def test_fulfillment_uses_only_target_day_kline(monkeypatch):
+    """兑现比对只能用**目标日那一根** K 线。
+
+    check_fulfillment 会把传入 K 线的 high/low 合成为当日极值 ——
+    一次给 5 根等于把「5 天极值」当成「单日极值」→ 昨天没到位的价位
+    会被说成目标日触及了。这里造一根「前一天击穿、目标日没击穿」的 K 线锁死该行为。
+    """
+    prev_plan = {
+        "id": 1, "plan_date": "2026-10-21",
+        "outlook": None, "review": None,
+        "meta": {"target_date": "2026-10-22"},
+    }
+    prev_items = [{
+        "id": 1, "stock_code": "001896.SZ", "item_kind": "entry", "direction": "buy",
+        "trigger_price": 9.62, "status_now": "armed", "label": "建仓",
+    }]
+
+    class _Repo:
+        async def get_plan(self, plan_date):
+            return prev_plan if plan_date == "2026-10-21" else None
+
+        async def get_items(self, plan_id):
+            return prev_items
+
+        async def update_item_fulfillment(self, item_id, fulfillment, note=""):
+            return None
+
+    monkeypatch.setattr(svc, "battle_plan_repo", _Repo())
+
+    async def _k(code, *a, **kw):
+        return [
+            {"date": "2026-10-21", "open": 9.0, "high": 10.0, "low": 8.80,
+             "close": 9.9, "volume": 100},
+            {"date": "2026-10-22", "open": 9.0, "high": 9.90, "low": 9.70,
+             "close": 9.8, "volume": 100},
+        ]
+    monkeypatch.setattr(svc, "fetch_klines", _k)
+
+    async def _txns(*a, **kw):
+        return []
+    monkeypatch.setattr(svc, "_load_transactions", _txns)
+
+    review = await svc._build_review("2026-10-21", "2026-10-22", [])
+    assert review["fulfillment"]["items"][0]["fulfillment"] == "missed"
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -2599,12 +2917,11 @@ Expected: FAIL —— `ModuleNotFoundError: No module named 'app.services.battle
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 from app.repositories.battle_plan_repo import battle_plan_repo
 from app.services.fulfillment_checker import check_fulfillment, summarize_fulfillment
@@ -2689,11 +3006,20 @@ async def _load_transactions(plan_date: str) -> list[dict[str, Any]]:
         iso = trade_date.isoformat() if hasattr(trade_date, "isoformat") else str(trade_date)[:10]
         if iso != plan_date:
             continue
+        # Transaction.price 是 String 列,可能是非数字字符串 —— 必须 try/except,
+        # 否则一个脏价格会让整份日报生成失败(而不是只丢这一条流水的价格)
+        price: float | None = None
+        raw_price = getattr(r, "price", None)
+        if raw_price is not None:
+            try:
+                price = float(raw_price)
+            except (TypeError, ValueError):
+                price = None
         out.append({
             "stock_code": getattr(r, "stock_code", ""),
             "action": getattr(r, "action", ""),
             "shares": int(getattr(r, "shares", 0) or 0),
-            "price": float(getattr(r, "price", 0) or 0) if getattr(r, "price", None) is not None else None,
+            "price": price,
             "trade_date": iso,
         })
     return out
@@ -2730,8 +3056,11 @@ async def resolve_target_stocks() -> list[dict[str, Any]]:
             }
     scope = list(merged.values())
     scope.sort(key=lambda s: (not s["in_position"], s["stock_code"]))
-    truncated_scope, _ = _truncate_scope(scope)
-    return truncated_scope
+    # ⚠️ 这里**不做上限截断** —— 截断与「是否真的截断」这个标志必须由同一处产出。
+    # 若这里先切一刀,build_plan 再切一次就永远切不动(len 恰好 == MAX_SCOPE),
+    # meta["truncated"] 会恒为 False —— 等于向用户谎称「一只票都没砍掉」。
+    # 上限截断只在 build_plan 里做一次(见 `_truncate_scope`)。
+    return scope
 
 
 def _truncate_scope(scope: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
@@ -2843,14 +3172,31 @@ def _next_trading_day(index_klines: list[dict], plan_date: date) -> tuple[str, b
 # ============================ 主入口 ============================
 
 async def _persist(plan: dict[str, Any]) -> int:
-    """落库(可被测试替换)"""
+    """落库(可被测试替换)
+
+    **幂等覆盖的例外**(spec §4.6.3):D 日报的 items 若已有非 pending 的 fulfillment,
+    说明那批兑现状态已被判定过(生成 D+1 日报时回填的)。重新生成 D 日报时
+    **保留原 items 不动**,只更新 outlook / review / meta —— 否则会把已判定的
+    兑现状态冲回 pending,把复盘历史抹掉。
+    """
+    plan_date = plan["plan_date"]
+    meta = plan.setdefault("meta", {})
+
+    judged = False
+    row = await battle_plan_repo.get_plan(plan_date)
+    if row:
+        existing = await battle_plan_repo.get_items(row["id"])
+        judged = any((i.get("fulfillment") or "pending") != "pending" for i in existing)
+    meta["items_preserved"] = judged
+
     plan_id = await battle_plan_repo.upsert_plan(
-        plan_date=plan["plan_date"],
+        plan_date=plan_date,
         outlook_json=json.dumps(plan.get("outlook"), ensure_ascii=False),
         review_json=json.dumps(plan.get("review"), ensure_ascii=False),
-        meta_json=json.dumps(plan.get("meta"), ensure_ascii=False),
+        meta_json=json.dumps(meta, ensure_ascii=False),
     )
-    await battle_plan_repo.replace_items(plan_id, plan["plan_date"], plan.get("items") or [])
+    if not judged:
+        await battle_plan_repo.replace_items(plan_id, plan_date, plan.get("items") or [])
     return plan_id
 
 
@@ -2954,18 +3300,27 @@ async def _build_review(
         }
     prev_items = await battle_plan_repo.get_items(prev["id"])
 
-    # 目标日 = 昨日预案所面向的那一天 = plan_date
+    # 目标日 = 昨日预案所面向的那一天 = 昨日日报的 meta.target_date(缺失时退回 plan_date)
+    prev_meta = prev.get("meta") or {}
+    target_day = str(prev_meta.get("target_date") or plan_date)
     codes = {i["stock_code"] for i in prev_items}
     target_klines: dict[str, list[dict]] = {}
     for code in codes:
         try:
             ks = await fetch_klines(code, period="daily", count=5)
-            target_klines[code] = ks
+            # ⚠️ **只取目标日那一根**:`check_fulfillment` 会把传入 K 线的 high/low 合成为当日极值,
+            # 一次给 5 根等于把「5 天极值」当成「单日极值」→ 「当日触及」被夸大,
+            # 昨天没到位的价位会被说成昨天触及了。宁可少数据,不可假触及。
+            day_ks = [
+                k for k in (ks or [])
+                if str((k or {}).get("date") or "")[:10] == target_day
+            ]
+            target_klines[code] = day_ks
         except Exception as e:  # noqa: BLE001
             degraded.append(f"{code} 兑现比对取K线失败: {e}")
             target_klines[code] = []
 
-    transactions = await _load_transactions(plan_date)
+    transactions = await _load_transactions(target_day)
     checked = check_fulfillment(prev_items, target_klines, transactions)
     summary = summarize_fulfillment(checked)
 
@@ -3022,7 +3377,7 @@ $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_battle_plan_service.py -q --no-header -p no:cacheprovider
 ```
 
-Expected: 全部 PASS（4 passed）。
+Expected: 全部 PASS（7 passed）。
 
 - [ ] **Step 5: 静态检查 + Commit**
 
