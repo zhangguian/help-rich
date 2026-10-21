@@ -56,9 +56,20 @@ def _has_position(position) -> bool:
     不用 dict —— 后者的契约已写进 docstring 并通过 Task 1 复审,
     改它要动既有代码(且 `api/diagnose.py` 在用);而本模块是新代码,改它零成本。
     接线层(Task 6)造一个 PositionView 同时传给两者。
+
+    **传 dict 抛 TypeError(不静默降级)**:dict 没有 `.shares` 属性,
+    会被读成 0 股 → 持仓票的「止损」与两条「做T」子项被**静默漏掉** →
+    用户拿到的计划里根本没有止损,复盘时却显示「按计划执行」。
+    这种漏项比报错更难发现,所以这里选择**响亮地失败**
+    (与 `position_status.resolve_position_status` 的契约处理一致)。
     """
     if position is None:
         return False
+    if not hasattr(position, "shares"):
+        raise TypeError(
+            "position 须为含 .shares 属性的对象(如 PositionView / Position),"
+            f"收到 {type(position).__name__} —— 传 dict 会静默漏掉止损与做T子项"
+        )
     try:
         return int(getattr(position, "shares", 0) or 0) > 0
     except (TypeError, ValueError):

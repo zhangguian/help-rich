@@ -1,6 +1,8 @@
 """决策 → 明日预案转换(纯函数、零 IO)设计文档 §4.4"""
 from __future__ import annotations
 
+import pytest
+
 from app.services.plan_item_builder import build_items, build_todos
 
 
@@ -154,6 +156,19 @@ def test_t_plan_skipped_when_no_position():
     })
     items = build_items(d, None)
     assert [i for i in items if i["item_kind"].startswith("t_")] == []
+
+
+def test_dict_position_raises_instead_of_silently_skipping_position_items():
+    """传 dict 必须**响亮失败**:静默当空仓会让持仓票的止损/做T子项整条消失"""
+    d = _decision(stop_loss={"price": 9.62, "basis": "参考支撑 9.92 元 × 0.97"})
+    with pytest.raises(TypeError):
+        build_items(d, {"shares": 600, "avg_cost": 15.578})
+
+
+def test_none_position_is_not_an_error():
+    """position=None 是合法输入(该票没持仓) —— 不能抛异常"""
+    d = _decision([_action(status="armed", price=9.62)])
+    assert build_items(d, None) != []
 
 
 def test_do_not_items():
