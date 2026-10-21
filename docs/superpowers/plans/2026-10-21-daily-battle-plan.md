@@ -3505,9 +3505,9 @@ Expected: FAIL —— `ModuleNotFoundError: No module named 'app.api.battle_plan
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.services.battle_plan_service import (
@@ -3526,11 +3526,17 @@ class GenerateRequest(BaseModel):
 
 
 @router.get("")
-async def read_plan(date: str | None = None) -> dict:
-    """取指定日期的作战日报;该日未生成 → 404(不返回空壳)"""
-    if date:
+async def read_plan(plan_date: str | None = Query(default=None, alias="date")) -> dict:
+    """取指定日期的作战日报;该日未生成 → 404(不返回空壳)
+
+    ⚠️ 形参**不能叫 `date`** —— 它会遮蔽 `from datetime import date` 这个类,
+    函数体内的 `date.fromisoformat(...)` 会变成在 str 上找方法 → AttributeError → 500,
+    422 的「日期格式」分支永远走不到。这里用 `plan_date` + `Query(alias="date")`:
+    对外查询参数仍是 `?date=YYYY-MM-DD`。
+    """
+    if plan_date:
         try:
-            target = date.fromisoformat(date)
+            target = date.fromisoformat(plan_date)
         except ValueError:
             raise HTTPException(status_code=422, detail="日期格式应为 YYYY-MM-DD") from None
     else:
@@ -3652,6 +3658,8 @@ export interface BattlePlanItem {
   basis: string[];
   invalidIf: string;
   statusNow: 'now' | 'armed' | 'blocked';
+  /** 溯源:decision.actions / decision.stop_loss / decision.t_plan / decision.do_not */
+  source: string;
   fulfillment: 'pending' | 'touched' | 'executed' | 'missed' | 'n_a';
   fulfillmentNote: string;
 }
@@ -3687,7 +3695,8 @@ export interface BattlePlanFulfillment {
 export interface BattlePlanReview {
   market: unknown;
   fulfillment: BattlePlanFulfillment | null;
-  pendingTodos: BattlePlanTodo[];
+  /** 今日待办(now 动作)—— 早于该字段落库的日报可能没有它,故可选 */
+  pendingTodos?: BattlePlanTodo[];
   note: string | null;
 }
 
@@ -3705,6 +3714,8 @@ export interface BattlePlanMeta {
   generatedAt: string;
   targetDate: string | null;
   targetDateEstimated: boolean;
+  /** 重新生成时保留了原有 items(已有兑现判定)—— 见 spec §4.6.3 */
+  itemsPreserved?: boolean;
 }
 
 export interface BattlePlan {
@@ -3747,8 +3758,11 @@ export async function generateBattlePlan(date?: string): Promise<BattlePlan> {
 }
 
 export async function fetchBattlePlanScope(): Promise<
-  Array<{ stock_code: string; stock_name: string | null; in_position: boolean; is_favorite: boolean }>
+  Array<{ stockCode: string; stockName: string | null; inPosition: boolean; isFavorite: boolean }>
 > {
+  // ⚠️ 响应经 axios 拦截器做过 snake→camel(见 lib/api.ts),
+  // 所以运行时拿到的是 stockCode / stockName / inPosition / isFavorite —— 类型必须按驼峰写,
+  // 写成 snake_case 的话 TS 不报错(泛型是断言),但页面读出来全是 undefined。
   return apiGet('/battle-plan/scope');
 }
 ```
@@ -3989,7 +4003,7 @@ export function PlanItemList({
             {list.map((it, idx) => (
               <div key={`${code}-${idx}`} className="rounded border border-border-def p-2.5">
                 <div className="flex items-center gap-2 text-xs">
-                  <span className="rounded bg-line px-1.5 py-0.5 text-[10px] text-text-sec">
+                  <span className="rounded bg-bg-subtle px-1.5 py-0.5 text-[10px] text-text-sec">
                     {KIND_LABEL[it.itemKind] ?? it.itemKind}
                   </span>
                   <span className={`font-semibold ${dirClass(it.direction)}`}>{it.label}</span>
@@ -4047,9 +4061,10 @@ import { Card } from '@/components/ui/Card';
 import type { BattlePlanReview } from '@/lib/types';
 
 const LEVEL_STYLE: Record<string, string> = {
-  ok: 'text-up',
-  warn: 'text-warn',
-  danger: 'text-warn',
+  // 「按计划执行」不是行情方向 → 用中性正文色(红=买/涨、绿=卖/跌,都不能用来表示"做得好")
+  ok: 'text-text-pri',
+  warn: 'text-warn',      // 琥珀只给预警:执行缺口
+  danger: 'text-danger',  // 语义错误色:纪律问题
   flat: 'text-text-sec',
 };
 
@@ -4066,6 +4081,7 @@ export function ReviewCard({ review }: { review: BattlePlanReview | null }) {
   }
 
   const f = review.fulfillment;
+  const todos = review.pendingTodos ?? [];
   return (
     <Card>
       <h3 className="text-sm font-semibold">今日复盘</h3>
@@ -4074,7 +4090,7 @@ export function ReviewCard({ review }: { review: BattlePlanReview | null }) {
         昨日预案 {f.total} 条
       </div>
       <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs">
-        <span className="text-up">执行 {f.executed}</span>
+        <span className="text-text-pri">执行 {f.executed}</span>
         <span className="text-warn">触及未做 {f.touched}</span>
         <span className="text-text-sec">未触发 {f.missed}</span>
       </div>
@@ -4082,11 +4098,11 @@ export function ReviewCard({ review }: { review: BattlePlanReview | null }) {
         {f.verdictLabel}
       </div>
 
-      {review.pendingTodos.length > 0 && (
+      {todos.length > 0 && (
         <div className="mt-3 border-t border-border-def pt-2">
           <div className="text-[11px] text-text-ter">今日待办（条件已满足但未处理）</div>
           <ul className="mt-1 space-y-1">
-            {review.pendingTodos.map((t, i) => (
+            {todos.map((t, i) => (
               <li key={i} className="text-xs text-text-pri">
                 <span className="font-semibold">{t.stockName ?? t.stockCode}</span>
                 {' · '}
@@ -4113,10 +4129,15 @@ export function ReviewCard({ review }: { review: BattlePlanReview | null }) {
 import { useCallback, useEffect, useState } from 'react';
 
 import { Card } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
 import { PlanItemList } from '@/components/plan/PlanItemList';
 import { OutlookCard } from '@/components/plan/OutlookCard';
 import { ReviewCard } from '@/components/plan/ReviewCard';
-import { fetchBattlePlan, generateBattlePlan } from '@/lib/api/advanced';
+import {
+  fetchBattlePlan,
+  fetchBattlePlanScope,
+  generateBattlePlan,
+} from '@/lib/api/advanced';
 import type { BattlePlan } from '@/lib/types';
 
 type State =
@@ -4126,8 +4147,29 @@ type State =
   | { kind: 'error'; message: string }
   | { kind: 'generating' };
 
+type ScopeRow = {
+  stockCode: string;
+  stockName: string | null;
+  inPosition: boolean;
+  isFavorite: boolean;
+};
+
+/** 后端 detail 才是人话;axios 的 e.message 只是 "Request failed with status code 404" */
+function messageOf(e: unknown): string {
+  const anyE = e as { response?: { data?: { detail?: unknown } } } | null;
+  const d = anyE?.response?.data?.detail;
+  if (typeof d === 'string' && d) return d;
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** 用 HTTP status 判定 404,不靠字符串匹配 */
+function statusOf(e: unknown): number | undefined {
+  return (e as { response?: { status?: number } } | null)?.response?.status;
+}
+
 export function PlanPanel() {
   const [state, setState] = useState<State>({ kind: 'loading' });
+  const [scope, setScope] = useState<ScopeRow[]>([]);
 
   const load = useCallback(async () => {
     setState({ kind: 'loading' });
@@ -4135,11 +4177,16 @@ export function PlanPanel() {
       const plan = await fetchBattlePlan();
       setState({ kind: 'ready', plan });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes('404') || msg.includes('尚未生成')) {
+      if (statusOf(e) === 404) {
         setState({ kind: 'empty', message: '今天的作战计划还没生成' });
+        // 空态也要有实质内容:顺手把目标股票池拉出来(顺便用上 /scope 端点)
+        try {
+          setScope(await fetchBattlePlanScope());
+        } catch {
+          setScope([]);
+        }
       } else {
-        setState({ kind: 'error', message: msg });
+        setState({ kind: 'error', message: messageOf(e) });
       }
     }
   }, []);
@@ -4154,10 +4201,7 @@ export function PlanPanel() {
       const plan = await generateBattlePlan();
       setState({ kind: 'ready', plan });
     } catch (e) {
-      setState({
-        kind: 'error',
-        message: e instanceof Error ? e.message : String(e),
-      });
+      setState({ kind: 'error', message: messageOf(e) });
     }
   }, []);
 
@@ -4165,9 +4209,9 @@ export function PlanPanel() {
     return (
       <div className="space-y-3">
         <Card>
-          <div className="h-4 w-40 animate-pulse rounded bg-line" />
-          <div className="mt-3 h-3 w-full animate-pulse rounded bg-line" />
-          <div className="mt-2 h-3 w-3/4 animate-pulse rounded bg-line" />
+          <div className="h-4 w-40 animate-pulse rounded bg-bg-subtle" />
+          <div className="mt-3 h-3 w-full animate-pulse rounded bg-bg-subtle" />
+          <div className="mt-2 h-3 w-3/4 animate-pulse rounded bg-bg-subtle" />
         </Card>
       </div>
     );
@@ -4189,33 +4233,66 @@ export function PlanPanel() {
       <Card>
         <h3 className="text-sm font-semibold">生成失败</h3>
         <p className="mt-2 text-xs text-text-sec">{state.message}</p>
-        <button
-          type="button"
-          onClick={() => void generate()}
-          className="mt-3 rounded border border-border-def px-3 py-1.5 text-xs hover:border-accent"
-        >
+        <Button variant="secondary" size="sm" className="mt-3" onClick={() => void generate()}>
           重试
-        </button>
+        </Button>
       </Card>
     );
   }
 
   if (state.kind === 'empty') {
     return (
-      <Card>
-        <h3 className="text-sm font-semibold">作战计划</h3>
-        <p className="mt-2 text-xs text-text-sec">
-          {state.message}。生成后会得到三段内容：
-          <br />① 今日复盘（昨日预案兑现了没有）② 明日市场预期（四维度规则推断）③ 明日逐票操作预案（什么价位做什么）。
-        </p>
-        <button
-          type="button"
-          onClick={() => void generate()}
-          className="mt-3 rounded bg-accent px-3 py-1.5 text-xs text-bg-base"
-        >
-          生成今日计划
-        </button>
-      </Card>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <Card>
+          <h3 className="text-sm font-semibold">作战计划</h3>
+          <p className="mt-2 text-xs text-text-sec">
+            {state.message}。生成后会得到三段内容：
+            <br />① 今日复盘（昨日预案兑现了没有）② 明日市场预期（四维度规则推断）③ 明日逐票操作预案（什么价位做什么）。
+          </p>
+          <Button className="mt-3" size="sm" onClick={() => void generate()}>
+            生成今日计划
+          </Button>
+
+          {/* 空态不留大片虚空:把「明天要看哪些票」摆出来 */}
+          <div className="mt-4 border-t border-border-def pt-3">
+            <div className="text-[11px] text-text-ter">
+              目标股票池（持仓 ∪ ★关注）· 共 {scope.length} 只
+            </div>
+            {scope.length === 0 ? (
+              <p className="mt-1.5 text-[11px] text-text-sec">
+                还没有持仓也没有★关注票 —— 先在「盯盘台」加自选或建一笔持仓,作战计划才有对象。
+              </p>
+            ) : (
+              <ul className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 sm:grid-cols-3">
+                {scope.map((s) => (
+                  <li key={s.stockCode} className="truncate text-[11px] text-text-pri">
+                    {s.stockName ?? s.stockCode}
+                    <span className="ml-1 font-mono text-text-ter">{s.stockCode}</span>
+                    {s.inPosition && <span className="ml-1 text-text-sec">持仓</span>}
+                    {s.isFavorite && <span className="ml-1 text-text-sec">★</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </Card>
+
+        <div className="space-y-3">
+          <Card>
+            <h3 className="text-sm font-semibold">明日市场预期</h3>
+            <p className="mt-2 text-xs text-text-sec">
+              生成时会按量能、涨跌家数、均线位置、板块资金四个维度做规则推断,并给出上证关键位 ——
+              只写「倾向」,不预测涨跌。
+            </p>
+          </Card>
+          <Card>
+            <h3 className="text-sm font-semibold">明日逐票操作预案</h3>
+            <p className="mt-2 text-xs text-text-sec">
+              每条预案都会写死:什么价位、什么条件、做什么动作、依据是什么、什么情况下作废。
+            </p>
+          </Card>
+        </div>
+      </div>
     );
   }
 
@@ -4236,28 +4313,27 @@ export function PlanPanel() {
               : ''}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void generate()}
-          className="rounded border border-border-def px-3 py-1.5 text-xs hover:border-accent"
-        >
+        <Button variant="secondary" size="sm" onClick={() => void generate()}>
           重新生成
-        </button>
+        </Button>
       </div>
 
-      {plan.meta?.degraded && plan.meta.degradedReason.length > 0 && (
+      {plan.meta?.degraded && (plan.meta.degradedReason ?? []).length > 0 && (
         <div className="rounded border border-warn/40 bg-warn-bg px-3 py-2 text-[11px] text-warn">
           部分数据缺失（已如实标注，未用假数据填补）：
           {plan.meta.degradedReason.join('；')}
         </div>
       )}
 
+      {/* 窄屏(单栏)顺序:预期 → 预案 → 复盘;宽屏:左栏预案,右栏预期 + 复盘 */}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="order-1 xl:order-1">
+        <div className="order-2 xl:order-1 xl:col-start-1 xl:row-start-1">
           <PlanItemList items={plan.items ?? []} targetDate={plan.targetDate ?? null} />
         </div>
-        <div className="order-2 space-y-3 xl:order-2">
+        <div className="order-1 xl:order-2 xl:col-start-2 xl:row-start-1">
           <OutlookCard outlook={plan.outlook} />
+        </div>
+        <div className="order-3 xl:order-3 xl:col-start-2 xl:row-start-2">
           <ReviewCard review={plan.review ?? null} />
         </div>
       </div>
