@@ -25,7 +25,26 @@ export interface WatchItem {
   isFavorite: boolean;  // v0.5 特别关注
   /** M3.2 持仓行轻提示:浮亏/高集中度等预警,来自 /holdings-health */
   healthFlag?: 'loss' | 'concentration' | 'profit' | null;
+  /** 浮动盈亏比例(%)= floatingPnl / totalCost × 100;持仓视角下直接显示在行里 */
+  positionPnlPct?: number | null;
 }
+
+/**
+ * 列表视角
+ * - `watch`:全部自选(自选 ∪ 持仓)
+ * - `favorite`:只看特别关注
+ * - `position`:只看持仓
+ *
+ * 取值与 DeskTopBar 的 DeskTab 一致,便于直接透传,不做二次映射。
+ */
+export type WatchListMode = 'watch' | 'favorite' | 'position';
+
+/** 各视角的标题 / 空态文案(标题要反映当前筛选,否则「持仓(5)」会挂在「盯盘」下面) */
+const MODE_META: Record<WatchListMode, { title: string; empty: string }> = {
+  watch: { title: '盯盘', empty: '暂无自选股,点击右上角「添加自选」' },
+  favorite: { title: '关注', empty: '暂无特别关注股票,点击自选股票旁的 ⭐ 加入' },
+  position: { title: '持仓', empty: '当前没有持仓,可在「自选」里点行尾「⋯」设持仓' },
+};
 
 /**
  * 盯盘列表
@@ -40,14 +59,14 @@ export interface WatchItem {
 export function WatchList({
   items,
   activeCode,
-  favoriteOnly,
+  mode,
   onSelect,
   onChanged,
   variant = 'panel',
 }: {
   items: WatchItem[];
   activeCode: string | null;
-  favoriteOnly: boolean;
+  mode: WatchListMode;
   onSelect: (code: string) => void;
   onChanged: () => void;
   /** rail = 窄栏紧凑行;panel = 卡片式大行 */
@@ -251,7 +270,7 @@ export function WatchList({
               variant === 'rail' ? 'text-[11.5px]' : 'text-base',
             )}
           >
-            {variant === 'rail' ? '盯盘' : '盯盘列表'}
+            {mode === 'watch' ? (variant === 'rail' ? '盯盘' : '盯盘列表') : MODE_META[mode].title}
           </span>
           <span className="text-[10px] text-text-ter font-mono">({items.length})</span>
         </div>
@@ -278,14 +297,17 @@ export function WatchList({
               )}
             />
           </button>
-          <Button
-            size="sm"
-            onClick={() => setShowAdd(true)}
-            title="添加自选"
-            className={variant === 'rail' ? '!px-1.5 !py-0.5 !text-[11px]' : undefined}
-          >
-            {variant === 'rail' ? '＋' : '＋ 添加自选'}
-          </Button>
+          {/* 持仓视角是筛选视角,「加自选」加进来的票不会出现在这里 —— 收起来 */}
+          {mode !== 'position' && (
+            <Button
+              size="sm"
+              onClick={() => setShowAdd(true)}
+              title="添加自选"
+              className={variant === 'rail' ? '!px-1.5 !py-0.5 !text-[11px]' : undefined}
+            >
+              {variant === 'rail' ? '＋' : '＋ 添加自选'}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -296,9 +318,7 @@ export function WatchList({
         )}
       >
         {items.length === 0 && (
-          <li className="text-text-ter text-sm text-center py-10">
-            {favoriteOnly ? '暂无特别关注股票,点击自选股票旁的 ⭐ 加入' : '暂无自选股,点击右上角「添加自选」'}
-          </li>
+          <li className="text-text-ter text-sm text-center py-10">{MODE_META[mode].empty}</li>
         )}
         {sortedItems.map((it) => {
           const isActive = it.code === activeCode;
@@ -337,12 +357,32 @@ export function WatchList({
                       <span className="text-[12.5px] text-text-pri truncate leading-tight">
                         {it.name ?? it.code}
                       </span>
-                      {it.inPosition && (
-                        <span className="text-[9px] px-1 rounded-xs bg-accent-subtle text-accent font-semibold shrink-0">
-                          持
-                        </span>
-                      )}
-                      {it.healthFlag === 'loss' && (
+                      {it.inPosition &&
+                        (mode === 'position' ? (
+                          /* 持仓视角:每一行都是持仓,「持」徽标没有信息量 —— 换成浮盈比例。
+                             红涨绿跌(A股),与顶栏「浮盈」同色系(pctClass)。 */
+                          <span
+                            className={clsx(
+                              'text-[9.5px] font-mono font-semibold tabular-nums shrink-0',
+                              pctClass(it.positionPnlPct),
+                            )}
+                            title={
+                              it.positionPnlPct == null
+                                ? '浮动盈亏(行情未就绪)'
+                                : `浮动盈亏 ${it.positionPnlPct > 0 ? '+' : ''}${it.positionPnlPct.toFixed(2)}%`
+                            }
+                          >
+                            {it.positionPnlPct == null
+                              ? '--'
+                              : `${it.positionPnlPct > 0 ? '+' : ''}${it.positionPnlPct.toFixed(2)}%`}
+                          </span>
+                        ) : (
+                          <span className="text-[9px] px-1 rounded-xs bg-accent-subtle text-accent font-semibold shrink-0">
+                            持
+                          </span>
+                        ))}
+                      {/* 浮亏红点:持仓视角里已由浮盈比例精确表达,不再重复 */}
+                      {it.healthFlag === 'loss' && mode !== 'position' && (
                         <span
                           className="w-1.5 h-1.5 rounded-full bg-down shrink-0"
                           title="持仓浮亏"

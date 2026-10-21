@@ -30,7 +30,7 @@ import { CompareChart } from '@/components/charts/CompareChart';
 import { KLineChart, type KlinePeriod } from '@/components/charts/KLineChart';
 import { BreadthBar } from '@/components/desk/BreadthBar';
 import { DecisionColumn } from '@/components/desk/DecisionColumn';
-import { DeskTopBar } from '@/components/desk/DeskTopBar';
+import { DeskTopBar, type DeskTab } from '@/components/desk/DeskTopBar';
 import { KeyLevels } from '@/components/desk/KeyLevels';
 import { HoldingsHealthPanel } from '@/components/holdings-health/HoldingsHealthPanel';
 import { IntradayChart } from '@/components/charts/IntradayChart';
@@ -52,17 +52,13 @@ import { WatchList, type WatchItem } from '@/components/watch/WatchList';
 import type { HoldingsHealth } from '@/lib/types';
 
 /**
- * 首页筛选器(自选 / 关注)
+ * 首页筛选器(自选 / 关注 / 持仓)
  *
  * 此前此处是 9 个 tab,其中 6 个(大盘/板块/快讯/选股/观察池/设置)已由
- * 持久 NavRail 提升为独立路由,故不再需要本地 tab 切换;持仓明细见 /positions。
+ * 持久 NavRail 提升为独立路由,故不再需要本地 tab 切换;页签本体在 DeskTopBar。
+ * 持仓明细(成本/盈亏/流水)见 /positions,这里只做「视角切换」。
  */
-type TabKey = 'watch' | 'favorite';
-
-const TABS: { key: TabKey; label: string }[] = [
-  { key: 'watch', label: '自选' },
-  { key: 'favorite', label: '⭐ 关注' },
-];
+type TabKey = DeskTab;
 
 const PERIODS: { value: KlinePeriod; label: string }[] = [
   { value: 'intraday', label: '分时' },
@@ -280,6 +276,16 @@ export default function Workbench() {
       ]);
       setPositions(p.items);
       const posName = new Map(p.items.map((x) => [x.stockCode, x.stockName]));
+      // 持仓浮盈比例(%)—— 持仓视角下直接显示在行里,扫一眼就知道哪只亏
+      const posPnlPct = new Map<string, number | null>();
+      for (const pos of p.items) {
+        const floating = pos.floatingPnl != null ? Number(pos.floatingPnl) : null;
+        const cost = Number(pos.totalCost);
+        posPnlPct.set(
+          pos.stockCode,
+          cost > 0 && floating != null ? (floating / cost) * 100 : null,
+        );
+      }
       // 持仓行轻提示 flag(M3.2 roadpmap):loss=红 / high_concentration=黄 / profit/flat=绿
       const healthFlag = new Map<string, WatchItem['healthFlag']>();
       for (const it of hh?.items ?? []) {
@@ -297,6 +303,7 @@ export default function Workbench() {
           quote: null,
           isFavorite: it.isFavorite,
           healthFlag: healthFlag.get(it.stockCode) ?? null,
+          positionPnlPct: posPnlPct.get(it.stockCode) ?? null,
         });
       }
       for (const pos of p.items) {
@@ -308,6 +315,7 @@ export default function Workbench() {
             quote: null,
             isFavorite: false,
             healthFlag: healthFlag.get(pos.stockCode) ?? null,
+            positionPnlPct: posPnlPct.get(pos.stockCode) ?? null,
           });
         }
       }
@@ -484,6 +492,10 @@ export default function Workbench() {
     if (tab === 'favorite') {
       return watchAll.filter((it) => it.isFavorite);
     }
+    if (tab === 'position') {
+      // 持仓视角:watchAll 已经是「自选 ∪ 持仓」,按 inPosition 过滤即为全部持仓
+      return watchAll.filter((it) => it.inPosition);
+    }
     return watchAll;
   }, [tab, watchAll]);
 
@@ -576,7 +588,7 @@ export default function Workbench() {
               variant="rail"
               items={visibleItems}
               activeCode={activeCode}
-              favoriteOnly={tab === 'favorite'}
+              mode={tab}
               onSelect={selectStock}
               onChanged={fetchBase}
             />

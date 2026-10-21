@@ -11,7 +11,7 @@ import { getTheme, setTheme, type ThemeMode } from '@/lib/theme';
  * 交易台顶栏(v0.8)
  *
  * 一行放下四件事,**不设第二行**,把垂直空间全留给行情:
- * 1. 视角切换(自选 / 关注)—— 放在最左,紧贴列表栏,点完眼睛不用横跨屏幕
+ * 1. 视角切换(自选 / 关注 / 持仓)—— 放在最左,紧贴列表栏,点完眼睛不用横跨屏幕
  * 2. 三大指数 ticker —— 常驻可见,盯盘时这是最高频看的数据
  * 3. 自动刷新开关 + 倒计时
  * 4. 主题切换(深色终端 / 纸面终端)
@@ -20,11 +20,12 @@ import { getTheme, setTheme, type ThemeMode } from '@/lib/theme';
  * 视觉上散成三堆,盯盘时反而要多处扫视 —— 这里收成一条。
  */
 
-export type DeskTab = 'watch' | 'favorite';
+export type DeskTab = 'watch' | 'favorite' | 'position';
 
 const TABS: { key: DeskTab; label: string }[] = [
   { key: 'watch', label: '自选' },
   { key: 'favorite', label: '★ 关注' },
+  { key: 'position', label: '持仓' },
 ];
 
 export function DeskTopBar({
