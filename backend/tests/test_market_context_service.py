@@ -137,3 +137,45 @@ async def test_sector_vs_market_pct_none_when_index_missing():
         ctx = await get_market_context("002185.SZ")
     assert ctx.market["change_pct"] is None
     assert ctx.sector["vs_market_pct"] is None
+
+
+# ---- 父代理评审补:summary 不得输出「None」 ----
+
+
+@pytest.mark.asyncio
+async def test_market_summary_omits_missing_limit_counts():
+    """涨停/跌停家数缺失时,整段不写 —— 不要在 UI 上显示「涨停 None」"""
+    p = _patched(sentiment={"up_total": 100, "down_total": 90})
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        ctx = await get_market_context("002185.SZ")
+    assert "None" not in ctx.market["summary"]
+    assert "涨停" not in ctx.market["summary"]
+    assert "大盘" in ctx.market["summary"]
+
+
+@pytest.mark.asyncio
+async def test_market_summary_keeps_limit_counts_when_present():
+    p = _patched()
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        ctx = await get_market_context("002185.SZ")
+    assert "涨停 59" in ctx.market["summary"]
+    assert "跌停 10" in ctx.market["summary"]
+
+
+@pytest.mark.asyncio
+async def test_sector_summary_shows_relative_to_market():
+    """行业相对大盘强弱要在 summary 里露出来,否则这个字段白算了"""
+    p = _patched()
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        ctx = await get_market_context("002185.SZ")
+    assert "跑赢大盘 +1.38%" in ctx.sector["summary"]
+
+
+@pytest.mark.asyncio
+async def test_sector_summary_says_underperform_when_lagging():
+    p = _patched(overview={"indexes": [{"code": "000001.SH", "name": "上证指数",
+                                         "close": 3735.37, "change_pct": 3.0}]})
+    with p[0], p[1], p[2], p[3], p[4], p[5]:
+        ctx = await get_market_context("002185.SZ")
+    assert ctx.sector["vs_market_pct"] == -1.5       # 行业 +1.5% - 大盘 +3.0%
+    assert "跑输大盘 -1.50%" in ctx.sector["summary"]

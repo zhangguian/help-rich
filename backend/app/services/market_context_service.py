@@ -94,10 +94,16 @@ async def get_market_context(
             else:
                 market["state"] = "neutral"
             tone = {"warm": "偏暖", "cold": "偏冷", "neutral": "分化"}[market["state"]]
-            market["summary"] = (
-                f"大盘{tone}:涨 {up} / 跌 {down},"
-                f"涨停 {market['limit_up']} / 跌停 {market['limit_down']}"
-            )
+            summary = f"大盘{tone}:涨 {up} / 跌 {down}"
+            # 涨停/跌停家数可能缺失(部分快照不返回)→ 缺就整段不写,不要输出「涨停 None」
+            limits = []
+            if market["limit_up"] is not None:
+                limits.append(f"涨停 {market['limit_up']}")
+            if market["limit_down"] is not None:
+                limits.append(f"跌停 {market['limit_down']}")
+            if limits:
+                summary += "," + " / ".join(limits)
+            market["summary"] = summary
     # 大盘涨跌幅:取上证指数真实涨跌幅(不用涨跌家数近似)
     market_chg = _index_change_pct(overview)
     if market_chg is not None:
@@ -174,6 +180,12 @@ async def get_market_context(
         parts.append(f"所属 {industry_name}")
     if sector["change_pct"] is not None:
         parts.append(f"今日 {sector['change_pct']:+.2f}%")
+    if sector["vs_market_pct"] is not None:
+        parts.append(
+            f"跑赢大盘 {sector['vs_market_pct']:+.2f}%"
+            if sector["vs_market_pct"] >= 0
+            else f"跑输大盘 {sector['vs_market_pct']:+.2f}%"
+        )
     if sector["fund_net_yi"] is not None:
         parts.append(f"板块主力净流入 {sector['fund_net_yi']:+.2f} 亿")
     if sector["leading"]:
