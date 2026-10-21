@@ -5050,10 +5050,16 @@ export function ReviewCard({ review }: { review: BattlePlanReview | null }) {
             <span className="text-text-pri">执行 {review.fulfillment.executed}</span>
             <span className="text-warn">触及未做 {review.fulfillment.touched}</span>
             <span className="text-text-sec">未触发 {review.fulfillment.missed}</span>
+            {review.fulfillment.na > 0 && (
+              <span className="text-text-ter">不适用 {review.fulfillment.na}</span>
+            )}
             {review.fulfillment.noData > 0 && (
               <span className="text-warn">数据不足 {review.fulfillment.noData}</span>
             )}
           </div>
+          {/* ⚠️ 「昨日预案 N 条」与下面四个计数可能对不上 ——
+              n_a(别动/解锁类)与 no_data(无行情数据)都**不计入统计**,
+              但它们确实是「定过的预案」→ 必须显式列出,否则用户以为漏了几条。 */}
           <div
             className={`mt-1.5 text-xs font-semibold ${LEVEL_STYLE[review.fulfillment.verdictLevel] ?? ''}`}
           >
@@ -5564,6 +5570,23 @@ cmd /c $cmd
 
 **(g) 可选**:`backend/app/api/diagnose.py` 仍绕一跳取 `position_status` 的私有名
 (pre-existing 耦合,非本功能引入)—— 不改,仅在台账注明。
+
+**(h) `battle_plan_service._load_transactions` 用 `list_all(limit=500)` 再按日期过滤**（T6 评审发现）
+—— 当某日流水**超过 500 条**时会漏单（漏掉的流水 → 该笔操作被误判成「没执行」）。
+当前规模(单用户自选 ≤ 20 只)远不到 500,属**低概率已知边界**。
+本轮不改（改法要动仓储层的分页/按日查询接口,超出阶段 9 范围）,
+仅在 `docs/design/trading-desk-v3-decision-card.md` §九 记录该边界。
+
+**(i) 统计口径说明**（T6 fix1 引入 `no_data` 后产生的新口径）
+—— `summarize_fulfillment` 的 `total` = **所有预案条数**(含 `n_a` 与 `no_data`),
+而 `executed + touched + missed` 不含它们 → 两者**故意不相等**。
+前端必须把「不适用 N」与「数据不足 N」显式列出,否则用户以为漏了几条。
+本轮已在 T8 的 ReviewCard 里补上这两项显示;此条留作口径说明记录。
+
+**(j) 纪律 note 的标点是半角**（T4 评审 Minor）
+—— `"⚠️ 纪律问题:昨日标记别动/未解锁,今日仍有操作"` 用的是半角冒号 + 半角逗号,
+与项目其余中文文案的「全角标点」风格不一致。属展示层,不改(改了会让
+`summarize_fulfillment` 里 `"纪律问题" in note` 的判定依赖具体文案,徒增耦合)。
 
 - [ ] **Step 8: 最终 Commit**
 
