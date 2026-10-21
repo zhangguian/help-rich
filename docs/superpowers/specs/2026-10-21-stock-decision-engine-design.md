@@ -405,12 +405,18 @@ C2 超跌反弹
 C3 突破确认
    条件: effective_price > 最近压力位 且 volume.ratio >= 1.5
    price = 最近压力位（indicators.support_pressure.pressure 中低于现价的最高值）
-   status = 'now'   if 突破成立 且 量比 ≥ 1.5
-            'armed' if 突破成立 但 量比 < 1.5
-            'blocked' otherwise（理由必须写明差在哪）
+   status = 'now'    if 突破成立 且 量比 ≥ 1.5
+            'armed'  if 尚未突破压力位（理由写明还差多少）
+            'blocked' if 突破成立 但 量比 < 1.5（理由必须写明差在哪）
    label = '放量突破追进'
    blocked 理由示例: f'量能仅 {vol_ratio:.2f} 倍,未达 1.5 倍确认标准'
 ```
+
+> **口径澄清（2026-10-21 修订）**：原写法把「突破成立但量比不足」标成 `armed`，
+> 与下方「blocked 理由示例」（量能不足）自相矛盾。
+> 现统一为：**突破成立但量比不足 → `blocked`**（不追无量突破，属已否决，理由写明量能差多少）；
+> **尚未突破压力位 → `armed`**（等突破，这是可以等待的条件）。
+> 实现按此口径（`decision_service.py` 的 `judge_entry` C3 分支）。
 
 **主行动选择**：`status == 'now'` 中按 `C1 > C2 > C3` 取第一个作为主行动（支撑最稳）。
 `status == 'blocked'` 的候选全部保留在 `actions` 里（前端折叠展示「为什么不做」）。
@@ -474,13 +480,18 @@ L2 破位减仓
    kind='exit', label='破位减仓', price=support_price, status='now'
    condition = f'跌破 {support_price:.2f} 元且量增价跌(主力出货),减仓而不是补仓'
 
-L3 解套路径（写进 headline / note，不单独成为 action）
+L3 解套路径（**kind='watch' 的 action**，label='解套路径'，status='armed'）
+   —— 亏损时最该先回答的问题:「还能不能回本?要涨多少?」
    need_pct = (cost_basis - effective_price) / effective_price * 100
    if p80 > cost_basis:
-       '涨到 {p80:.2f} 元可解套(需涨 {need_pct:.1f}%)'
+       condition = f'涨到 {p80:.2f} 元可解套(需涨 {need_pct:.1f}%)'
+       basis   = [f'持仓成本 {cost_basis:.2f} 元', f'现价 {ep:.2f} 元', f'需涨 {need_pct:.1f}%']
    else:
-       '按 P80 {p80:.2f} 元也回不了本,建议降低预期或换股'
-   —— need_pct > 30 且 p80 < cost_basis 时追加: '不建议死扛'
+       condition = f'按 P80 {p80:.2f} 元也回不了本,建议降低预期或换股'
+       basis   = [f'持仓成本 {cost_basis:.2f} 元', f'P80 仅 {p80:.2f} 元']
+       —— need_pct > 30 且 p80 < cost_basis 时追加 '不建议死扛'
+   price = p80
+   任一输入缺失(cost_basis / effective_price / p80)→ 不生成这条 action,更不编数字
 
 L4 补仓摊薄
    条件: channel != 'down' 且 indicators.stabilize.state 且 env.market.state != 'cold'

@@ -226,3 +226,74 @@ def test_t_plan_suitable_has_empty_unsuitable_signals():
     if plan["suitable"]:
         # 止损提示归位到顶层 stop_loss,TPlan 不再承载
         assert plan["unsuitable_signals"] == ""
+
+
+# ---- L3 解套路径(父代理补实现:设计文档 §6.5) ----
+
+
+def _loss_ctx(monkeypatch, p80: float, cost_basis: float | None = 15.0):
+    closes = [10.0 + (i % 5) * 0.4 for i in range(60)]
+    ctx = _ctx(closes, position_status="loss", shares=100, cost_basis=cost_basis)
+    monkeypatch.setitem(ctx.indicators["position"], "p80", p80)
+    return ctx
+
+
+def _unlock_actions(actions):
+    return [a for a in actions if a["label"] == "解套路径"]
+
+
+def test_loss_plan_gives_unlock_path_when_p80_above_cost(monkeypatch):
+    # 现价 11.60,成本 15.00,P80 16.00 > 成本 → 能解套,告诉用户要涨多少
+    ctx = _loss_ctx(monkeypatch, p80=16.0)
+    acts = _unlock_actions(judge_loss_plan(ctx))
+    assert len(acts) == 1
+    a = acts[0]
+    assert a["kind"] == "watch"
+    assert a["status"] == "armed"
+    assert "可解套" in a["condition"]
+    assert "需涨" in a["condition"]
+    assert a["price"] == 16.0          # 价格可追溯:就是 indicators.position.p80
+    assert any("持仓成本 15.00" in b for b in a["basis"])
+
+
+def test_loss_plan_says_cannot_breakeven_when_p80_below_cost(monkeypatch):
+    # 成本 20.00(现价 11.60 → 需涨 72.4% > 30%),P80 12.00 < 成本 → 回不了本 + 不建议死扛
+    ctx = _loss_ctx(monkeypatch, p80=12.0, cost_basis=20.0)
+    acts = _unlock_actions(judge_loss_plan(ctx))
+    assert len(acts) == 1
+    assert "回不了本" in acts[0]["condition"]
+    assert "不建议死扛" in acts[0]["condition"]
+
+
+def test_loss_plan_no_dead_hold_wording_when_need_pct_under_30(monkeypatch):
+    # 成本 15.00(需涨 29.3%,未过 30% 阈值)→ 只说回不了本,不加「不建议死扛」
+    ctx = _loss_ctx(monkeypatch, p80=12.0, cost_basis=15.0)
+    acts = _unlock_actions(judge_loss_plan(ctx))
+    assert len(acts) == 1
+    assert "回不了本" in acts[0]["condition"]
+    assert "不建议死扛" not in acts[0]["condition"]
+
+
+def test_loss_plan_no_unlock_action_without_cost_basis(monkeypatch):
+    # 缺成本 → 不生成解套路径,更不编数字
+    ctx = _loss_ctx(monkeypatch, p80=16.0, cost_basis=None)
+    assert _unlock_actions(judge_loss_plan(ctx)) == []
+
+
+def test_loss_plan_no_unlock_action_without_p80(monkeypatch):
+    closes = [10.0 + (i % 5) * 0.4 for i in range(60)]
+    ctx = _ctx(closes, position_status="loss", shares=100, cost_basis=15.0)
+    monkeypatch.setitem(ctx.indicators["position"], "p80", None)
+    assert _unlock_actions(judge_loss_plan(ctx)) == []
+
+
+def test_loss_plan_unlock_path_shows_in_build_decision(monkeypatch):
+    # 端到端:亏损持仓的决策卡里要能直接看到解套路径
+    closes = [10.0 + (i % 5) * 0.4 for i in range(60)]
+    ctx = _ctx(closes, position_status="loss", shares=100, cost_basis=15.0)
+    monkeypatch.setitem(ctx.indicators["position"], "p80", 16.0)
+    d = build_decision(ctx)
+    assert d["role"] == "解套参考"
+    assert len(_unlock_actions(d["actions"])) == 1
+    assert "可解套" in d["headline"]
+

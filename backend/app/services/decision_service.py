@@ -448,6 +448,34 @@ def judge_loss_plan(ctx: DecisionContext) -> list[dict[str, Any]]:
             "status": "now",
         })
 
+    # L3 解套路径(watch:亏损时最该先回答「还能不能回本?要涨多少?」)
+    # 任一输入缺失就不生成这条,更不编数字(设计文档 §6.5)
+    p80 = _f(pos.get("p80"))
+    cost_basis = _f(ctx.cost_basis)
+    if cost_basis is not None and cost_basis > 0 and p80 is not None and p80 > 0:
+        need_pct = (cost_basis - ep) / ep * 100
+        if p80 > cost_basis:
+            condition = f"涨到 {p80:.2f} 元可解套(需涨 {need_pct:.1f}%)"
+            basis = [
+                f"持仓成本 {cost_basis:.2f} 元",
+                f"现价 {ep:.2f} 元",
+                f"需涨 {need_pct:.1f}%",
+            ]
+        else:
+            condition = f"按 P80 {p80:.2f} 元也回不了本,建议降低预期或换股"
+            basis = [f"持仓成本 {cost_basis:.2f} 元", f"P80 仅 {p80:.2f} 元"]
+            if need_pct > 30:
+                condition += ",不建议死扛"
+                basis.append(f"需涨 {need_pct:.1f}%,超 30%")
+        actions.append({
+            "kind": "watch",
+            "label": "解套路径",
+            "condition": condition,
+            "price": round(p80, 3),
+            "basis": basis,
+            "status": "armed",
+        })
+
     # L4 补仓摊薄
     market_state = (ctx.env.market or {}).get("state")
     reasons: list[str] = []
