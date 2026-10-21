@@ -116,7 +116,7 @@ export function PlanPanel() {
 
   if (state.kind === 'empty') {
     return (
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_360px]">
         <Card>
           <h3 className="text-sm font-semibold">作战计划</h3>
           <p className="mt-2 text-xs text-text-sec">
@@ -199,18 +199,19 @@ export function PlanPanel() {
         </div>
       )}
 
-      {/* 窄屏(单栏)顺序:预期 → 预案 → 复盘;宽屏:左栏预案,右栏预期 + 复盘 */}
+      {/* 窄屏(单栏)顺序:预期 → 预案 → 复盘;宽屏:左栏预案,右栏预期 + 复盘
+          ⚠️ 断点用 lg(1024),不用 xl(1280) —— spec §5.2 铁律「两栏保持到 1024px」 */}
       <div
         data-testid="plan-grid"
-        className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]"
+        className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_360px]"
       >
-        <div className="order-2 xl:order-1 xl:col-start-1 xl:row-start-1">
+        <div className="order-2 lg:order-1 lg:col-start-1 lg:row-start-1">
           <PlanItemList items={plan.items ?? []} targetDate={plan.targetDate ?? null} />
         </div>
-        <div className="order-1 xl:order-2 xl:col-start-2 xl:row-start-1">
+        <div className="order-1 lg:order-2 lg:col-start-2 lg:row-start-1">
           <OutlookCard outlook={plan.outlook} />
         </div>
-        <div className="order-3 xl:order-3 xl:col-start-2 xl:row-start-2">
+        <div className="order-3 lg:col-start-2 lg:row-start-2">
           <ReviewCard review={plan.review ?? null} />
         </div>
       </div>
