@@ -5432,7 +5432,9 @@ npm run typecheck
 npm run build
 ```
 
-Expected: typecheck 零错误；build 成功（28 路由：原 27 + `/plan`）。
+Expected: typecheck 零错误；build 成功，且 build 输出里能看到 `/plan` 路由。
+（**不要预设路由总数** —— 当前 `frontend/src/app` 下是 25 个 `page.tsx`，
+Next 的 build 输出会按 route group / 重定向折算，与文件数对不上；只核对 `/plan` 存在即可。）
 
 - [ ] **Step 8: Commit**
 
