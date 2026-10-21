@@ -367,6 +367,7 @@ def judge_entry(ctx: DecisionContext) -> list[dict[str, Any]]:
             "condition": f"放量站上 {pressure:.2f} 元压力位时追进",
             "price": round(pressure, 3),
             "basis": [f"压力位 {pressure:.2f} 元"] + basis_extra,
+            "missing": basis_extra,          # ← 新增:真正没满足的条件
             "status": status,
         }))
     return actions
@@ -536,6 +537,7 @@ def judge_loss_plan(ctx: DecisionContext) -> list[dict[str, Any]]:
                     f"持仓 {shares} 股 @ 成本 {cost:.2f} 元",
                     f"补 {add_shares} 股后均价 {new_cost:.2f} 元",
                 ],
+                "missing": reasons,               # ← 新增:真正没满足的条件(下跌通道/无企稳/大盘偏冷)
                 "status": "now" if not reasons else "blocked",
             })
     return actions

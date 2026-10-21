@@ -70,10 +70,16 @@ def _has_position(position) -> bool:
             "position 须为含 .shares 属性的对象(如 PositionView / Position),"
             f"收到 {type(position).__name__} —— 传 dict 会静默漏掉止损与做T子项"
         )
-    try:
-        return int(getattr(position, "shares", 0) or 0) > 0
-    except (TypeError, ValueError):
-        return False
+    shares = getattr(position, "shares", 0)
+    if not isinstance(shares, (int, float)):
+        # 形状对了但**值畸形**(如 'abc' / None):同样必须响亮失败。
+        # 静默当成「无持仓」会让止损与做T子项整条消失 —— 与 position_status 的契约一致
+        # (那里 `position.shares <= 0` 特意放在 try 之外,字符串会抛 TypeError)。
+        raise TypeError(
+            f"position.shares 须为数值(与 position_status 同契约),"
+            f"收到 {type(shares).__name__}: {shares!r}"
+        )
+    return float(shares) > 0
 
 
 def _invalid_if(item_kind: str, direction: str, price: float | None,
@@ -103,6 +109,7 @@ def _item(
     basis: list[str],
     invalid_if: str,
     status_now: str,
+    source: str = "decision.actions",
 ) -> dict[str, Any]:
     return {
         "stock_code": stock_code,
@@ -115,6 +122,7 @@ def _item(
         "basis": basis,
         "invalid_if": invalid_if,
         "status_now": status_now,
+        "source": source,          # 溯源用(spec §4.4.4)
         "fulfillment": "pending",
         "fulfillment_note": "",
     }
@@ -173,12 +181,14 @@ def build_items(decision: dict, position) -> list[dict]:
         direction = KIND_DIRECTION.get(kind, "none")
         price = _f(a.get("price"))
         basis = list(a.get("basis") or [])
+        raw_label = a.get("label") or ""
         items.append(_item(
             code, name, kind, direction,
-            a.get("label") or "", price,
+            f"明日{raw_label}", price,
             a.get("condition") or "", basis,
-            _invalid_if(kind, direction, price, a.get("label") or ""),
+            _invalid_if(kind, direction, price, raw_label),
             "armed",
+            "decision.actions",
         ))
 
     # 2) blocked → 解锁条件(方向继承原动作)
@@ -187,30 +197,65 @@ def build_items(decision: dict, position) -> list[dict]:
         direction = KIND_DIRECTION.get(kind, "none")
         price = _f(a.get("price"))
         basis = list(a.get("basis") or [])
-        # 缺的依据 = 除首条(价位)外的其余依据;没有则用标签兜底
-        missing = basis[1:] if len(basis) > 1 else basis
-        unlock_txt = "、".join(missing) if missing else f"{a.get('label') or ''}的前置条件"
+        raw_label = a.get("label") or ""
+        # 缺的依据:优先用决策层显式给出的 `missing`(那是**真正没满足的条件**);
+        # 没有才退回「除首条(价位)外的其余依据」。
+        # 为什么必须有 missing:真实 blocked 动作(如 L4 补仓摊薄)的 basis 是两条**事实**
+        # (「持仓 600 股 @ 成本 15.58 元」「补 100 股后均价 9.87 元」),
+        # 把 basis[1:] 当缺失条件会写出「补 100 股后均价 9.87 元未满足则不解锁」——
+        # 那不是条件,是事实,用户读到的是假前提。
+        explicit = [str(x) for x in (a.get("missing") or []) if str(x)]
+        if explicit:
+            missing = explicit
+        else:
+            missing = basis[1:] if len(basis) > 1 else basis
+        unlock_txt = "、".join(missing) if missing else f"{raw_label}的前置条件"
+        # 文案去重复:缺失依据里已经写了「未达/未满足/未站回/尚未」就别再叠一句
+        if any(k in unlock_txt for k in ("未达", "未满足", "未站回", "尚未")):
+            invalid_txt = f"{unlock_txt}则不解锁"
+        else:
+            invalid_txt = f"{unlock_txt}未满足则不解锁"
         items.append(_item(
             code, name, "unlock", direction,
-            f"解锁后:{a.get('label') or ''}",
+            f"明日解锁后:{raw_label}",
             price,
             a.get("condition") or "", basis,
-            f"{unlock_txt}未满足则不解锁",
+            invalid_txt,
             "blocked",
+            "decision.actions",
         ))
 
     # 3) 止损(仅持仓票)
     stop = decision.get("stop_loss")
     if isinstance(stop, dict) and _has_position(position):
         price = _f(stop.get("price"))
+        # 止损位**已被击穿**时(决策层同时给了 status=="now" 的止损动作),
+        # 明日预案不能再写「跌破 X 元无条件减仓」—— 那个条件今天就已经成立,
+        # 写进明日预案就是一条过期建议。改成「仍在 X 下方则继续减仓」。
+        already = any(
+            str(a.get("kind") or "") == "stop"
+            and a.get("status") == "now"
+            and price is not None
+            and _f(a.get("price")) == price
+            for a in (decision.get("actions") or [])
+            if isinstance(a, dict)
+        )
+        if price is not None:
+            cond = (
+                f"已跌破 {price:.2f} 元,明日仍在该位置下方则继续无条件减仓"
+                if already else f"跌破 {price:.2f} 元无条件减仓"
+            )
+        else:
+            cond = "跌破止损位无条件减仓"
         items.append(_item(
-            code, name, "stop", "sell", "止损",
+            code, name, "stop", "sell", "明日止损",
             price,
-            f"跌破 {price:.2f} 元无条件减仓" if price is not None else "跌破止损位无条件减仓",
+            cond,
             [stop.get("basis") or ""],
             (f"收盘站回 {price:.2f} 元上方则明日不看止损" if price is not None
              else "止损位未知,明日不执行"),
             "armed",
+            "decision.stop_loss",
         ))
 
     # 4) 做T(仅持仓票;拆上沿/下沿两条)
@@ -225,19 +270,21 @@ def build_items(decision: dict, position) -> list[dict]:
             basis.append(f"底仓要求 {base}")
         if th is not None:
             items.append(_item(
-                code, name, "t_sell", "sell", "做T减仓",
-                th, t_plan.get("sell_trigger") or "", basis,
+                code, name, "t_sell", "sell", "明日做T减仓",
+                th, t_plan.get("sell_trigger") or "", list(basis),
                 (f"上沿 {th:.2f} 未触及则不做减仓;下沿 {tl:.2f} 未触及则不做回补"
                  if tl is not None else "上沿未触及则不做减仓"),
                 "armed",
+                "decision.t_plan",
             ))
         if tl is not None:
             items.append(_item(
-                code, name, "t_buyback", "buy", "做T回补",
-                tl, t_plan.get("buyback_trigger") or "", basis,
+                code, name, "t_buyback", "buy", "明日做T回补",
+                tl, t_plan.get("buyback_trigger") or "", list(basis),
                 (f"下沿 {tl:.2f} 未触及则不做回补;上沿 {th:.2f} 未触及则今日只减不接"
                  if th is not None else "下沿未触及则不做回补"),
                 "armed",
+                "decision.t_plan",
             ))
 
     # 5) 别动清单
@@ -245,10 +292,11 @@ def build_items(decision: dict, position) -> list[dict]:
         if not txt:
             continue
         items.append(_item(
-            code, name, "do_not", "none", "别动", None,
+            code, name, "do_not", "none", "明日别动", None,
             str(txt), [str(txt)],
             "该别动项恒成立,明日仍然有效",
             "armed",
+            "decision.do_not",
         ))
 
     return items

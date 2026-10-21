@@ -440,3 +440,31 @@ def test_build_decision_buy_verdict_outside_down_channel():
     assert d["verdict"] == "buy"
     assert [a for a in d["actions"] if a["status"] == "now"]
 
+
+# ==================================================================
+# blocked 动作的 missing 契约(2026-10-21 跨任务契约)
+#
+# 背景:「明日预案」要写「解锁条件」,必须知道**真正没满足的条件**是什么。
+# L4 补仓摊薄的 basis 是两条**事实**(持仓多少股 / 摊薄后均价多少),
+# 转换层若拿 basis[1:] 当缺失条件,就会写出「补 100 股后均价 9.87 元未满足
+# 则不解锁」—— 那不是条件,是事实,用户读到的是假前提。
+# 所以决策层必须显式给出 missing。
+# ==================================================================
+
+
+def test_l4_blocked_action_carries_missing_conditions():
+    """补仓摊薄被 blocked 时:必须带 missing,且 missing 是**条件**不是事实"""
+    ind = _ind(channel={"state": "down"})   # 下跌通道 + 默认 stabilize.state=False → 两条 reasons
+    ctx = _ctx_ind(ind, current_price=14.35,
+                   cost_basis=15.578, shares=600, position_status="loss")
+    l4 = [a for a in judge_loss_plan(ctx) if a["label"] == "补仓摊薄"]
+    assert len(l4) == 1
+    act = l4[0]
+    assert act["status"] == "blocked", "下跌通道 + 无企稳信号 → 必须 blocked"
+    assert "missing" in act, (
+        "blocked 动作必须显式给出缺失条件,否则转换层只能猜 basis[1:] 里的事实"
+    )
+    txt = " ".join(act["missing"])
+    assert any(k in txt for k in ("下跌通道", "企稳", "大盘")), act["missing"]
+    assert "均价" not in txt and "持仓" not in txt, f"missing 里只能是条件,不能是事实:{txt}"
+
