@@ -37,9 +37,14 @@ def _klines(n: int = 60) -> list[dict]:
 
 
 @contextmanager
-def _patched(position=None, env=None, env_error=None):
+def _patched(position=None, env=None, env_error=None, position_error=None):
     """统一打补丁:行情 / 持仓 / 市场环境 —— 全部不触网、不落库"""
     env_mock = AsyncMock(return_value=env) if env_error is None else AsyncMock(side_effect=env_error)
+    pos_mock = (
+        AsyncMock(return_value=position)
+        if position_error is None
+        else AsyncMock(side_effect=position_error)
+    )
     with ExitStack() as stack:
         stack.enter_context(
             patch("app.api.stock.fetch_klines", AsyncMock(return_value=_klines()))
@@ -48,7 +53,7 @@ def _patched(position=None, env=None, env_error=None):
             patch("app.api.stock.QuoteService.get_quotes", AsyncMock(return_value=[]))
         )
         stack.enter_context(
-            patch("app.api.stock.get_position", AsyncMock(return_value=position))
+            patch("app.api.stock.get_position", pos_mock)
         )
         stack.enter_context(
             patch("app.api.stock.get_market_context", env_mock)
@@ -128,6 +133,24 @@ def test_market_context_none_still_returns_200():
     # 决策照常产出,不是空壳
     assert d["verdict"] in ("buy", "add", "hold", "reduce", "sell", "wait")
     assert d["headline"]
+
+
+def test_position_read_failure_still_returns_200_with_degraded():
+    """持仓读取失败(SQLite 并发写时 database is locked)→ 不能 500,降级并标注
+
+    持仓读不到时按空仓给「建仓参考」是有误导性的,所以必须在 degraded 里说清楚。
+    """
+    with _patched(position_error=RuntimeError("database is locked")):
+        r = client.get(f"/api/stock/{CODE}/decision")
+    assert r.status_code == 200
+    d = r.json()["decision"]
+    assert any("持仓读取失败" in x for x in d["data_quality"]["degraded"])
+    assert any("持仓读取失败" in x for x in d["market_env"]["degraded"])
+    # 决策照常产出
+    assert d["verdict"] in ("buy", "add", "hold", "reduce", "sell", "wait")
+    assert d["headline"]
+    # 读不到持仓 → 不得出现成本/股数
+    assert d["position_status"] == "empty"
 
 
 def test_endpoint_never_calls_llm():

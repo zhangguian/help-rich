@@ -8,6 +8,7 @@
 import asyncio
 import json
 import logging
+from dataclasses import replace
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -175,7 +176,15 @@ async def decision(code: str) -> dict:
         _load_quote(code),
     )
     current_price, _ = _sanitize_current_price(quote, klines)
-    position = await get_position(code)
+    # 持仓读取降级:SQLite 在并发写(如选股落库)时可能抛 database is locked,
+    # 不能让整张决策卡 500 —— 按空仓继续,并在 degraded 里如实标注。
+    position_failed = False
+    try:
+        position = await get_position(code)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("决策端点读取持仓失败(%s): %s", code, e)
+        position = None
+        position_failed = True
     position_status, _ = _resolve_position_status(position, current_price)
 
     try:
@@ -212,6 +221,8 @@ async def decision(code: str) -> dict:
         env = None
     if env is None:
         env = MarketContext(degraded=["市场环境不可用"])
+    if position_failed:
+        env = replace(env, degraded=[*env.degraded, "持仓读取失败,按空仓给出建仓参考"])
 
     ctx = DecisionContext(
         stock_code=code,
