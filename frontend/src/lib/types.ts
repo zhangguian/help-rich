@@ -726,3 +726,101 @@ export interface ApiError {
 export interface paths {
   // (下面是 18 个端点的完整 OpenAPI schema)
 }
+
+/* ============================================================
+ * 盯盘决策引擎(v0.9)—— 确定性算法结果,不是 LLM 解读
+ *
+ * 对应后端 `GET /api/stock/{code}/decision` → `{ decision: StockDecision }`
+ * 字段名是 camelCase —— 后端返回 snake_case,由 `api.ts` 的 `snakeToCamel`
+ * 拦截器递归转换(对象和数组都处理)。
+ * ============================================================
+ */
+
+/** 行动清单条目(设计文档 §5.2 Action) */
+export interface DecisionAction {
+  kind: 'entry' | 'add' | 'exit' | 'stop' | 't_sell' | 't_buyback' | 'watch';
+  /** 短标签,如「支撑企稳建仓」 */
+  label: string;
+  /** 触发条件,必须含具体数字 */
+  condition: string;
+  /** 该动作对应的价位;无对应价位时为 null */
+  price: number | null;
+  /** 依据列表,每条引用一个输入里的具体数字 */
+  basis: string[];
+  /** now=此刻条件已满足 / armed=条件待触发 / blocked=已否决 */
+  status: 'now' | 'armed' | 'blocked';
+}
+
+/** 做 T 计划(设计文档 §5.2 TPlan) */
+export interface DecisionTPlan {
+  suitable: boolean;
+  tHigh: number | null;
+  tLow: number | null;
+  amplitudePct: number | null;
+  sellTrigger: string;
+  buybackTrigger: string;
+  basePositionPct: string;
+  /** suitable=false 时写明原因;suitable=true 时为空字符串 */
+  unsuitableSignals: string;
+  /** 空仓时为 true:做 T 需先有底仓 */
+  needsPosition: boolean;
+}
+
+/** 市场环境(设计文档 §5.3 MarketContext) */
+export interface DecisionMarketEnv {
+  market: {
+    state: string | null;
+    upTotal: number | null;
+    downTotal: number | null;
+    flatTotal: number | null;
+    limitUp: number | null;
+    limitDown: number | null;
+    sampleSize: number | null;
+    changePct: number | null;
+    summary: string;
+  };
+  sector: {
+    industry: string | null;
+    changePct: number | null;
+    vsMarketPct: number | null;
+    fundNetYi: number | null;
+    fundDirection: 'in' | 'out' | null;
+    state: string | null;
+    summary: string;
+    leading: { name: string; netYi: number }[];
+  };
+  stockFlow: {
+    direction: string | null;
+    amountWan: number | null;
+    category: string | null;
+    summary: string;
+  };
+  relative: {
+    vsSectorPct: number | null;
+    vsMarketPct: number | null;
+    summary: string;
+  };
+  /** 本层降级说明(不编数字,只说明缺什么) */
+  degraded: string[];
+}
+
+/** 决策输出(设计文档 §5.2 Decision) */
+export interface StockDecision {
+  stockCode: string;
+  stockName: string | null;
+  verdict: 'buy' | 'add' | 'hold' | 'reduce' | 'sell' | 'wait';
+  /** 一句话结论(中文白话,含具体数字) */
+  headline: string;
+  confidence: 'high' | 'medium' | 'low';
+  /** 建仓参考 / 止盈参考 / 解套参考 */
+  role: string;
+  positionStatus: 'empty' | 'profit' | 'loss';
+  actions: DecisionAction[];
+  stopLoss: { price: number; basis: string } | null;
+  positionPct: string;
+  doNot: string[];
+  tPlan: DecisionTPlan | null;
+  trendState: { phase: string; note: string };
+  marketEnv: DecisionMarketEnv;
+  dataQuality: { degraded: string[] };
+}
