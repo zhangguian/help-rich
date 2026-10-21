@@ -1030,10 +1030,15 @@ def test_todos_and_items_never_overlap():
     为什么不用价格:同一个价位可能同时出现在「今日待办」与「明日预案」
     (如止损动作 status=now 与 stop_loss 字段同价) —— 价格集合会误判成重叠,
     这条测试就永远抓不到真正的动作级回归。
+
+    ⚠️ 比较前必须把 item 侧的「明日」前缀去掉:预案项的 label 带「明日」(那是明日预案),
+    待办的不带(那是今日待办)。不剥前缀的话,同一动作在两个出口的 label 必然不等 →
+    集合交恒为空 → 这条测试对「同一动作同时出现在两个出口」完全免疫,失去判别力。
     """
     d = _decision([_action(status="now", price=1.0, label="分批止盈"),
                    _action(status="armed", price=2.0, label="支撑企稳建仓")])
-    item_keys = {(i["label"], i["trigger_condition"]) for i in build_items(d, None)}
+    item_keys = {(i["label"].removeprefix("明日"), i["trigger_condition"])
+                 for i in build_items(d, None)}
     todo_keys = {(t["label"], t["condition"]) for t in build_todos(d)}
     assert not (item_keys & todo_keys)
 
@@ -1042,10 +1047,24 @@ def test_todos_and_items_never_overlap_even_with_same_price():
     """同价位、不同动作 → 仍必须不重叠(价格集合法在这里会误判)"""
     d = _decision([_action(status="now", price=9.62, label="分批止盈"),
                    _action(status="armed", price=9.62, label="支撑企稳建仓")])
-    item_keys = {(i["label"], i["trigger_condition"]) for i in build_items(d, None)}
+    item_keys = {(i["label"].removeprefix("明日"), i["trigger_condition"])
+                 for i in build_items(d, None)}
     todo_keys = {(t["label"], t["condition"]) for t in build_todos(d)}
     assert not (item_keys & todo_keys)
     assert len(item_keys) == 1 and len(todo_keys) == 1
+
+
+def test_same_action_in_both_exports_is_detected():
+    """判别力自检:同一个动作若同时出现在两个出口,身份键集合**必须**相交
+
+    (这条测试保证上面两条不会因为「前缀/字段不一致」而恒真)
+    """
+    same = _action(status="now", price=9.62, label="分批止盈")
+    d = _decision([same, dict(same, status="armed")])
+    item_keys = {(i["label"].removeprefix("明日"), i["trigger_condition"])
+                 for i in build_items(d, None)}
+    todo_keys = {(t["label"], t["condition"]) for t in build_todos(d)}
+    assert item_keys & todo_keys, "同一动作同时出现在两个出口时,身份键必须相交"
 
 
 def test_blocked_action_becomes_unlock_item():
@@ -1240,7 +1259,9 @@ def test_stop_item_wording_normal_when_stop_not_yet_triggered():
 
 def test_every_item_carries_source():
     """溯源字段(spec §4.4.4):每条预案都要能说清来自决策引擎的哪一块"""
-    d = _decision([_action(status="armed", price=9.62)],
+    blocked = _action(status="blocked", price=12.5, label="放量突破追进",
+                      basis=["压力位 12.50 元", "量能仅 0.90 倍,未达 1.50 倍确认标准"])
+    d = _decision([_action(status="armed", price=9.62), blocked],
                   stop_loss={"price": 9.62, "basis": "b"},
                   t_plan={"suitable": True, "t_high": 10.5, "t_low": 9.2,
                           "amplitude_pct": 12.0, "sell_trigger": "s", "buyback_trigger": "b",
@@ -1254,6 +1275,8 @@ def test_every_item_carries_source():
     assert by_kind["entry"] == "decision.actions"
     assert by_kind["stop"] == "decision.stop_loss"
     assert by_kind["t_sell"] == "decision.t_plan"
+    assert by_kind["do_not"] == "decision.do_not"
+    assert by_kind["unlock"] == "decision.actions"
 
 
 def test_item_labels_use_mingri_wording():
@@ -1274,6 +1297,13 @@ def test_malformed_shares_raises_instead_of_silently_no_position():
     d = _decision(stop_loss={"price": 9.62, "basis": "b"})
     with pytest.raises(TypeError):
         build_items(d, _Pos("abc", 15.578))
+
+
+def test_nan_shares_raises_instead_of_silently_no_position():
+    """NaN 与任何数比较都是 False → 会被静默当成「无持仓」,必须响亮失败"""
+    d = _decision(stop_loss={"price": 9.62, "basis": "b"})
+    with pytest.raises(TypeError):
+        build_items(d, _Pos(float("nan"), 15.578))
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -1374,6 +1404,8 @@ def _has_position(position) -> bool:
             f"position.shares 须为数值(与 position_status 同契约),"
             f"收到 {type(shares).__name__}: {shares!r}"
         )
+    if shares != shares:  # NaN:与任何数比较都是 False → 会被静默当成「无持仓」
+        raise TypeError(f"position.shares 不得为 NaN: {shares!r}")
     return float(shares) > 0
 
 
@@ -1654,7 +1686,7 @@ $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_plan_item_builder.py -q --no-header -p no:cacheprovider
 ```
 
-Expected: 全部 PASS（30 passed）。
+Expected: 全部 PASS（32 passed）。
 
 - [ ] **Step 5: 静态检查 + Commit**
 
@@ -4326,7 +4358,10 @@ export function PlanPanel() {
       )}
 
       {/* 窄屏(单栏)顺序:预期 → 预案 → 复盘;宽屏:左栏预案,右栏预期 + 复盘 */}
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div
+        data-testid="plan-grid"
+        className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]"
+      >
         <div className="order-2 xl:order-1 xl:col-start-1 xl:row-start-1">
           <PlanItemList items={plan.items ?? []} targetDate={plan.targetDate ?? null} />
         </div>
@@ -4458,12 +4493,20 @@ for (const w of widths) {
   await page.goto("http://localhost:5173/plan", { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(2500);
   const info = await page.evaluate(() => {
-    const grid = document.querySelector('.grid');
+    // 用 data-testid 定位主网格 —— 页面上有多个 .grid,取第一个会量错对象
+    const grid = document.querySelector('[data-testid="plan-grid"]');
     const cols = grid ? getComputedStyle(grid).gridTemplateColumns : '';
+    const order = grid
+      ? Array.from(grid.children).map((el) => {
+          const r = el.getBoundingClientRect();
+          return { top: Math.round(r.top), text: (el.textContent || '').slice(0, 12) };
+        }).sort((a, b) => a.top - b.top).map((x) => x.text)
+      : [];
     return {
       scrollWidth: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
       gridCols: cols,
+      order,
       bodyLen: (document.body.innerText || '').length,
     };
   });
@@ -4488,7 +4531,7 @@ cmd /c $cmd
 **验收**：
 - 四档 `scrollWidth == clientWidth`（无横向滚动）
 - 1510/1280/1024：两栏（`gridCols` 含两个值）
-- 820：单栏
+- 820：单栏，且 `order` 的三项依次是「明日市场预期」→「明日操作预案」→「今日复盘」
 - `bodyLen > 200`（页面有实质内容，不是一片空白）
 
 - [ ] **Step 5: 目视核对截图**
@@ -4547,6 +4590,40 @@ cmd /c $cmd
 **原则**:作战计划**不重新计算**任何价格,只把决策引擎已算好的结论转成「明天什么价位做什么」。
 若两处出现不一致,说明转换层引入了新的计算 —— 这违反「价格必须来自 indicators/报价/持仓或其显式四则运算」铁律,必须回改转换层。
 ```
+
+- [ ] **Step 7b: 回填前序任务 deferred 的遗留项**
+
+这些是前序评审判定为 Minor / 不阻塞、但**必须在收尾前回填**的项。逐条改,改完跑相关测试。
+
+**(a) `backend/app/services/position_status.py:56` 契约文字** — 现在写「`shares` 须为 int」,
+但实测 float / bool / Decimal 都能过,只有字符串才 TypeError → 改成「`shares` 须为**数值**」。
+
+**(b) `backend/app/services/position_status.py:12` 的「15 处引用」未穷尽** — 计数口径是
+「代码里的名字引用数」,但 `api/stock.py` 自身还有 3 行 import + 11 行调用没算进去 →
+ 在 docstring 里补一句范围说明(说明这个数字指**测试与 diagnose.py** 的引用)。
+
+**(c) 决策层零 IO 守卫测试(缺失)** — 新建 `backend/tests/test_decision_layer_purity.py`:
+用 AST 扫描**四个**决策层模块(`position_status` / `outlook_service` / `plan_item_builder` /
+`fulfillment_checker`),断言它们的 import 集合里**没有任何 `app.*` 之外的内部模块**,
+且不含 `sqlalchemy` / `httpx` / `openai` 等 IO 或 LLM 依赖。
+(注:`fulfillment` 字段名含 "llm" 子串,别把它当 LLM 引用 —— 按 AST 的 import 节点判定,不用子串扫。)
+
+**(d) `backend/app/services/outlook_service.py` 的 `_f` 未过滤 ±inf(pre-existing)**
+— `_f` 只用 `f == f` 滤 NaN,±inf 会通过;`[inf, -inf]` 求和得 NaN → 落 else 档判 flat,
+文案「多空抵消,无明确主攻方向」= 数据已损坏却宣称中性,属**误导性结论**。
+改法:`_f` 同时滤掉 ±inf(如 `math.isfinite`),并补 1 条测试(净额含 inf → 该维度判 missing)。
+
+**(e) 同一模块的「0.00 亿」展示带** — 净残差 <0.005 亿时 2 位小数会显示成「0.00 亿」
+(真实 `netamount_yi` 是新浪原始元/1e8 的全精度 float,可达几十万元级残差)。
+改法:金额格式化时 |v| < 0.01 亿改用「万元」表述(如「净流入合计 49 万元」),不再显示 0.00。
+补 1 条测试。
+
+**(f) 记录一条已知无害的实现细节**(不改代码,写进 `docs/design/trading-desk-v3-decision-card.md` §九):
+决策层的 `missing` 键目前挂在 C3 的共用 `_guard({...})` 上,故 C3 的 armed/now 动作也带该键;
+转换层**只对 blocked 读它**,当前零影响;将来若有别的消费方读 `missing`,必须按 `status == "blocked"` 过滤。
+
+**(g) 可选**:`backend/app/api/diagnose.py` 仍绕一跳取 `position_status` 的私有名
+(pre-existing 耦合,非本功能引入)—— 不改,仅在台账注明。
 
 - [ ] **Step 8: 最终 Commit**
 
