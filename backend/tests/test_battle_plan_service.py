@@ -544,7 +544,10 @@ async def test_transactions_failure_does_not_claim_no_operation(monkeypatch):
     assert by_kind["entry"]["fulfillment"] == "missed"
     assert by_kind["entry"]["note"] == "流水不可用,未核对执行"
     assert by_kind["exit"]["fulfillment"] == "touched"
-    assert "流水不可用" in by_kind["exit"]["note"]
+    # R1 裁决(fix round 2):触及分支的文案**不得**再声称「当日无对应操作」——
+    # 那是「没核对」被写成了事实,正是 F4 要消除的那类不诚实。
+    assert by_kind["exit"]["note"] == "价格已触及触发位,但流水不可用,未核对执行"
+    assert "无对应操作" not in by_kind["exit"]["note"]
 
 
 # ---------------- F1:no_data 不回填 ----------------

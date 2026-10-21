@@ -498,7 +498,10 @@ async def _build_review(
             if it.get("fulfillment") == "missed":
                 it["fulfillment_note"] = "流水不可用,未核对执行"
             elif it.get("fulfillment") == "touched":
-                it["fulfillment_note"] = "价格已触及触发位,但当日无对应操作(流水不可用,未核对执行)"
+                # ⚠️ 文案里**不能**出现「当日无对应操作」——
+                # 没读到流水 ≠ 当天没操作。触及是真的(有K线),
+                # 但「没做」这句是我们**没核对**出来的,不是事实。
+                it["fulfillment_note"] = "价格已触及触发位,但流水不可用,未核对执行"
     summary = summarize_fulfillment(checked)
 
     # 回填昨日日报的兑现状态

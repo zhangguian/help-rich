@@ -298,6 +298,20 @@ def test_deviation_within_3pct_not_disclosed():
     assert "不符" not in out[0]["fulfillment_note"]
 
 
+def test_deviation_exactly_3pct_not_disclosed():
+    """恰好 3% 偏离 → 不披露(**浮点边界**,正是 `_EPS` 存在的原因)
+
+    触发价 10.00 / 成交 10.30:数学上正好 3%,但浮点表示下
+    `abs(10.30 - 10.00) = 0.30000000000000071` > `10.00 * 0.03 = 0.29999999999999999`。
+    没有 `_EPS` 就会把它误判成「超过 3%」而披露 —— 恰好 3% 不该披露。
+    """
+    items = [_item(kind="entry", direction="buy", price=10.00, label="建仓")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.5, low=9.9)]},
+                            [_txn(action="buy", price=10.30)])
+    assert out[0]["fulfillment"] == "executed"
+    assert "不符" not in out[0]["fulfillment_note"]
+
+
 def test_t_buyback_boundary_price_within_epsilon_counts_as_executed():
     """浮点容差:买价 9.384 与下沿 9.2×1.02(=9.383999999999999) 差 1e-15 → 算按计划回补"""
     items = [_item(kind="t_buyback", direction="buy", price=9.20, label="做T回补")]
