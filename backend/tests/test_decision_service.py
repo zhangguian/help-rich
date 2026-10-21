@@ -4,7 +4,13 @@ import pytest
 from app.services.decision_service import (
     DecisionContext,
     MarketContext,
+    build_decision,
+    derive_verdict,
     effective_price,
+    judge_do_not,
+    judge_entry,
+    judge_exit,
+    judge_loss_plan,
     judge_trend,
     judge_t_plan,
 )
@@ -99,3 +105,124 @@ def test_t_plan_all_prices_traceable():
         lo = min(float(k["low"]) for k in ks)
         assert plan["t_high"] <= round(hi, 6) + 1e-6
         assert plan["t_low"] >= round(lo, 6) - 1e-6
+
+
+# ============================ Task 2: 买/卖/亏损/别动判定 + verdict 组装 ============================
+
+
+def _action_kinds(actions):
+    return [a["kind"] for a in actions]
+
+
+def test_derive_verdict_priority_stop_beats_exit():
+    actions = [
+        {"kind": "exit", "status": "now"},
+        {"kind": "stop", "status": "now"},
+    ]
+    assert derive_verdict(actions, "loss") == "sell"
+
+
+def test_derive_verdict_wait_when_nothing_now():
+    assert derive_verdict([{"kind": "entry", "status": "armed"}], "empty") == "wait"
+
+
+def test_derive_verdict_hold_for_position_without_signal():
+    assert derive_verdict([], "profit") == "hold"
+
+
+def test_entry_produces_actions_with_traceable_price():
+    closes = [10.0 + (i % 9) * 0.4 for i in range(60)]
+    ctx = _ctx(closes, position_status="empty", shares=0)
+    actions = judge_entry(ctx)
+    ind = ctx.indicators
+    known = set()
+    for v in (ind.get("ma") or {}).values():
+        if v is not None:
+            known.add(round(float(v), 3))
+    pos = ind.get("position") or {}
+    for key in ("p20", "p80", "support_price", "stop_loss_price"):
+        if pos.get(key) is not None:
+            known.add(round(float(pos[key]), 3))
+    st = ind.get("stabilize") or {}
+    if st.get("price") is not None:
+        known.add(round(float(st["price"]), 3))
+    for a in actions:
+        if a["price"] is not None:
+            assert round(a["price"], 3) in known
+        assert a["basis"]           # 每条都要有依据
+        assert a["status"] in ("now", "armed", "blocked")
+
+
+def test_do_not_contains_stop_instruction_when_klines_short():
+    from app.services.ta_service import compute_indicators
+    klines = _kline([10.0] * 10)
+    ctx = DecisionContext(
+        stock_code="002185.SZ", stock_name="x",
+        indicators=compute_indicators(klines), klines=klines,
+        current_price=10.0, prev_close=10.0, cost_basis=None, shares=0,
+        position_status="empty", env=MarketContext(),
+    )
+    assert any("K 线不足" in s for s in judge_do_not(ctx))
+
+
+def test_build_decision_shape_and_no_llm_fields():
+    closes = [10.0 + (i % 11) * 0.3 for i in range(60)]
+    d = build_decision(_ctx(closes))
+    for key in ("verdict", "headline", "confidence", "role", "actions",
+                "stop_loss", "position_pct", "do_not", "t_plan",
+                "trend_state", "market_env", "data_quality"):
+        assert key in d
+    assert d["verdict"] in ("buy", "add", "hold", "reduce", "sell", "wait")
+    assert d["role"] in ("建仓参考", "止盈参考", "解套参考")
+    assert isinstance(d["actions"], list)
+    assert isinstance(d["do_not"], list)
+
+
+def test_build_decision_role_follows_position_status():
+    closes = [10.0 + (i % 11) * 0.3 for i in range(60)]
+    d_profit = build_decision(_ctx(closes, position_status="profit", shares=100, cost_basis=9.0))
+    d_loss = build_decision(_ctx(closes, position_status="loss", shares=100, cost_basis=20.0))
+    assert d_profit["role"] == "止盈参考"
+    assert d_loss["role"] == "解套参考"
+
+
+def test_build_decision_actions_kinds_are_from_allowed_vocabulary():
+    closes = [10.0 + (i % 11) * 0.3 for i in range(60)]
+    allowed = {"entry", "add", "exit", "stop", "t_sell", "t_buyback", "watch"}
+    for status in ("empty", "profit", "loss"):
+        d = build_decision(_ctx(closes, position_status=status, shares=100, cost_basis=9.0))
+        assert set(_action_kinds(d["actions"])) <= allowed
+
+
+# ---- 父代理补充修正 4:G5 T 区间正宽度 / unsuitable_signals 语义归位 ----
+
+
+def test_t_plan_unsuitable_when_t_range_has_no_width():
+    # p20 == p80 的横盘 → T 区间退化为 0 宽 → 不适合做 T。
+    # 注:brief 原夹具给 highs/lows ±0.1%(振幅 0.2%),会先命中 G1「振幅不足」,
+    #   走不到 G5;这里用默认夹具(±2%,振幅 4%)让「分位带退化」这一 G5 条件真实成立。
+    closes = [10.0] * 60
+    ctx = _ctx(closes)
+    plan = judge_t_plan(ctx)
+    assert plan["suitable"] is False
+    assert "无宽度" in plan["unsuitable_signals"]
+
+
+def test_t_plan_unsuitable_when_p20_equals_p80_forced(monkeypatch):
+    # 直接构造 0 宽上下文:P20 与 P80 取同一值 → t_high == t_low
+    closes = [10.0] * 60
+    ctx = _ctx(closes)
+    monkeypatch.setitem(ctx.indicators["position"], "p20", 10.05)
+    monkeypatch.setitem(ctx.indicators["position"], "p80", 10.05)
+    plan = judge_t_plan(ctx)
+    assert plan["suitable"] is False
+    assert "无宽度" in plan["unsuitable_signals"]
+
+
+def test_t_plan_suitable_has_empty_unsuitable_signals():
+    closes = [10.0 + (i % 7) * 0.5 for i in range(60)]
+    ctx = _ctx(closes)
+    plan = judge_t_plan(ctx)
+    if plan["suitable"]:
+        # 止损提示归位到顶层 stop_loss,TPlan 不再承载
+        assert plan["unsuitable_signals"] == ""

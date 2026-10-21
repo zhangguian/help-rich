@@ -76,10 +76,6 @@ def effective_price(ctx: DecisionContext) -> float | None:
     return lc if lc is not None and lc > 0 else None
 
 
-def _clamped(value: float | None) -> float | None:
-    return value if value is not None else None
-
-
 def judge_trend(ctx: DecisionContext) -> dict[str, Any]:
     """现在的走势如何 → {"phase": 阶段, "note": 依据}"""
     ind = ctx.indicators
@@ -239,13 +235,17 @@ def judge_t_plan(ctx: DecisionContext) -> dict[str, Any]:
         return _unsuitable("K 线缺少最高/最低价,无法计算 T 区间", needs_position)
     t_high = min(hi5, p80)
     t_low = max(lo5, p20)
+
+    # G5 T 区间必须有正宽度(设计文档 §6.2 修订)
+    if t_high <= t_low:
+        return _unsuitable(
+            "T 区间无宽度(P20~P80 分位带与近 5 日波动区间无重叠),做 T 无差价",
+            needs_position,
+        )
+
     amplitude_pct = (t_high - t_low) / ep * 100 if ep > 0 else None
 
     base_pct = "≥70%" if bull_ma else "≥50%"
-    stop_price = _f(pos.get("stop_loss_price"))
-    stop_txt = (
-        f"底仓跌破 {stop_price:.2f} 元即止损,防止做 T 做飞" if stop_price is not None else ""
-    )
     over_p80 = ep > p80
     sell_txt = f"冲高至 {t_high:.2f} 元附近且量能未超 5 日均量 1.5 倍时卖出 T 仓"
     if over_p80:
@@ -260,6 +260,404 @@ def judge_t_plan(ctx: DecisionContext) -> dict[str, Any]:
         "sell_trigger": sell_txt,
         "buyback_trigger": buyback_txt,
         "base_position_pct": base_pct,
-        "unsuitable_signals": stop_txt,
+        "unsuitable_signals": "",
         "needs_position": needs_position,
+    }
+
+
+# ============================ 买入(空仓) ============================
+
+def _recent_pressure(ind: dict[str, Any], price: float) -> float | None:
+    """最近压力位:低于现价的压力位里最高的一个"""
+    pressures = [_f(p) for p in ((ind.get("support_pressure") or {}).get("pressure") or [])]
+    below = [p for p in pressures if p is not None and p < price]
+    return max(below) if below else None
+
+
+def judge_entry(ctx: DecisionContext) -> list[dict[str, Any]]:
+    """什么时候该买(空仓)→ 三个候选,各自标 now / armed / blocked"""
+    ind = ctx.indicators
+    ep = effective_price(ctx)
+    if ep is None:
+        return []
+    actions: list[dict[str, Any]] = []
+
+    # C1 支撑企稳
+    st = ind.get("stabilize") or {}
+    st_price = _f(st.get("price"))
+    if bool(st.get("state")) and st_price is not None:
+        actions.append({
+            "kind": "entry",
+            "label": "支撑企稳建仓",
+            "condition": f"回踩 {st_price:.2f} 元不破且 MACD 绿柱缩短时,首仓建仓",
+            "price": round(st_price, 3),
+            "basis": [
+                f"企稳价 {st_price:.2f} 元(现价 {(ep / st_price - 1) * 100:+.1f}%)",
+                "stabilize.state=true",
+            ],
+            "status": "now" if ep >= st_price else "armed",
+        })
+
+    # C2 超跌反弹
+    pos = ind.get("position") or {}
+    p20 = _f(pos.get("p20"))
+    kdj = ind.get("kdj") or {}
+    if pos.get("risk_band") == "low" and kdj.get("zone") == "oversold" and p20 is not None:
+        golden = kdj.get("cross") == "golden"
+        actions.append({
+            "kind": "entry",
+            "label": "超跌反弹建仓",
+            "condition": f"站回 {p20:.2f} 元(P20 低位带)且 KDJ 出金叉时小仓位试仓",
+            "price": round(p20, 3),
+            "basis": [
+                f"P20 低位带 {p20:.2f} 元",
+                f"KDJ {kdj.get('zone')}(K={kdj.get('k')},D={kdj.get('d')})",
+            ],
+            "status": "now" if golden else "armed",
+        })
+
+    # C3 突破确认
+    vol_ratio = _f((ind.get("volume") or {}).get("ratio"))
+    pressure = _recent_pressure(ind, ep)
+    if pressure is not None:
+        broke = ep > pressure
+        enough = vol_ratio is not None and vol_ratio >= ENTRY_MIN_VOLUME_RATIO
+        if not broke:
+            status, basis_extra = "armed", [f"尚未突破压力位 {pressure:.2f} 元"]
+        elif enough:
+            status, basis_extra = "now", [f"量比 {vol_ratio:.2f} ≥ {ENTRY_MIN_VOLUME_RATIO}"]
+        else:
+            status = "blocked"
+            basis_extra = [f"量能仅 {vol_ratio:.2f} 倍,未达 {ENTRY_MIN_VOLUME_RATIO} 倍确认标准"]
+        actions.append({
+            "kind": "entry",
+            "label": "放量突破追进",
+            "condition": f"放量站上 {pressure:.2f} 元压力位时追进",
+            "price": round(pressure, 3),
+            "basis": [f"压力位 {pressure:.2f} 元"] + basis_extra,
+            "status": status,
+        })
+    return actions
+
+
+# ============================ 卖出(浮盈) ============================
+
+def judge_exit(ctx: DecisionContext) -> list[dict[str, Any]]:
+    """什么时候该卖(浮盈)"""
+    ind = ctx.indicators
+    ep = effective_price(ctx)
+    if ep is None:
+        return []
+    pos = ind.get("position") or {}
+    ma = ind.get("ma") or {}
+    boll = ind.get("boll") or {}
+    kdj = ind.get("kdj") or {}
+    vp = (ind.get("volume_price") or {}).get("direction")
+    channel = (ind.get("channel") or {}).get("state")
+    ma5, ma10, ma20, ma60 = (_f(ma.get(k)) for k in ("ma5", "ma10", "ma20", "ma60"))
+    bull_ma = all(v is not None for v in (ma5, ma10, ma20, ma60)) and ma5 > ma10 > ma20 > ma60
+
+    actions: list[dict[str, Any]] = []
+    p80 = _f(pos.get("p80"))
+    if p80 is not None:
+        actions.append({
+            "kind": "exit",
+            "label": "分批止盈",
+            "condition": f"涨到 {p80:.2f} 元(P80 分位)先减仓 1/3",
+            "price": round(p80, 3),
+            "basis": [f"P80 分位 {p80:.2f} 元"],
+            "status": "now" if ep >= p80 else "armed",
+        })
+
+    if boll.get("position") in ("touching_upper", "above_upper") and kdj.get("zone") == "overbought":
+        actions.append({
+            "kind": "exit",
+            "label": "高位滞涨再减",
+            "condition": "布林触上轨且 KDJ 超买,再减仓 1/3",
+            "price": round(ep, 3),
+            "basis": [f"布林位置 {boll.get('position')}", f"KDJ {kdj.get('zone')}"],
+            "status": "now",
+        })
+
+    if ma5 is not None:
+        actions.append({
+            "kind": "exit",
+            "label": "移动止盈",
+            "condition": f"跌破 MA5 {ma5:.2f} 元清掉剩余仓位",
+            "price": round(ma5, 3),
+            "basis": [f"MA5 {ma5:.2f} 元"],
+            "status": "armed",
+        })
+
+    if channel == "up" and vp == "healthy_up" and bull_ma:
+        actions.append({
+            "kind": "watch",
+            "label": "让利润跑",
+            "condition": "放量价升且均线多头,持股不动等突破,不急卖",
+            "price": None,
+            "basis": [f"通道 {channel}", f"量价 {vp}", "均线多头排列"],
+            "status": "now",
+        })
+
+    stop = _f(pos.get("stop_loss_price"))
+    if stop is not None and ep < stop:
+        actions.append({
+            "kind": "stop",
+            "label": "止损",
+            "condition": f"跌破 {stop:.2f} 元无条件减仓",
+            "price": round(stop, 3),
+            "basis": [f"建议止损 {stop:.2f} 元"],
+            "status": "now",
+        })
+    return actions
+
+
+# ============================ 亏损处理 ============================
+
+def judge_loss_plan(ctx: DecisionContext) -> list[dict[str, Any]]:
+    """亏损了怎么办"""
+    ind = ctx.indicators
+    ep = effective_price(ctx)
+    if ep is None:
+        return []
+    pos = ind.get("position") or {}
+    channel = (ind.get("channel") or {}).get("state")
+    st = ind.get("stabilize") or {}
+    actions: list[dict[str, Any]] = []
+
+    stop = _f(pos.get("stop_loss_price"))
+    if stop is not None and ep < stop:
+        actions.append({
+            "kind": "stop",
+            "label": "无条件止损",
+            "condition": f"已跌破 {stop:.2f} 元,无条件止损,不要等回本",
+            "price": round(stop, 3),
+            "basis": [f"建议止损 {stop:.2f} 元(参考支撑 × 0.97)"],
+            "status": "now",
+        })
+
+    support = _f(pos.get("support_price"))
+    vp = (ind.get("volume_price") or {}).get("direction")
+    if support is not None and ep < support and vp == "panic_sell":
+        actions.append({
+            "kind": "exit",
+            "label": "破位减仓",
+            "condition": f"跌破 {support:.2f} 元且量增价跌(主力出货),减仓而不是补仓",
+            "price": round(support, 3),
+            "basis": [f"参考支撑 {support:.2f} 元", f"量价 {vp}"],
+            "status": "now",
+        })
+
+    # L4 补仓摊薄
+    market_state = (ctx.env.market or {}).get("state")
+    reasons: list[str] = []
+    if channel == "down":
+        reasons.append("下跌通道(趋势未破条件不成立)")
+    if not bool(st.get("state")):
+        reasons.append("尚无企稳信号")
+    if market_state == "cold":
+        reasons.append("大盘偏冷")
+    shares = ctx.shares
+    cost = _f(ctx.cost_basis)
+    if shares > 0 and cost is not None and cost > 0:
+        add_shares = round(shares * ADD_SHARE_RATIO)
+        if add_shares > 0:
+            new_cost = (shares * cost + add_shares * ep) / (shares + add_shares)
+            actions.append({
+                "kind": "add",
+                "label": "补仓摊薄",
+                "condition": (
+                    f"趋势未破且企稳,可补 {add_shares} 股摊薄成本到 {new_cost:.2f} 元"
+                    if not reasons
+                    else f"暂不补仓({';'.join(reasons)})"
+                ),
+                "price": round(ep, 3),
+                "basis": [
+                    f"持仓 {shares} 股 @ 成本 {cost:.2f} 元",
+                    f"补 {add_shares} 股后均价 {new_cost:.2f} 元",
+                ],
+                "status": "now" if not reasons else "blocked",
+            })
+    return actions
+
+
+# ============================ 别动清单 ============================
+
+def judge_do_not(ctx: DecisionContext) -> list[str]:
+    """什么情况别动"""
+    ind = ctx.indicators
+    out: list[str] = []
+    ep = effective_price(ctx)
+
+    if (ind.get("liar") or {}).get("bull_liars"):
+        out.append("出现诱多信号时不要加仓")
+
+    prev = _f(ctx.prev_close)
+    if ep is not None and prev is not None and prev > 0:
+        chg = (ep - prev) / prev * 100
+        if chg >= NEAR_LIMIT_UP_PCT:
+            out.append("涨停或接近涨停时不要追高")
+
+    m = ctx.env.market or {}
+    up_total = m.get("up_total")
+    down_total = m.get("down_total")
+    if (
+        isinstance(up_total, int)
+        and isinstance(down_total, int)
+        and up_total > 0
+        and down_total > up_total * MARKET_COLD_RATIO
+    ):
+        out.append(f"大盘普跌(跌 {down_total} 家多于涨 {up_total} 家 1.5 倍)时不要加仓")
+
+    kline_count = (ind.get("data_quality") or {}).get("kline_count") or 0
+    if kline_count < MIN_KLINES_FOR_SIGNAL:
+        out.append(f"K 线不足 {MIN_KLINES_FOR_SIGNAL} 根,指标不可靠,先别动手")
+
+    if (ind.get("channel") or {}).get("state") == "down":
+        out.append("下跌通道中不要抄底")
+
+    last_vol = ctx.klines[-1].get("volume") if ctx.klines else None
+    if not last_vol or int(last_vol) <= 0:
+        out.append("今日无成交,无法判断")
+
+    return out
+
+
+# ============================ 结论组装 ============================
+
+_VERDICT_BY_KIND = {"stop": "sell", "exit": "reduce", "entry": "buy", "add": "add"}
+
+
+def derive_verdict(actions: list[dict[str, Any]], position_status: str) -> str:
+    """actions → 单一结论"""
+    now_kinds = {a["kind"] for a in actions if a.get("status") == "now"}
+    for kind in ("stop", "exit", "entry", "add"):
+        if kind in now_kinds:
+            return _VERDICT_BY_KIND[kind]
+    if position_status in ("profit", "loss"):
+        return "hold"
+    return "wait"
+
+
+def _headline(
+    ctx: DecisionContext,
+    verdict: str,
+    actions: list[dict[str, Any]],
+    position_status: str,
+) -> str:
+    """一句话结论(白话,带具体数字)"""
+    ep = effective_price(ctx)
+    price_txt = f"现价 {ep:.2f} 元" if ep is not None else "现价未知"
+    now = [a for a in actions if a.get("status") == "now"]
+    armed = [a for a in actions if a.get("status") == "armed"]
+
+    if verdict == "sell" and now:
+        return f"{price_txt},{now[0]['label']}:{now[0]['condition']}"
+    if verdict == "reduce" and now:
+        return f"{price_txt},{now[0]['label']}:{now[0]['condition']}"
+    if verdict == "buy" and now:
+        return f"{price_txt},{now[0]['label']}:{now[0]['condition']}"
+    if verdict == "add" and now:
+        return f"{price_txt},{now[0]['label']}:{now[0]['condition']}"
+    if armed:
+        return f"{price_txt},等触发:{armed[0]['condition']}"
+    if position_status == "profit":
+        return f"{price_txt},暂无止盈触发条件,持股观察"
+    if position_status == "loss":
+        return f"{price_txt},等解套信号,未到止损位"
+    return f"{price_txt},暂不满足建仓条件,继续观察"
+
+
+def build_decision(ctx: DecisionContext) -> dict[str, Any]:
+    """组装完整决策(纯函数)"""
+    ind = ctx.indicators
+    ep = effective_price(ctx)
+    degraded: list[str] = list(ctx.env.degraded or [])
+    if ctx.current_price is None and ep is not None:
+        degraded.append(f"实时价不可用,按最新收盘价 {ep} 计算")
+
+    trend = judge_trend(ctx)
+    t_plan = judge_t_plan(ctx)
+
+    if ctx.position_status == "empty":
+        actions = judge_entry(ctx)
+    elif ctx.position_status == "profit":
+        actions = judge_exit(ctx)
+    else:
+        actions = judge_loss_plan(ctx)
+
+    verdict = derive_verdict(actions, ctx.position_status)
+    role = {"empty": "建仓参考", "profit": "止盈参考", "loss": "解套参考"}[ctx.position_status]
+
+    # 仓位建议
+    pos = ind.get("position") or {}
+    signal = ind.get("signal") or {}
+    score = _f(signal.get("score"))
+    base = 20
+    if score is not None:
+        for upper, pct in POSITION_TIERS:
+            if score < upper:
+                base = pct
+                break
+    if pos.get("risk_band") == "low":
+        base = min(base + 10, 30)
+    ma20 = _f((ind.get("ma") or {}).get("ma20"))
+    add_to = min(base * 2, POSITION_ADD_CAP)
+    if ctx.position_status == "empty":
+        position_pct = f"首仓 {base}%"
+        if ma20 is not None:
+            position_pct += f",站稳 MA20 {ma20:.2f} 元后加至 {add_to}%"
+    elif ctx.position_status == "profit":
+        position_pct = "分批止盈,每次减 1/3,保留底仓 ≥50%"
+    else:
+        position_pct = f"解套优先,减仓不追补;确需补仓时单次不超过 {add_to}%"
+
+    # 止损(文案归位到顶层:设计文档 §6.2)
+    stop_loss = None
+    stop_price = _f(pos.get("stop_loss_price"))
+    support = _f(pos.get("support_price"))
+    if stop_price is not None:
+        stop_loss = {
+            "price": round(stop_price, 3),
+            "basis": (
+                f"参考支撑 {support:.2f} 元 × 0.97,跌破 {stop_price:.2f} 元即止损"
+                if support is not None
+                else f"跌破 {stop_price:.2f} 元即止损"
+            ),
+        }
+
+    # 置信度
+    conf = signal.get("confidence") or "medium"
+    if degraded and conf == "high":
+        conf = "medium"
+
+    market_env = {
+        "market": ctx.env.market or {},
+        "sector": ctx.env.sector or {},
+        "stock_flow": ctx.env.stock_flow or {},
+        "relative": ctx.env.relative or {},
+        "degraded": list(ctx.env.degraded or []),
+    }
+
+    headline = _headline(ctx, verdict, actions, ctx.position_status)
+    if ctx.position_status == "empty":
+        # 设计文档 §6.2 空仓特例:做 T 前需先建仓
+        headline += ";当前无底仓,做 T 前需先建仓"
+
+    return {
+        "stock_code": ctx.stock_code,
+        "stock_name": ctx.stock_name,
+        "verdict": verdict,
+        "headline": headline,
+        "confidence": conf,
+        "role": role,
+        "position_status": ctx.position_status,
+        "actions": actions,
+        "stop_loss": stop_loss,
+        "position_pct": position_pct,
+        "do_not": judge_do_not(ctx),
+        "t_plan": t_plan,
+        "trend_state": trend,
+        "market_env": market_env,
+        "data_quality": {"degraded": degraded},
     }
