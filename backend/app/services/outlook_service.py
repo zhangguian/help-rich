@@ -4,7 +4,7 @@
 
 **定位**:纪律锚点,不是预测器。
 四维度规则打分 → 偏多/震荡/偏空 + 关键位。所有数字取自真实数据源
-→(上证指数日K / 涨跌家数 / 板块资金流),或对其显式四则运算。
+(上证指数日K / 涨跌家数 / 板块资金流),或对其显式四则运算。
 
 **铁律**:
 - 文案只写「倾向」,禁写「必涨/必跌/一定」;disclaimer 必含「非预测」。
@@ -119,25 +119,39 @@ def _ma_dim(closes: list[float]) -> dict[str, Any]:
 
 
 def _flow_dim(sector_flows: list[dict] | None) -> dict[str, Any]:
-    """板块资金(真实板块资金流,非估算)"""
+    """板块资金(真实板块资金流,非估算)
+
+    判定按**净流入总额符号**,不是「有无正流入」——
+    「有正有负」蕴含「存在正流入」,按有无判定会让偏多与中性两档互相排斥。
+    总额: >0 偏多 / <0 偏空 / ==0 中性。
+    """
     if not sector_flows:
         return _dim("flow", "板块资金", 0, "missing", "板块资金流数据不可用")
-    positives: list[tuple[float, str]] = []
+    total = 0.0
+    top: tuple[float, str] | None = None
     for f in sector_flows:
         if not isinstance(f, dict):
             continue
         net = _f(f.get("netamount_yi"))
-        if net is not None and net > 0:
-            positives.append((net, str(f.get("name") or "")))
-    if positives:
-        positives.sort(key=lambda x: x[0], reverse=True)
-        top = positives[0]
+        if net is None:
+            continue
+        total += net
+        if net > 0 and (top is None or net > top[0]):
+            top = (net, str(f.get("name") or ""))
+    if total > 0:
         score = 1
-        detail = f"资金主攻 {top[1]} 净流入 {top[0]:.2f} 亿"
-    else:
+        detail = (
+            f"板块资金净流入合计 {total:.2f} 亿,主攻 {top[1]} {top[0]:.2f} 亿"
+            if top else f"板块资金净流入合计 {total:.2f} 亿"
+        )
+    elif total < 0:
         score = -1
-        detail = "板块资金全线净流出,无主攻方向"
-    return _dim("flow", "板块资金", score, "bull" if score > 0 else "bear", detail)
+        detail = f"板块资金净流出合计 {total:.2f} 亿,无主攻方向"
+    else:
+        score = 0
+        detail = "板块资金多空抵消,无明确主攻方向"
+    state = "bull" if score > 0 else ("bear" if score < 0 else "flat")
+    return _dim("flow", "板块资金", score, state, detail)
 
 
 # ============================ 关键位 ============================

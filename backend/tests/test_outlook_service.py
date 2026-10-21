@@ -108,7 +108,8 @@ def test_ma_missing_when_klines_lt_11():
 
 # ---------------- 板块资金维度 ----------------
 
-def test_flow_bull_when_any_positive_sector():
+def test_flow_bull_when_net_total_positive():
+    """净流入总额为正(+3.2 - 1.0 = +2.2)→ 偏多"""
     flows = [{"name": "电子元件", "netamount_yi": 3.2}, {"name": "煤炭", "netamount_yi": -1.0}]
     out = build_outlook(_klines([10.0] * 30), None, flows)
     assert _dim(out, "flow")["score"] == 1
@@ -121,6 +122,7 @@ def test_flow_bear_when_all_negative():
 
 
 def test_flow_neutral_when_mixed():
+    """净流入与净流出抵消(+1.0 - 1.0 = 0)→ 中性"""
     flows = [{"name": "电子元件", "netamount_yi": 1.0}, {"name": "煤炭", "netamount_yi": -1.0}]
     out = build_outlook(_klines([10.0] * 30), None, flows)
     assert _dim(out, "flow")["score"] == 0
@@ -151,8 +153,9 @@ def test_bullish_requires_at_least_2_effective_dims():
 
 
 def test_bullish_when_2_dims_and_score_ge_1():
-    closes = [10.0] * 30
-    volumes = [100.0] * 29 + [110.0]
+    # 10 根 K:均线维度因不足 11 根而 missing,有效维度恰为 2(量能 + 涨跌家数)
+    closes = [10.0] * 10
+    volumes = [100.0] * 9 + [110.0]
     out = build_outlook(_klines(closes, volumes), {"up_total": 60, "down_total": 40}, None)
     assert out["dims_effective"] == 2
     assert out["score"] == 2
