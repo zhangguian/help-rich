@@ -1,6 +1,7 @@
 """个股分析 API(v0.4-roadmap 功能2/3/4/5)
 
 - GET  /api/stock/{code}/analysis  指标 + AI 解读(LLM 失败 → ai=null 纯指标)
+- GET  /api/stock/{code}/decision  确定性决策卡(零 LLM,纯算法,秒出)
 - POST /api/stock/{code}/chat      操作问答(自动携带持仓成本)
 - POST /api/stock/{code}/chat/stream  操作问答流式版(SSE,打字机输出)
 """
@@ -25,6 +26,9 @@ from app.services.stock_advice_service import (
     stream_stock_analysis,
 )
 from app.services.industry_service import resolve_industry
+from app.services.decision_service import DecisionContext, MarketContext, build_decision
+from app.services.market_context_service import get_market_context
+from app.services.ta_service import compute_indicators
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +158,81 @@ def _check_question(question: str) -> str:
     return q
 
 
+@router.get("/{code}/decision")
+async def decision(code: str) -> dict:
+    """确定性决策卡(零 LLM):现在该做什么 + 价位 + 触发条件 + 止损 + 别动清单
+
+    与 /analysis 的分工:
+    - /decision  **纯算法**,秒出、无费用、无 LLM 依赖,回答「该买/该卖/做T/走势/市场情况」
+    - /analysis  LLM 白话解读(可选),是 /decision 的解释层
+
+    任何一个数据源失败都只降级对应项(字段为 null + data_quality.degraded),
+    只有 K 线完全不可用才返回 502。
+    """
+    await _check_code(code)
+    klines, quote = await asyncio.gather(
+        _load_klines(code),
+        _load_quote(code),
+    )
+    current_price, _ = _sanitize_current_price(quote, klines)
+    position = await get_position(code)
+    position_status, _ = _resolve_position_status(position, current_price)
+
+    try:
+        indicators = compute_indicators(klines)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "DATA_SOURCE_UNAVAILABLE", "message": f"K 线指标计算失败: {e}"},
+        ) from e
+
+    prev_close = None
+    if quote is not None:
+        try:
+            prev_close = float(quote.prev_close) if quote.prev_close is not None else None
+        except (TypeError, ValueError):
+            prev_close = None
+    if prev_close is None and len(klines) >= 2:
+        try:
+            prev_close = float(klines[-2]["close"])
+        except (TypeError, ValueError):
+            prev_close = None
+
+    change_pct = None
+    if quote is not None and quote.change_pct is not None:
+        try:
+            change_pct = float(quote.change_pct)
+        except (TypeError, ValueError):
+            change_pct = None
+
+    try:
+        env = await get_market_context(code, stock_change_pct=change_pct)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("决策端点市场环境聚合失败(%s): %s", code, e)
+        env = None
+    if env is None:
+        env = MarketContext(degraded=["市场环境不可用"])
+
+    ctx = DecisionContext(
+        stock_code=code,
+        stock_name=getattr(position, "stock_name", None) if position is not None else None,
+        indicators=indicators,
+        klines=klines,
+        current_price=float(current_price) if current_price is not None else None,
+        prev_close=prev_close,
+        # 空仓时 Position.avg_cost 是 Decimal("0"),语义上不等于"有成本",给 None
+        cost_basis=(
+            float(position.avg_cost)
+            if position is not None and position.shares and position.shares > 0
+            else None
+        ),
+        shares=int(position.shares) if position is not None and position.shares else 0,
+        position_status=position_status,
+        env=env,
+    )
+    return {"decision": build_decision(ctx)}
+
+
 @router.get("/{code}/analysis")
 async def analysis(code: str, force: bool = False) -> dict:
     """指标 + AI 解读;AI 不可用自动降级纯指标(200 返回,ai=null)
@@ -243,7 +322,7 @@ async def industry(code: str) -> dict:
 
 async def _sse_event(payload: dict) -> bytes:
     """SSE 单事件编码:data: <json>\\n\\n"""
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
 
 
 @router.get("/{code}/analysis/stream")
