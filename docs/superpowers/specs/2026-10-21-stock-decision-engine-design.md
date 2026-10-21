@@ -592,6 +592,10 @@ fund_direction= 'in'  if fund_net_yi > 0 / 'out' if < 0 / None if 无
 
 leading       = 排行中 netamount_yi 为正的前 3 个板块 [{name, net_yi}]
                 （该口径**恒可用**,回答「今天钱在往哪走」,不依赖行业名匹配）
+                ⚠️ 单位:`netamount_yi` / `inamount_yi` / `outamount_yi` 的新浪原始值是**元**,
+                由 `sector_fund_flow_service` 在源头换算成**亿**;`turnover_yi` 原始就是亿。
+                （2026-10-21 修正:此前三个字段原样透传元值却叫 `_yi`，
+                导致下游把 51.46 亿显示成 5146220275.88 亿、「≥1 亿」阈值恒成立。）
 
 state:
   change_pct > 1   → 'leading'
