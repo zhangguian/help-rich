@@ -278,3 +278,69 @@ def test_market_snapshot_handles_string_amount():
     snap = build_market_snapshot(ks, "2026-10-21")
     assert snap["volume_note"] == "成交额 356 亿"
     assert snap["change_pct"] is None         # 没有前收 → 不编造涨跌幅
+
+
+# ---------------- 回填项 (d)(e)(2026-10-22 阶段 9 收尾) ----------------
+
+def test_flow_missing_when_netamount_is_inf():
+    """(d) ±inf 必须被 _f 滤掉
+
+    修复前 `_f` 只滤 NaN(`f == f`),±inf 会通过 → `[inf, -inf]` 求和得 NaN →
+    落进 flat 档对外宣称「多空抵消,无明确主攻方向」——
+    **数据已损坏却宣称中性**,属误导性结论。
+    """
+    flows = [{"name": "A", "netamount_yi": float("inf")},
+             {"name": "B", "netamount_yi": float("-inf")}]
+    out = build_outlook(_klines([10.0] * 30), None, flows)
+    d = _dim(out, "flow")
+    assert d["state"] == "missing"
+    assert d["score"] == 0
+    assert "抵消" not in d["detail"]          # 不许宣称中性
+
+
+def test_flow_ignores_inf_entries_and_keeps_valid_ones():
+    """(d) inf 条目被丢弃,其余有效条目照常参与合计(不许整档作废)"""
+    flows = [{"name": "A", "netamount_yi": float("inf")},
+             {"name": "B", "netamount_yi": 2.0}]
+    out = build_outlook(_klines([10.0] * 30), None, flows)
+    d = _dim(out, "flow")
+    assert d["score"] == 1
+    assert d["state"] == "bull"
+    assert "2.00 亿" in d["detail"]
+
+
+def test_flow_detail_uses_wan_when_total_below_0_01_yi():
+    """(e) 净额 0.004 亿(40 万)→ 改用「万元」表述,不许出现「0.00 亿」
+
+    真实 `netamount_yi` 是新浪原始元/1e8 的全精度 float,残差可达几十万元级;
+    2 位小数会把它渲染成「0.00 亿」——把「几乎没有资金流」说成「零」。
+    """
+    flows = [{"name": "A", "netamount_yi": 0.004}]
+    out = build_outlook(_klines([10.0] * 30), None, flows)
+    detail = _dim(out, "flow")["detail"]
+    assert "0.00 亿" not in detail
+    assert "40 万元" in detail
+
+
+def test_flow_detail_uses_wan_for_main_sector_too():
+    """(e) 主攻板块那一处也走同一个 helper(同族漏网:total 与 top[0] 两个数)"""
+    flows = [{"name": "电子元件", "netamount_yi": 0.004}]
+    out = build_outlook(_klines([10.0] * 30), None, flows)
+    detail = _dim(out, "flow")["detail"]
+    assert detail.count("0.00 亿") == 0
+    assert detail.count("40 万元") == 2      # 合计 + 主攻
+
+
+def test_market_snapshot_volume_note_not_zero_for_50m():
+    """(e) 成交额 5000 万不得渲染成「成交额 0 亿」(数值直接消失)"""
+    ks = [{"date": "2026-10-21", "close": "3030.0", "amount": 5e7}]
+    snap = build_market_snapshot(ks, "2026-10-21")
+    assert snap["volume_note"] == "成交额 0.50 亿"
+
+
+def test_market_snapshot_volume_note_none_when_amount_is_inf():
+    """(d) amount 为 ±inf → 如实留空,不许渲染出「成交额 inf 亿」"""
+    ks = [{"date": "2026-10-21", "close": "3030.0", "amount": float("inf")}]
+    snap = build_market_snapshot(ks, "2026-10-21")
+    assert snap["volume_note"] is None
+    assert snap["index_close"] == 3030.0

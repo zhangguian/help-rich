@@ -14,7 +14,9 @@
   `test_stock_advice.py` 1 处 from-import + 4 处调用
 - `backend/app/api/diagnose.py` 6 处:3 个 import 名 + 3 处调用引用
 
-(计数口径 = 代码里的名字引用数,不含测试函数名与文档里的文字提及)
+(计数口径 = 代码里的名字引用数,不含测试函数名与文档里的文字提及;
+**范围** = 测试与 `diagnose.py` 的引用,不含 `api/stock.py` 自身那 3 行 import
+与 11 处调用 —— 那是「本模块被谁依赖」,不是「谁依赖本模块」)
 """
 
 from __future__ import annotations
@@ -53,7 +55,8 @@ def resolve_position_status(
     **参数契约(调用方必须满足,不满足则直接抛异常)**:
     `position` 须为含 `.shares` 与 `.avg_cost` **属性**的对象(不接 dict);
     传 dict 需先转换 —— 否则 `AttributeError: 'dict' object has no attribute 'shares'`。
-    `shares` 须为 int —— 传字符串会抛 `TypeError: '<=' not supported between
+    `shares` 须为**数值**(int / float / bool / Decimal 实测均可,比较运算成立即通过)
+    —— 传字符串会抛 `TypeError: '<=' not supported between
     instances of 'str' and 'int'`。(这两处判定都在 try 之外,不会被兜底分支吞掉)
     `avg_cost` 则允许数字字符串(会被 `float()` 正常转换,故不抛异常)。
 

@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 # ---- 规则参数(先定死;后续回测校准只能改参数,不得事后调门槛美化结论) ----
@@ -30,13 +31,39 @@ FLOW_TOTAL_EPS = 1e-9           # 板块资金净额归零阈值(浮点零和保
 
 
 def _f(v: Any) -> float | None:
+    """转 float;NaN 与 ±inf 一律丢弃(返回 None)
+
+    ⚠️ 为什么连 ±inf 一起滤(2026-10-22 回填):
+    原来只滤 NaN(`f == f`),±inf 会通过 → `[inf, -inf]` 求和得 NaN →
+    板块资金维度落进 flat 档,对外宣称「多空抵消,无明确主攻方向」——
+    **数据已损坏却宣称中性**,属误导性结论。
+    ±inf 同样会让 `build_market_snapshot` 渲染出「成交额 inf 亿」。
+    """
     try:
         if v is None:
             return None
         f = float(v)
-        return f if f == f else None
+        return f if math.isfinite(f) else None
     except (TypeError, ValueError):
         return None
+
+
+def _fmt_yi(v: float, decimals: int = 2) -> str:
+    """金额格式化(默认单位「亿」);|v| < 0.01 亿改用「万元」表述
+
+    ⚠️ 为什么不用纯 `f"{v:.2f} 亿"`(2026-10-22 回填):
+    1. 真实 `netamount_yi` 是新浪原始元/1e8 的**全精度 float**,残差可达几十万元级;
+       2 位小数会渲染成「0.00 亿」——把「几乎没有资金流」说成「零」,
+       还会和「多空抵消,无明确主攻方向」这种中性文案叠加,读者会以为数据已损坏。
+    2. 0 位小数更糟:5000 万(0.5 亿)会被渲染成「成交额 0 亿」——**数值直接消失**。
+
+    故此:小于 0.01 亿 → 万元;小于 1 亿但 >= 0.01 亿 → 至少 2 位小数(不许退化成 0)。
+    """
+    if abs(v) < 0.01:
+        return f"{v * 1e4:.0f} 万元"
+    if abs(v) < 1:
+        decimals = max(decimals, 2)
+    return f"{v:.{decimals}f} 亿"
 
 
 def _ma(closes: list[float], n: int) -> float | None:
@@ -155,10 +182,10 @@ def _flow_dim(sector_flows: list[dict] | None) -> dict[str, Any]:
     if total > 0:
         # total > 0 必然蕴含至少一个 net > 0,故此处 top 一定非 None(无需 None 兜底分支)
         score = 1
-        detail = f"板块资金净流入合计 {total:.2f} 亿,主攻 {top[1]} {top[0]:.2f} 亿"
+        detail = f"板块资金净流入合计 {_fmt_yi(total)},主攻 {top[1]} {_fmt_yi(top[0])}"
     elif total < 0:
         score = -1
-        detail = f"板块资金净流出合计 {abs(total):.2f} 亿,无主攻方向"
+        detail = f"板块资金净流出合计 {_fmt_yi(abs(total))},无主攻方向"
     else:
         score = 0
         detail = "板块资金多空抵消,无明确主攻方向"
@@ -295,7 +322,7 @@ def build_market_snapshot(klines: list[dict] | None, target_date: str) -> dict[s
     volume_note = None
     amount = _f(bars[idx].get("amount"))
     if amount is not None and amount > 0:
-        volume_note = f"成交额 {amount / 1e8:.0f} 亿"
+        volume_note = f"成交额 {_fmt_yi(amount / 1e8, decimals=0)}"
     return {
         "index_close": round(close, 2),
         "change_pct": round(change_pct, 2) if change_pct is not None else None,

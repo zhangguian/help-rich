@@ -221,3 +221,55 @@ v3 补的就是这层翻译,而且**必须满足三个约束**:
 该配置下 entry 信号只剩 53 条（按 §10.2「不足则结论无效」），
 却会把线上建仓触发率从 4.28% 压到 0.71%。
 旋钮保留在 `backend/app/services/decision_backtest.py:EntryRule`，等扩样本后再复验。
+
+---
+
+## 九、与阶段 9「作战计划」的口径一致性
+
+阶段 9 的明日预期与本卡的七问**共用同一套数字来源**（indicators / 报价 / 持仓），
+因此两处结论必须一致。已核对：
+
+| 场景 | 决策卡 | 作战计划 | 一致性要求 |
+| --- | --- | --- | --- |
+| 同一只票的建仓触发价 | `action.price` | `item.trigger_price` | 必须**逐位相同**（预案直接继承决策引擎算好的价） |
+| 止损价 | `stop_loss.price` | `stop` 项的 `trigger_price` | 同上 |
+| 大盘涨跌家数 | `market_env.market.up_total/down_total` | 明日预期的涨跌家数维度 | 同源同值 |
+| 降级标注 | `data_quality.degraded` | `meta.degraded_reason` | 口径一致，**不得**一处标降级另一处不标 |
+
+**原则**：作战计划**不重新计算**任何价格，只把决策引擎已算好的结论转成「明天什么价位做什么」。
+若两处出现不一致，说明转换层引入了新的计算 —— 这违反「价格必须来自 indicators/报价/持仓或其显式四则运算」铁律，必须回改转换层。
+
+**2026-10-22 实测核对结论**（真机跑一遍生成，plan_date=2026-10-22）：
+
+| 核对项 | 结果 |
+| --- | --- |
+| `watch` / `unlock` / `exit` 项的 `trigger_price` vs 决策卡 `action.price` | 抽查 5 条，**逐位相同** |
+| `stop` 项的 `trigger_price` vs 决策卡 `stop_loss.price` | 5 只持仓**逐位相同**（8.936 / 23.793 / 12.386 / 13.204 / 40.676） |
+| 涨跌家数同源 | 两处同为「上涨 1981 家 / 下跌 3363 家」 |
+| 降级口径 | `meta.degraded=false`、`outlook.degraded=false`、`review` 无降级标注 —— 三处一致 |
+
+### 本轮记录的实现细节与已知边界（不改代码，只记录）
+
+- **(f) `missing` 键的挂载位置**：决策层的 `missing` 键目前挂在 C3 的共用 `_guard({...})` 上，
+  故 C3 的 armed/now 动作也带该键；转换层**只对 blocked 读它**，当前零影响。
+  将来若有别的消费方读 `missing`，必须按 `status == "blocked"` 过滤。
+- **(g) `diagnose.py` 的绕一跳（pre-existing 耦合，非阶段 9 引入）**：
+  `backend/app/api/diagnose.py` 仍绕一跳取 `position_status` 的私有名
+  （`_resolve_position_status` / `_kline_fallback_price` / `_sanitize_current_price`），
+  而非从 `app/services/position_status.py` 直接导入。本轮不改，仅在台账注明。
+- **(h) `battle_plan_service._load_transactions` 的 500 条上限（T6 评审发现）**：
+  该函数用 `list_all(limit=500)` 再按日期过滤 —— 当某日流水**超过 500 条**时会漏单，
+  漏掉的流水会让那笔操作被误判成「没执行」。
+  当前规模（单用户自选 ≤ 20 只）远不到 500，属**低概率已知边界**；
+  修法要动仓储层的分页/按日查询接口，超出阶段 9 范围，本轮不改，仅记录。
+- **(i) 兑现统计口径**：`summarize_fulfillment` 的 `total` = **所有预案条数**
+  （含 `n_a` 与 `no_data`），而 `executed + touched + missed` 不含它们 ——
+  两者**故意不相等**。前端必须把「不适用 N」与「数据不足 N」显式列出，
+  否则用户以为漏了几条。本轮已在 T8 的 ReviewCard 里补上这两项显示。
+  另注：`no_data`（数据不足）是**独立第三态**，不是 `n_a`（不适用）的别名 ——
+  「未触发」≠「没数据」。
+- **(j) 纪律 note 用半角标点（展示层，不改）**：
+  `"⚠️ 纪律问题:昨日标记别动/未解锁,今日仍有操作"` 用半角冒号 + 半角逗号，
+  与本项目其余中文文案的「全角标点」风格不一致。
+  属展示层，不改 —— 改了会让 `summarize_fulfillment` 里 `"纪律问题" in note`
+  的判定依赖具体文案，徒增耦合。
