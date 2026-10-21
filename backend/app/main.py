@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.admin import router as admin_router
 from app.api.annual_report import router as annual_report_router
 from app.api.backtest import router as backtest_router
+from app.api.battle_plan import router as battle_plan_router
 from app.api.calculator import router as calculator_router
 from app.api.accounts import router as accounts_router
 from app.modules.analysis.api import router as multi_agent_router
@@ -232,6 +233,7 @@ app.include_router(calculator_router, prefix="/api")
 app.include_router(notify_router, prefix="/api")
 app.include_router(price_alerts_router, prefix="/api")
 app.include_router(backtest_router, prefix="/api")
+app.include_router(battle_plan_router, prefix="/api")
 app.include_router(paper_trading_router, prefix="/api")
 app.include_router(multi_agent_router, prefix="/api")
 app.include_router(workflow_router, prefix="/api")
