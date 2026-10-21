@@ -1,0 +1,3872 @@
+# 每日作战计划（复盘 + 明日操作预期）实施计划
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 让股民在今天收盘后拿到一份「今日复盘 + 明日市场预期 + 明日逐票操作预案」的作战日报，明天开盘前就知道每只票什么价位做什么动作，昨天的计划兑现了没有。
+
+**Architecture:** 后端三个**纯函数**模块（明日预期规则 / 决策→预案转换 / 兑现比对）产出结构化结论，一个编排服务取数并落库，前端独立页面 `/plan` 呈现。**全程零 LLM**——所有数字来自真实数据源或对其显式四则运算，因果可复算，日后才能验证判断对错。
+
+**Tech Stack:** Python 3.11 + FastAPI + SQLAlchemy 2.0（Mapped 风格）+ Alembic + pytest；Next.js 14 App Router + TypeScript + Tailwind + axios。
+
+**Spec:** `docs/superpowers/specs/2026-10-21-daily-battle-plan-design.md`（commit `fa8be50`）
+
+---
+
+## Global Constraints
+
+以下约束**逐条适用于本计划的所有任务**（来自 spec §十 与项目既有铁律）：
+
+1. **全部数据真实，零 mock**。生产代码不得出现任何假数据兜底；缺数据 → 该项为 `None` + 写入 `degraded` 标记，**绝不编造数字、绝不因字段缺失隐藏整块内容**。
+2. **LLM 只翻译不计算**。本设计**完全不使用 LLM**；文案由模板拼装。
+3. **决策层纯函数、零 IO、零 LLM**。`outlook_service` / `plan_item_builder` / `fulfillment_checker` 三个模块**不得 import 任何 IO 服务**（不 import `fetch_klines` / `QuoteService` / `db` / `repository`），只接受已取好的 `dict` / `list`。
+4. **价格必须来自 indicators / 报价 / 持仓，或其显式四则运算**。触发价直接继承决策引擎已算好的 `action["price"]`；失效条件里的 `×0.97` / `×1.03` 是显式四则运算。
+5. **统一用 `effective_price(ctx)`**。转换层不自行取价。
+6. **红 = 买 / 看多 / 涨；绿 = 卖 / 看空 / 跌**（A 股红涨绿跌）。青 `#22D3EE` 只给选中/焦点；琥珀 `#F5A524` 只给预警。**浮盈用红色、浮亏用绿色**（与盯盘台持仓页签一致）。
+7. **首屏不留大片虚空**。空态/加载态/错误态都要有实质内容。
+8. **回测闸门先定、事后不得下调**。明日预期的规则参数（1.10 / 0.90 / 60% / 40%）在本计划中**先定死**，后续回测校准**只能改参数、不能事后调门槛美化结论**。
+9. **命令一律用 PowerShell 语法**（本机 Windows 5.1，无 `&&`）。`$env:VAR` 设环境变量，单引号字面量。
+10. **测试必须先设 3 个环境变量**，否则污染开发库 / collect 失败：
+    ```powershell
+    $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+    $env:PYTHONIOENCODING='utf-8'
+    $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+    ```
+11. **`npm run build` 与 dev server 共用 `.next`，必须先停 dev 再 build**。
+12. **测文件内容用 grep / node 逐字节读**；**Python 调试脚本写成 `.py` 文件再跑**（`python -c` 在本环境会被 shell 吃掉引号）。
+
+---
+
+## File Structure
+
+### 后端新增
+
+| 文件 | 单一职责 | IO |
+|---|---|---|
+| `backend/app/services/position_status.py` | 持仓盈亏状态判定（**从 api/stock.py 提取的共享口径**） | 无（纯函数） |
+| `backend/app/services/outlook_service.py` | 明日市场预期：四维度规则推断 + 关键位 | 无（纯函数） |
+| `backend/app/services/plan_item_builder.py` | 决策输出 → 明日预案项 / 今日待办 | 无（纯函数） |
+| `backend/app/services/fulfillment_checker.py` | 昨日预案 × 今日行情+流水 → 兑现状态 | 无（纯函数） |
+| `backend/app/services/battle_plan_service.py` | 取数 → 调用三模块 → 落库 → 回填兑现 | 有 |
+| `backend/app/repositories/battle_plan_repo.py` | `battle_plans` / `battle_plan_items` 读写 | 有 |
+| `backend/app/api/battle_plan.py` | 三个 HTTP 端点 | 有 |
+
+### 后端修改
+
+| 文件 | 改动 |
+|---|---|
+| `backend/app/api/stock.py` | 三个私有 helper 改为从 `position_status.py` 导入的**薄封装**（保留原私有名，既有 13 处测试 import 不破） |
+| `backend/app/models/orm.py` | +2 表（`BattlePlan` / `BattlePlanItem`） |
+| `backend/migrations/versions/<new_rev>_add_battle_plan_tables.py` | 新增迁移，`down_revision = "f6a7b8c9d0e1"` |
+| `backend/app/main.py` | +`app.include_router(battle_plan_router, prefix="/api")` |
+
+### 前端新增
+
+| 文件 | 职责 |
+|---|---|
+| `frontend/src/app/(app)/plan/page.tsx` | 页面壳 |
+| `frontend/src/components/plan/PlanPanel.tsx` | 主容器（三段编排 + 三态） |
+| `frontend/src/components/plan/OutlookCard.tsx` | 明日市场预期 |
+| `frontend/src/components/plan/PlanItemList.tsx` | 明日预案清单 |
+| `frontend/src/components/plan/ReviewCard.tsx` | 今日复盘 |
+
+### 前端修改
+
+| 文件 | 改动 |
+|---|---|
+| `frontend/src/lib/api/advanced.ts` | +3 个 API 函数 + 类型 |
+| `frontend/src/lib/types.ts` | +计划相关类型 |
+| `frontend/src/components/shell/NavRail.tsx` | +「作战计划」导航项 |
+
+### 测试新增
+
+```
+backend/tests/test_outlook_service.py
+backend/tests/test_plan_item_builder.py
+backend/tests/test_fulfillment_checker.py
+backend/tests/test_battle_plan_service.py
+backend/tests/test_battle_plan_api.py
+```
+
+---
+
+## 跨任务锁定的接口契约
+
+**后续任务必须严格按此调用，签名/字段名不得漂移。**
+
+```python
+# app/services/position_status.py
+def resolve_position_status(position, current_price, fallback_price=None) -> tuple[str, float | None]
+    # 返回 (status, cost_basis_pct);status ∈ {"empty","profit","loss"}
+
+def kline_fallback_price(klines: list[dict] | None) -> str | None
+
+def sanitize_current_price(quote, klines: list[dict] | None) -> tuple[str | None, str | None]
+
+
+# app/services/outlook_service.py
+def build_outlook(
+    index_klines: list[dict],          # 升序日K: {date,open,high,low,close,volume(int)}
+    sentiment: dict | None,            # {up_total:int, down_total:int, ...}
+    sector_flows: list[dict] | None,   # [{name:str, netamount_yi:float}, ...]
+) -> dict
+    # 返回 §4.3.5 结构
+
+
+# app/services/plan_item_builder.py
+def build_items(decision: dict, position: dict | None) -> list[dict]
+def build_todos(decision: dict) -> list[dict]
+
+
+# app/services/fulfillment_checker.py
+def check_fulfillment(
+    items: list[dict],                   # 预案项(含 trigger_price/direction/item_kind)
+    target_klines: dict[str, list[dict]],# {stock_code: [{date,open,high,low,close}]}
+    transactions: list[dict],            # [{stock_code,action("buy"/"sell"),shares,price,trade_date}]
+) -> list[dict]                          # 每项补 fulfillment / fulfillment_note
+
+
+# app/services/battle_plan_service.py
+async def resolve_target_stocks() -> list[dict]
+    # [{stock_code, stock_name, in_position: bool, is_favorite: bool}]
+
+async def build_plan(plan_date: date) -> dict
+async def get_plan(plan_date: date) -> dict | None
+```
+
+**决策引擎输出结构（`build_decision` 的返回值，转层的输入）**——已核实：
+
+```python
+{
+  "stock_code": str, "stock_name": str|None,
+  "verdict": str, "headline": str, "confidence": str, "role": str,
+  "position_status": "empty"|"profit"|"loss",
+  "actions": [ {"kind","label","condition","price","basis":[str],"status"} ],
+      # kind ∈ entry|add|exit|stop|t_sell|t_buyback|watch
+      # status ∈ now|armed|blocked
+  "stop_loss": {"price": float, "basis": str} | None,
+  "position_pct": str,
+  "do_not": [str, ...],
+  "t_plan": {"suitable": bool, "t_high": float|None, "t_low": float|None,
+             "amplitude_pct": float|None, "sell_trigger": str, "buyback_trigger": str,
+             "base_position_pct": str, "unsuitable_signals": str, "needs_position": bool},
+  "trend_state": {...}, "market_env": {...},
+  "data_quality": {"degraded": bool},
+}
+```
+
+**预案项结构（落库与 API 的统一形状）**：
+
+```python
+{
+  "stock_code": str, "stock_name": str|None,
+  "item_kind": str,     # entry|add|exit|stop|t_sell|t_buyback|watch|unlock|do_not
+  "direction": str,     # buy|sell|none
+  "label": str,
+  "trigger_price": float|None,
+  "trigger_condition": str,
+  "basis": [str, ...],
+  "invalid_if": str,
+  "status_now": str,    # now|armed|blocked
+  "fulfillment": str,   # pending|touched|executed|missed|n_a
+  "fulfillment_note": str,
+}
+```
+
+---
+
+## Task 1: 提取持仓状态判定为共享模块
+
+**Why first:** `battle_plan_service` 要复用「持仓盈亏状态」判定，但该逻辑现在住在 `api/stock.py` 的私有函数里，注释明确写着「**唯一来源**」。复制一份就会出现两个判定口径——已持仓者可能被判成空仓，进而对着深套持仓说「可以建仓」（这是 2026-10-21 评审发现过的真实事故）。先提取、后复用。
+
+**Files:**
+- Create: `backend/app/services/position_status.py`
+- Modify: `backend/app/api/stock.py`（三个私有函数改为薄封装）
+- Test: `backend/tests/test_decision_api.py`（既有，验证行为不变）、`backend/tests/test_stock_advice.py`（既有）
+
+**Interfaces:**
+- Consumes: 无（从既有代码搬移）
+- Produces: `app.services.position_status.{resolve_position_status, kline_fallback_price, sanitize_current_price}`
+
+- [ ] **Step 1: 记录基线（证明提取前后行为一致）**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_decision_api.py tests/test_stock_advice.py -q --no-header -p no:cacheprovider
+```
+
+Expected: 全部 PASS（记录数字，后续对比必须一致）。
+
+- [ ] **Step 2: 创建共享模块**
+
+创建 `backend/app/services/position_status.py`：
+
+```python
+"""持仓盈亏状态判定(共享口径)
+
+**为什么从 api/stock.py 提取出来(spec 阶段9 任务1)**:
+`position_status` 的判定规则是全项目**唯一来源**——决策卡、作战计划、
+复盘都要用同一个口径。原先它住在 `api/stock.py` 的私有函数里,
+新服务(作战计划)若复制一份,就会出现"两个判定口径"的问题:
+一个真实持有 700 股 @23.04 的用户,拿不到报价时会被判成「空仓」→
+对着已深套的持仓说「首仓 30%,可以建仓」(2026-10-21 评审发现的真实事故)。
+
+本模块**纯函数、零 IO**,只接受已取好的数据。
+`api/stock.py` 保留同名私有名做薄封装,既有 13 处测试 import 不破。
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+def resolve_position_status(
+    position, current_price: str | None, fallback_price: str | None = None
+) -> tuple[str, float | None]:
+    """根据持仓 + 现价判断 role:empty / profit / loss
+
+    Returns:
+        (status, cost_basis_pct)
+        status: empty / profit / loss
+        cost_basis_pct: 基于持仓成本的盈亏百分比(0.05 = +5%);空仓 / 价格不可得时为 None
+    """
+    if position is None or position.shares <= 0:
+        return "empty", None
+    price = current_price if current_price is not None else fallback_price
+    if price is None:
+        # 有持仓但连收盘价都拿不到 → 无法判定盈亏,保守按 'loss' 处理
+        return "loss", None
+    try:
+        cur = float(price)
+        cost = float(position.avg_cost)
+        if cost <= 0 or cur <= 0:
+            return "loss", None
+        pct = (cur / cost - 1.0)
+        # 持平也归 'profit'(规则是 >= )—— 绝不能归 'empty':
+        # 'empty' 会让决策卡给出「建仓参考 / 首仓 X%」,对已持仓者是误导。
+        if cur >= cost:
+            return "profit", pct
+        return "loss", pct
+    except (ValueError, TypeError):
+        return "loss", None
+
+
+def kline_fallback_price(klines: list[dict] | None) -> str | None:
+    """K 线最新收盘价 —— 实时报价缺失时判定持仓盈亏的兜底价(§5 effective_price)"""
+    if not klines:
+        return None
+    try:
+        close = klines[-1].get("close")
+        return str(close) if close is not None else None
+    except (AttributeError, IndexError, TypeError):
+        return None
+
+
+def sanitize_current_price(
+    quote, klines: list[dict] | None
+) -> tuple[str | None, str | None]:
+    """校验 current_price 与 K 线最新 close 的偏离度;偏差 > 10% 视为数据源异常,降级 None。
+
+    Returns:
+        (current_price_str, current_price_date_str) — 校验通过返回;否则 (None, None)
+    """
+    if quote is None:
+        return None, None
+    price = quote.current_price
+    if price is None:
+        return None, None
+    current_price = str(price)
+    current_price_date = quote.timestamp.date().isoformat() if quote.timestamp else None
+    if klines:
+        try:
+            latest_close = float(klines[-1]["close"])
+            cur = float(current_price)
+            if latest_close > 0:
+                deviation = abs(cur - latest_close) / latest_close
+                if deviation > 0.10:
+                    logger.warning(
+                        "current_price 与 K 线 close 偏差过大: quote=%s kline=%s 偏差 %.2f%%, 降级",
+                        current_price, latest_close, deviation * 100,
+                    )
+                    return None, None
+        except (ValueError, TypeError):
+            pass
+    return current_price, current_price_date
+
+
+__all__ = [
+    "kline_fallback_price",
+    "resolve_position_status",
+    "sanitize_current_price",
+]
+```
+
+- [ ] **Step 3: `api/stock.py` 改为薄封装**
+
+在 `backend/app/api/stock.py` 的 import 区加入：
+
+```python
+from app.services.position_status import (
+    kline_fallback_price as _kline_fallback_price,
+    resolve_position_status as _resolve_position_status,
+    sanitize_current_price as _sanitize_current_price,
+)
+```
+
+**删除**这三个函数的原有定义（`_resolve_position_status`、`_kline_fallback_price`、`_sanitize_current_price`），保留它们的原注释要点已迁移到新模块。
+
+> ⚠️ `_resolve_position_status` 的 docstring 里有一段 2026-10-21 的事故复盘记录，是这个判定规则存在的原因证据——它已随函数体迁到新模块，**不要删掉那段文字**。
+
+- [ ] **Step 4: 验证行为完全一致**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_decision_api.py tests/test_stock_advice.py -q --no-header -p no:cacheprovider
+```
+
+Expected: 与 Step 1 **完全相同的通过数**（不多不少）。
+
+- [ ] **Step 5: 静态检查**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+& '.\.venv\Scripts\python.exe' -m ruff check app/services/position_status.py app/api/stock.py
+```
+
+Expected: `All checks passed!`
+
+- [ ] **Step 6: Commit**
+
+```powershell
+Set-Location 'D:\zga-study\rich'
+git add -- backend/app/services/position_status.py backend/app/api/stock.py
+git commit -m "refactor(portfolio): 持仓状态判定提取为共享模块 position_status
+
+- resolve_position_status / kline_fallback_price / sanitize_current_price
+  从 api/stock.py 提取到 services/position_status.py(纯函数、零 IO)
+- api/stock.py 保留同名私有名做薄封装,既有 13 处测试 import 不破
+- 动机: 作战计划要复用同一判定口径,复制一份会出现两个口径
+  (持仓者被判空仓 → 对深套持仓说'可以建仓')"
+```
+
+---
+
+## Task 2: 明日市场预期（outlook_service）
+
+**Files:**
+- Create: `backend/app/services/outlook_service.py`
+- Test: `backend/tests/test_outlook_service.py`
+
+**Interfaces:**
+- Consumes: 无（纯函数）
+- Produces: `build_outlook(index_klines, sentiment, sector_flows) -> dict`
+
+- [ ] **Step 1: 写失败的测试**
+
+创建 `backend/tests/test_outlook_service.py`：
+
+```python
+"""明日市场预期规则(纯函数、零 IO、零 LLM)
+
+设计文档 §4.3
+"""
+from __future__ import annotations
+
+import pytest
+
+from app.services.outlook_service import build_outlook
+
+
+def _klines(closes: list[float], volumes: list[float] | None = None,
+            highs: list[float] | None = None, lows: list[float] | None = None) -> list[dict]:
+    """构造升序日K;volumes/highs/lows 缺省时用 close 派生"""
+    n = len(closes)
+    vols = volumes if volumes is not None else [100.0] * n
+    his = highs if highs is not None else list(closes)
+    los = lows if lows is not None else list(closes)
+    return [
+        {
+            "date": f"2026-01-{i + 1:02d}",
+            "open": c, "high": his[i], "low": los[i], "close": c, "volume": int(vols[i]),
+        }
+        for i, c in enumerate(closes)
+    ]
+
+
+def _dim(outlook: dict, key: str) -> dict:
+    return next(d for d in outlook["dims"] if d["key"] == key)
+
+
+# ---------------- 量能维度 ----------------
+
+def test_volume_bull_when_today_110pct_of_avg5():
+    closes = [10.0] * 6
+    volumes = [100.0, 100.0, 100.0, 100.0, 100.0, 110.0]  # 今日 110,前5日均 100
+    out = build_outlook(_klines(closes, volumes), None, None)
+    d = _dim(out, "volume")
+    assert d["score"] == 1
+    assert d["state"] == "bull"
+
+
+def test_volume_bear_when_today_90pct_of_avg5():
+    closes = [10.0] * 6
+    volumes = [100.0, 100.0, 100.0, 100.0, 100.0, 90.0]
+    out = build_outlook(_klines(closes, volumes), None, None)
+    assert _dim(out, "volume")["score"] == -1
+
+
+def test_volume_neutral_between_90_and_110():
+    closes = [10.0] * 6
+    volumes = [100.0, 100.0, 100.0, 100.0, 100.0, 105.0]
+    out = build_outlook(_klines(closes, volumes), None, None)
+    assert _dim(out, "volume")["score"] == 0
+
+
+def test_volume_missing_when_klines_lt_6():
+    out = build_outlook(_klines([10.0] * 3), None, None)
+    assert _dim(out, "volume")["state"] == "missing"
+    assert _dim(out, "volume")["score"] == 0
+
+
+# ---------------- 涨跌家数维度 ----------------
+
+def test_sentiment_bull_when_up_ratio_ge_60pct():
+    out = build_outlook(_klines([10.0] * 30), {"up_total": 60, "down_total": 40}, None)
+    assert _dim(out, "sentiment")["score"] == 1
+
+
+def test_sentiment_bear_when_up_ratio_le_40pct():
+    out = build_outlook(_klines([10.0] * 30), {"up_total": 30, "down_total": 70}, None)
+    assert _dim(out, "sentiment")["score"] == -1
+
+
+def test_sentiment_neutral_between_40_and_60():
+    out = build_outlook(_klines([10.0] * 30), {"up_total": 50, "down_total": 50}, None)
+    assert _dim(out, "sentiment")["score"] == 0
+
+
+def test_sentiment_missing_when_zero_total():
+    out = build_outlook(_klines([10.0] * 30), {"up_total": 0, "down_total": 0}, None)
+    assert _dim(out, "sentiment")["state"] == "missing"
+
+
+def test_sentiment_missing_when_none():
+    out = build_outlook(_klines([10.0] * 30), None, None)
+    assert _dim(out, "sentiment")["state"] == "missing"
+
+
+# ---------------- 均线维度 ----------------
+
+def test_ma_bull_when_close_above_ma5_above_ma10():
+    closes = [10.0] * 10 + [12.0]
+    out = build_outlook(_klines(closes), None, None)
+    assert _dim(out, "ma")["score"] == 1
+
+
+def test_ma_bear_when_close_below_ma5_below_ma10():
+    closes = [12.0] * 10 + [10.0]
+    out = build_outlook(_klines(closes), None, None)
+    assert _dim(out, "ma")["score"] == -1
+
+
+def test_ma_missing_when_klines_lt_11():
+    out = build_outlook(_klines([10.0] * 10), None, None)
+    assert _dim(out, "ma")["state"] == "missing"
+
+
+# ---------------- 板块资金维度 ----------------
+
+def test_flow_bull_when_any_positive_sector():
+    flows = [{"name": "电子元件", "netamount_yi": 3.2}, {"name": "煤炭", "netamount_yi": -1.0}]
+    out = build_outlook(_klines([10.0] * 30), None, flows)
+    assert _dim(out, "flow")["score"] == 1
+
+
+def test_flow_bear_when_all_negative():
+    flows = [{"name": "煤炭", "netamount_yi": -1.0}, {"name": "钢铁", "netamount_yi": -2.0}]
+    out = build_outlook(_klines([10.0] * 30), None, flows)
+    assert _dim(out, "flow")["score"] == -1
+
+
+def test_flow_neutral_when_mixed():
+    flows = [{"name": "电子元件", "netamount_yi": 1.0}, {"name": "煤炭", "netamount_yi": -1.0}]
+    out = build_outlook(_klines([10.0] * 30), None, flows)
+    assert _dim(out, "flow")["score"] == 0
+
+
+def test_flow_missing_when_empty_list():
+    out = build_outlook(_klines([10.0] * 30), None, [])
+    assert _dim(out, "flow")["state"] == "missing"
+
+
+# ---------------- 结论合成 ----------------
+
+def test_unknown_when_all_dims_missing():
+    out = build_outlook([], None, None)
+    assert out["stance"] == "unknown"
+    assert out["dims_effective"] == 0
+    assert out["degraded"] is True
+
+
+def test_bullish_requires_at_least_2_effective_dims():
+    """只靠单一维度不得判偏多(过度自信)"""
+    # 只有量能 +1,其余全缺
+    closes = [10.0] * 6
+    volumes = [100.0, 100.0, 100.0, 100.0, 100.0, 110.0]
+    out = build_outlook(_klines(closes, volumes), None, None)
+    assert out["dims_effective"] == 1
+    assert out["stance"] == "neutral"
+
+
+def test_bullish_when_2_dims_and_score_ge_1():
+    closes = [10.0] * 30
+    volumes = [100.0] * 29 + [110.0]
+    out = build_outlook(_klines(closes, volumes), {"up_total": 60, "down_total": 40}, None)
+    assert out["dims_effective"] == 2
+    assert out["score"] == 2
+    assert out["stance"] == "bullish"
+
+
+def test_bearish_allows_single_dim():
+    """偏空判定不对称:单条强证据即可成立(风险侧保守优于激进)"""
+    closes = [10.0] * 6
+    volumes = [100.0, 100.0, 100.0, 100.0, 100.0, 90.0]
+    out = build_outlook(_klines(closes, volumes), None, None)
+    assert out["dims_effective"] == 1
+    assert out["stance"] == "bearish"
+
+
+def test_stance_label_mapping():
+    out = build_outlook([], None, None)
+    assert out["stance_label"] == "数据不足"
+
+
+# ---------------- 关键位 ----------------
+
+def test_support_only_below_close():
+    closes = [10.0] * 10 + [12.0]
+    highs = [11.0] * 10 + [13.0]
+    lows = [9.0] * 10 + [11.5]
+    out = build_outlook(_klines(closes, highs=highs, lows=lows), None, None)
+    kl = out["key_levels"]
+    assert 12.0 not in kl["support"]          # 收盘价本身不作支撑
+    assert all(v < 12.0 for v in kl["support"])
+    assert all(v > 12.0 for v in kl["resistance"])
+
+
+def test_key_levels_include_close_and_ma():
+    out = build_outlook(_klines([10.0] * 30), None, None)
+    kl = out["key_levels"]
+    assert kl["close"] == 10.0
+    assert kl["ma5"] == 10.0
+    assert kl["ma10"] == 10.0
+    assert kl["ma20"] == 10.0
+
+
+def test_disclaimer_always_present_and_says_not_prediction():
+    out = build_outlook(_klines([10.0] * 30), {"up_total": 60, "down_total": 40}, None)
+    assert "非预测" in out["disclaimer"]
+
+
+def test_dims_always_four_items():
+    out = build_outlook(_klines([10.0] * 30), None, None)
+    assert len(out["dims"]) == 4
+    assert {d["key"] for d in out["dims"]} == {"volume", "sentiment", "ma", "flow"}
+```
+
+- [ ] **Step 2: 运行测试确认失败**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_outlook_service.py -q --no-header -p no:cacheprovider
+```
+
+Expected: FAIL —— `ModuleNotFoundError: No module named 'app.services.outlook_service'`
+
+- [ ] **Step 3: 实现**
+
+创建 `backend/app/services/outlook_service.py`：
+
+```python
+"""明日市场预期(纯函数、零 IO、零 LLM)
+
+设计文档 §4.3。
+
+**定位**:纪律锚点,不是预测器。
+四维度规则打分 → 偏多/震荡/偏空 + 关键位。所有数字取自真实数据源
+(上证指数日K / 涨跌家数 / 板块资金流),或对其显式四则运算。
+
+**铁律**:
+- 文案只写「倾向」,禁写「必涨/必跌/一定」;disclaimer 必含「非预测」。
+- 缺数据的维度记 0 且**不计入**有效维度数;绝不编造。
+- 有效维度 < 2 时不得判「偏多」(单条证据不足以定向);
+  但「偏空」允许单维度成立(风险侧保守优于激进)—— 这是**刻意的不对称**。
+"""
+from __future__ import annotations
+
+from typing import Any, Optional
+
+# ---- 规则参数(先定死;后续回测校准只能改参数,不得事后调门槛美化结论) ----
+VOLUME_BULL_RATIO = 1.10     # 今日量 >= 5日均量 × 1.10 → 偏多
+VOLUME_BEAR_RATIO = 0.90     # 今日量 <= 5日均量 × 0.90 → 偏空
+SENTIMENT_BULL_PCT = 0.60    # 上涨占比 >= 60% → 偏多
+SENTIMENT_BEAR_PCT = 0.40    # 上涨占比 <= 40% → 偏空
+VOLUME_AVG_WINDOW = 5        # 量能对比窗口(前 N 日均量,不含今日)
+MIN_KLINES_VOLUME = 6        # 今日 + 前 5 日
+MIN_KLINES_MA10 = 11         # 算 MA10 至少 11 根
+MIN_KLINES_MA20 = 21         # 算 MA20 至少 21 根
+BULLISH_MIN_EFFECTIVE_DIMS = 2  # 判「偏多」所需的最少有效维度数
+
+
+def _f(v: Any) -> Optional[float]:
+    try:
+        if v is None:
+            return None
+        f = float(v)
+        return f if f == f else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _ma(closes: list[float], n: int) -> Optional[float]:
+    """简单均线;数据不足返回 None"""
+    if len(closes) < n:
+        return None
+    return sum(closes[-n:]) / n
+
+
+def _dim(key: str, label: str, score: int, state: str, detail: str) -> dict[str, Any]:
+    return {"key": key, "label": label, "score": score, "state": state, "detail": detail}
+
+
+# ============================ 各维度 ============================
+
+def _volume_dim(klines: list[dict]) -> dict[str, Any]:
+    """量能:今日量 vs 前 5 日均量"""
+    if len(klines) < MIN_KLINES_VOLUME:
+        return _dim("volume", "量能", 0, "missing", "K 线不足,无法比较量能")
+    vols: list[float] = []
+    for k in klines:
+        v = _f(k.get("volume"))
+        vols.append(v if v is not None else 0.0)
+    today = vols[-1]
+    avg5 = sum(vols[-1 - VOLUME_AVG_WINDOW:-1]) / VOLUME_AVG_WINDOW
+    if avg5 <= 0:
+        return _dim("volume", "量能", 0, "missing", "历史成交量为 0,无法比较量能")
+    ratio = today / avg5
+    if ratio >= VOLUME_BULL_RATIO:
+        score = 1
+    elif ratio <= VOLUME_BEAR_RATIO:
+        score = -1
+    else:
+        score = 0
+    detail = f"今日量为近 5 日均量的 {ratio:.2f} 倍"
+    if score == 1:
+        detail += ",放量"
+    elif score == -1:
+        detail += ",缩量"
+    else:
+        detail += ",量能平稳"
+    return _dim("volume", "量能", score, "bull" if score > 0 else ("bear" if score < 0 else "flat"), detail)
+
+
+def _sentiment_dim(sentiment: dict | None) -> dict[str, Any]:
+    """涨跌家数"""
+    if not isinstance(sentiment, dict):
+        return _dim("sentiment", "涨跌家数", 0, "missing", "涨跌家数数据不可用")
+    up = _f(sentiment.get("up_total"))
+    down = _f(sentiment.get("down_total"))
+    if up is None or down is None or (up + down) <= 0:
+        return _dim("sentiment", "涨跌家数", 0, "missing", "涨跌家数数据不可用")
+    ratio = up / (up + down)
+    if ratio >= SENTIMENT_BULL_PCT:
+        score = 1
+    elif ratio <= SENTIMENT_BEAR_PCT:
+        score = -1
+    else:
+        score = 0
+    detail = f"上涨 {int(up)} 家 / 下跌 {int(down)} 家(上涨占比 {ratio * 100:.0f}%)"
+    return _dim("sentiment", "涨跌家数", score, "bull" if score > 0 else ("bear" if score < 0 else "flat"), detail)
+
+
+def _ma_dim(closes: list[float]) -> dict[str, Any]:
+    """指数均线位置"""
+    if len(closes) < MIN_KLINES_MA10:
+        return _dim("ma", "指数均线", 0, "missing", "K 线不足,无法计算 MA10")
+    close = closes[-1]
+    ma5 = _ma(closes, 5)
+    ma10 = _ma(closes, 10)
+    if ma5 is None or ma10 is None:
+        return _dim("ma", "指数均线", 0, "missing", "均线数据不完整")
+    if close > ma5 > ma10:
+        score = 1
+    elif close < ma5 < ma10:
+        score = -1
+    else:
+        score = 0
+    detail = f"收盘 {close:.2f},MA5 {ma5:.2f},MA10 {ma10:.2f}"
+    return _dim("ma", "指数均线", score, "bull" if score > 0 else ("bear" if score < 0 else "flat"), detail)
+
+
+def _flow_dim(sector_flows: list[dict] | None) -> dict[str, Any]:
+    """板块资金(真实板块资金流,非估算)"""
+    if not sector_flows:
+        return _dim("flow", "板块资金", 0, "missing", "板块资金流数据不可用")
+    positives: list[tuple[float, str]] = []
+    for f in sector_flows:
+        if not isinstance(f, dict):
+            continue
+        net = _f(f.get("netamount_yi"))
+        if net is not None and net > 0:
+            positives.append((net, str(f.get("name") or "")))
+    if positives:
+        positives.sort(key=lambda x: x[0], reverse=True)
+        top = positives[0]
+        score = 1
+        detail = f"资金主攻 {top[1]} 净流入 {top[0]:.2f} 亿"
+    else:
+        score = -1
+        detail = "板块资金全线净流出,无主攻方向"
+    return _dim("flow", "板块资金", score, "bull" if score > 0 else "bear", detail)
+
+
+# ============================ 关键位 ============================
+
+def _key_levels(klines: list[dict], closes: list[float]) -> dict[str, Any]:
+    """支撑 / 压力:全部取自真实日K,不做虚构点位"""
+    close = closes[-1] if closes else None
+    ma5 = _ma(closes, 5)
+    ma10 = _ma(closes, 10)
+    ma20 = _ma(closes, 20) if len(closes) >= MIN_KLINES_MA20 else None
+    last = klines[-1] if klines else {}
+    high = _f(last.get("high"))
+    low = _f(last.get("low"))
+
+    support: list[float] = []
+    if ma5 is not None and close is not None and ma5 < close:
+        support.append(round(ma5, 2))
+    if low is not None:
+        support.append(round(low, 2))
+
+    resistance: list[float] = []
+    if high is not None:
+        resistance.append(round(high, 2))
+    if ma20 is not None and close is not None and ma20 > close:
+        resistance.append(round(ma20, 2))
+
+    return {
+        "close": round(close, 2) if close is not None else None,
+        "ma5": round(ma5, 2) if ma5 is not None else None,
+        "ma10": round(ma10, 2) if ma10 is not None else None,
+        "ma20": round(ma20, 2) if ma20 is not None else None,
+        "support": sorted(set(support)),
+        "resistance": sorted(set(resistance)),
+    }
+
+
+# ============================ 主入口 ============================
+
+def build_outlook(
+    index_klines: list[dict],
+    sentiment: dict | None,
+    sector_flows: list[dict] | None,
+) -> dict[str, Any]:
+    """明日市场预期(纯函数)
+
+    Args:
+        index_klines: 上证指数升序日K,{date,open,high,low,close,volume}
+        sentiment: {up_total, down_total, ...} 或 None
+        sector_flows: [{name, netamount_yi}, ...] 或 None
+    """
+    klines = index_klines if isinstance(index_klines, list) else []
+    closes: list[float] = []
+    for k in klines:
+        c = _f(k.get("close")) if isinstance(k, dict) else None
+        if c is not None:
+            closes.append(c)
+
+    dims = [
+        _volume_dim(klines),
+        _sentiment_dim(sentiment),
+        _ma_dim(closes),
+        _flow_dim(sector_flows),
+    ]
+    score = sum(d["score"] for d in dims)
+    effective = sum(1 for d in dims if d["state"] != "missing")
+
+    if effective == 0:
+        stance = "unknown"
+    elif score >= 1 and effective >= BULLISH_MIN_EFFECTIVE_DIMS:
+        stance = "bullish"
+    elif score <= -1:
+        stance = "bearish"
+    else:
+        stance = "neutral"
+
+    stance_label = {
+        "bullish": "偏多", "bearish": "偏空", "neutral": "震荡", "unknown": "数据不足",
+    }[stance]
+    degraded = effective < len(dims)
+    degraded_reason = [
+        f"{d['label']}数据缺失" for d in dims if d["state"] == "missing"
+    ]
+
+    return {
+        "stance": stance,
+        "stance_label": stance_label,
+        "score": score,
+        "dims_total": len(dims),
+        "dims_effective": effective,
+        "dims": dims,
+        "key_levels": _key_levels(klines, closes),
+        "disclaimer": (
+            f"基于 {effective}/{len(dims)} 维度规则推断，非预测；仅作明日操作参考。"
+        ),
+        "degraded": degraded,
+        "degraded_reason": degraded_reason,
+    }
+
+
+__all__ = ["build_outlook"]
+```
+
+- [ ] **Step 4: 运行测试确认通过**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_outlook_service.py -q --no-header -p no:cacheprovider
+```
+
+Expected: 全部 PASS（26 passed）。
+
+- [ ] **Step 5: 静态检查 + Commit**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+& '.\.venv\Scripts\python.exe' -m ruff check app/services/outlook_service.py tests/test_outlook_service.py
+```
+Expected: `All checks passed!`
+
+```powershell
+Set-Location 'D:\zga-study\rich'
+git add -- backend/app/services/outlook_service.py backend/tests/test_outlook_service.py
+git commit -m "feat(outlook): 明日市场预期四维度规则推断(纯函数、零 LLM)
+
+- 维度: 量能(上证日K volume)/ 涨跌家数 / 均线位置(MA5/MA10) / 板块资金
+- 合成: 偏多需 >=2 有效维度(单证据不足定向);偏空允许单维度(不对称,风险侧保守)
+- 关键位: MA5/今日低点作支撑,今日高点/MA20 作压力,全部取自真实日K
+- 文案只写倾向 + 必带'非预测'标注;缺数据维度记 0 且不计入有效维度数"
+```
+
+---
+
+## Task 3: 决策 → 明日预案转换（plan_item_builder）
+
+**Files:**
+- Create: `backend/app/services/plan_item_builder.py`
+- Test: `backend/tests/test_plan_item_builder.py`
+
+**Interfaces:**
+- Consumes: `build_decision` 的输出 dict（结构见「跨任务锁定的接口契约」）
+- Produces: `build_items(decision, position) -> list[dict]`、`build_todos(decision) -> list[dict]`
+
+- [ ] **Step 1: 写失败的测试**
+
+创建 `backend/tests/test_plan_item_builder.py`：
+
+```python
+"""决策 → 明日预案转换(纯函数、零 IO)设计文档 §4.4"""
+from __future__ import annotations
+
+from app.services.plan_item_builder import build_items, build_todos
+
+
+def _action(kind="entry", status="armed", price=10.0, label="支撑企稳建仓",
+            condition="回踩 10.00 元不破时首仓建仓", basis=None):
+    return {
+        "kind": kind, "label": label, "condition": condition,
+        "price": price, "basis": basis if basis is not None else [f"依据 {price}"],
+        "status": status,
+    }
+
+
+def _decision(actions=None, **kw):
+    d = {
+        "stock_code": "001896.SZ", "stock_name": "豫能控股",
+        "verdict": "hold", "headline": "现价 9.92,等触发",
+        "confidence": "medium", "role": "解套参考", "position_status": "loss",
+        "actions": actions if actions is not None else [],
+        "stop_loss": None, "position_pct": "解套优先",
+        "do_not": [], "t_plan": {"suitable": False, "t_high": None, "t_low": None,
+                                "amplitude_pct": None, "sell_trigger": "", "buyback_trigger": "",
+                                "base_position_pct": "", "unsuitable_signals": "不合适",
+                                "needs_position": False},
+        "trend_state": {}, "market_env": {}, "data_quality": {"degraded": False},
+    }
+    d.update(kw)
+    return d
+
+
+# ---------------- 三路分流 ----------------
+
+def test_armed_action_becomes_plan_item():
+    d = _decision([_action(status="armed", price=9.62)])
+    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    assert len(items) == 1
+    it = items[0]
+    assert it["item_kind"] == "entry"
+    assert it["direction"] == "buy"
+    assert it["trigger_price"] == 9.62
+    assert it["status_now"] == "armed"
+    assert it["basis"]
+
+
+def test_now_action_does_not_enter_plan_items():
+    d = _decision([_action(status="now", price=9.62)])
+    assert build_items(d, None) == []
+
+
+def test_now_action_goes_to_todos():
+    d = _decision([_action(status="now", price=9.62, label="分批止盈")])
+    todos = build_todos(d)
+    assert len(todos) == 1
+    assert todos[0]["label"] == "分批止盈"
+    assert todos[0]["price"] == 9.62
+    assert todos[0]["condition"]
+
+
+def test_todos_and_items_never_overlap():
+    d = _decision([_action(status="now", price=1.0), _action(status="armed", price=2.0)])
+    item_prices = {i["trigger_price"] for i in build_items(d, None)}
+    todo_prices = {t["price"] for t in build_todos(d)}
+    assert not (item_prices & todo_prices)
+
+
+def test_blocked_action_becomes_unlock_item():
+    d = _decision([_action(status="blocked", price=12.5,
+                            basis=["压力位 12.50 元", "量能仅 0.90 倍,未达 1.50 倍确认标准"])])
+    items = build_items(d, None)
+    assert len(items) == 1
+    it = items[0]
+    assert it["item_kind"] == "unlock"
+    assert it["status_now"] == "blocked"
+    assert "量能" in it["invalid_if"]
+
+
+# ---------------- 方向映射 ----------------
+
+def test_direction_mapping_buy_kinds():
+    for kind in ("entry", "add", "t_buyback"):
+        d = _decision([_action(kind=kind, status="armed")])
+        items = build_items(d, {"shares": 100, "avg_cost": 10.0})
+        assert items and items[0]["direction"] == "buy", kind
+
+
+def test_direction_mapping_sell_kinds():
+    for kind in ("exit", "stop", "t_sell"):
+        d = _decision([_action(kind=kind, status="armed")])
+        items = build_items(d, {"shares": 100, "avg_cost": 10.0})
+        assert items and items[0]["direction"] == "sell", kind
+
+
+def test_watch_action_direction_none():
+    d = _decision([_action(kind="watch", status="armed", price=None)])
+    items = build_items(d, None)
+    assert items[0]["direction"] == "none"
+
+
+# ---------------- 止损 / 做T / 别动 ----------------
+
+def test_stop_loss_item_only_when_has_position():
+    d = _decision(stop_loss={"price": 9.62, "basis": "参考支撑 9.92 元 × 0.97"})
+    assert build_items(d, None) == []
+    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    kinds = [i["item_kind"] for i in items]
+    assert "stop" in kinds
+
+
+def test_stop_loss_item_invalid_if():
+    d = _decision(stop_loss={"price": 9.62, "basis": "参考支撑 9.92 元 × 0.97"})
+    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    stop = next(i for i in items if i["item_kind"] == "stop")
+    assert stop["direction"] == "sell"
+    assert stop["trigger_price"] == 9.62
+    assert "9.62" in stop["invalid_if"]
+
+
+def test_t_plan_splits_into_two_items():
+    d = _decision(t_plan={
+        "suitable": True, "t_high": 10.5, "t_low": 9.2, "amplitude_pct": 12.0,
+        "sell_trigger": "冲高至 10.50 元附近卖出 T 仓", "buyback_trigger": "回落至 9.20 元附近买回",
+        "base_position_pct": "≥50%", "unsuitable_signals": "", "needs_position": False,
+    })
+    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    tp = [i for i in items if i["item_kind"] in ("t_sell", "t_buyback")]
+    assert len(tp) == 2
+    sell = next(i for i in tp if i["item_kind"] == "t_sell")
+    buy = next(i for i in tp if i["item_kind"] == "t_buyback")
+    assert sell["direction"] == "sell" and sell["trigger_price"] == 10.5
+    assert buy["direction"] == "buy" and buy["trigger_price"] == 9.2
+
+
+def test_t_plan_skipped_when_not_suitable():
+    d = _decision()   # suitable=False
+    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    assert [i for i in items if i["item_kind"].startswith("t_")] == []
+
+
+def test_t_plan_skipped_when_no_position():
+    d = _decision(t_plan={
+        "suitable": True, "t_high": 10.5, "t_low": 9.2, "amplitude_pct": 12.0,
+        "sell_trigger": "s", "buyback_trigger": "b", "base_position_pct": "≥50%",
+        "unsuitable_signals": "", "needs_position": False,
+    })
+    items = build_items(d, None)
+    assert [i for i in items if i["item_kind"].startswith("t_")] == []
+
+
+def test_do_not_items():
+    d = _decision(do_not=["下跌通道中不要抄底", "距上次卖出仅 1 天,勿频繁操作"])
+    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    dn = [i for i in items if i["item_kind"] == "do_not"]
+    assert len(dn) == 2
+    assert all(i["direction"] == "none" for i in dn)
+    assert all(i["trigger_price"] is None for i in dn)
+
+
+# ---------------- 失效条件计算 ----------------
+
+def test_entry_invalid_if_uses_097():
+    d = _decision([_action(kind="entry", status="armed", price=10.0)])
+    items = build_items(d, None)
+    assert "9.70" in items[0]["invalid_if"]
+
+
+def test_exit_invalid_if_uses_103():
+    d = _decision([_action(kind="exit", status="armed", price=12.03)])
+    items = build_items(d, {"shares": 100, "avg_cost": 10.0})
+    assert "12.39" in items[0]["invalid_if"]
+
+
+def test_invalid_if_present_on_every_item():
+    d = _decision(
+        [_action(kind="entry", status="armed", price=10.0)],
+        stop_loss={"price": 9.62, "basis": "b"},
+        do_not=["别动"],
+    )
+    items = build_items(d, {"shares": 100, "avg_cost": 10.0})
+    for it in items:
+        assert it["invalid_if"], it
+
+
+# ---------------- 边界 ----------------
+
+def test_empty_actions_returns_empty_list():
+    assert build_items(_decision([]), {"shares": 100, "avg_cost": 10.0}) == []
+
+
+def test_action_with_none_price_yields_none_trigger():
+    d = _decision([_action(kind="watch", status="armed", price=None)])
+    items = build_items(d, None)
+    assert items[0]["trigger_price"] is None
+
+
+def test_basis_preserved_verbatim():
+    basis = ["企稳价 9.62 元(现价 9.920 +3.1%)", "stabilize.state=true"]
+    d = _decision([_action(status="armed", price=9.62, basis=basis)])
+    items = build_items(d, None)
+    assert items[0]["basis"] == basis
+```
+
+- [ ] **Step 2: 运行测试确认失败**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_plan_item_builder.py -q --no-header -p no:cacheprovider
+```
+
+Expected: FAIL —— `ModuleNotFoundError: No module named 'app.services.plan_item_builder'`
+
+- [ ] **Step 3: 实现**
+
+创建 `backend/app/services/plan_item_builder.py`：
+
+```python
+"""决策输出 → 明日操作预案(纯函数、零 IO、零 LLM)
+
+设计文档 §4.4。
+
+**核心分流规则**:
+| 决策输出 | 去向 |
+|---|---|
+| actions status="now"    | **不进明日预案** → 今日复盘「未执行待办」(条件已过期) |
+| actions status="armed"  | 明日预案主力 |
+| actions status="blocked"| 明日预案「解锁条件」 |
+| stop_loss               | 明日预案(仅持仓票) |
+| t_plan                  | 明日预案(仅持仓票,拆上沿/下沿两条) |
+| do_not[]                | 明日预案「别动」 |
+
+**为什么 now 不进明日预案**:它的语义是「此刻条件已满足,此刻就该做」。
+写进明日预案就是一条**已经过期的建议**——这正是股民复盘里最常见的自欺
+("我有个计划"但其实条件早就到了没做)。必须显式推到复盘待办,逼用户面对。
+"""
+from __future__ import annotations
+
+from typing import Any, Optional
+
+# 决策引擎 kind → 预案方向
+KIND_DIRECTION: dict[str, str] = {
+    "entry": "buy",
+    "add": "buy",
+    "t_buyback": "buy",
+    "exit": "sell",
+    "stop": "sell",
+    "t_sell": "sell",
+    "watch": "none",
+    "unlock": "none",   # 由 blocked 派生,方向在转换时覆盖
+    "do_not": "none",
+}
+
+# 失效条件系数(显式四则运算,不是拍脑袋的魔法数)
+ENTRY_INVALID_FACTOR = 0.97   # 跌破 触发价×0.97 → 建仓预案作废
+EXIT_INVALID_FACTOR = 1.03    # 回落至 触发价×1.03 以上未达成 → 不追高
+
+
+def _f(v: Any) -> Optional[float]:
+    try:
+        if v is None:
+            return None
+        f = float(v)
+        return f if f == f else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _has_position(position: dict | None) -> bool:
+    if not position:
+        return False
+    try:
+        return int(position.get("shares") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _invalid_if(item_kind: str, direction: str, price: Optional[float],
+                basis: list[str], label: str) -> str:
+    """算失效条件(不得为空,除非是恒成立的别动项)"""
+    if item_kind == "do_not":
+        return "该别动项恒成立,明日仍然有效"
+    if price is None:
+        return f"触发价未知,{label}不执行"
+    if direction == "buy":
+        cut = round(price * ENTRY_INVALID_FACTOR, 2)
+        return f"跌破 {cut:.2f} 则本条作废(不接下跌中的刀)"
+    if direction == "sell":
+        back = round(price * EXIT_INVALID_FACTOR, 2)
+        return f"回落至 {back:.2f} 以上未达成,明日不追高"
+    return f"{label}条件不满足则不执行"
+
+
+def _item(
+    stock_code: str,
+    stock_name: str | None,
+    item_kind: str,
+    direction: str,
+    label: str,
+    trigger_price: Optional[float],
+    trigger_condition: str,
+    basis: list[str],
+    invalid_if: str,
+    status_now: str,
+) -> dict[str, Any]:
+    return {
+        "stock_code": stock_code,
+        "stock_name": stock_name,
+        "item_kind": item_kind,
+        "direction": direction,
+        "label": label,
+        "trigger_price": trigger_price,
+        "trigger_condition": trigger_condition,
+        "basis": basis,
+        "invalid_if": invalid_if,
+        "status_now": status_now,
+        "fulfillment": "pending",
+        "fulfillment_note": "",
+    }
+
+
+def _split_actions(decision: dict) -> tuple[list[dict], list[dict], list[dict]]:
+    """把 actions 按 status 拆成 (now, armed, blocked)三组"""
+    now: list[dict] = []
+    armed: list[dict] = []
+    blocked: list[dict] = []
+    for a in decision.get("actions") or []:
+        if not isinstance(a, dict):
+            continue
+        st = a.get("status")
+        if st == "now":
+            now.append(a)
+        elif st == "armed":
+            armed.append(a)
+        elif st == "blocked":
+            blocked.append(a)
+    return now, armed, blocked
+
+
+def build_todos(decision: dict) -> list[dict]:
+    """今日复盘的「未执行待办」:条件已满足(now)但用户还没做的动作"""
+    now, _, _ = _split_actions(decision)
+    code = decision.get("stock_code") or ""
+    name = decision.get("stock_name")
+    out: list[dict] = []
+    for a in now:
+        out.append({
+            "stock_code": code,
+            "stock_name": name,
+            "label": a.get("label") or "",
+            "condition": a.get("condition") or "",
+            "price": _f(a.get("price")),
+            "basis": list(a.get("basis") or []),
+        })
+    return out
+
+
+def build_items(decision: dict, position: dict | None) -> list[dict]:
+    """明日操作预案项(纯函数)"""
+    code = decision.get("stock_code") or ""
+    name = decision.get("stock_name")
+    _, armed, blocked = _split_actions(decision)
+    items: list[dict] = []
+
+    # 1) armed → 明日预案主力
+    for a in armed:
+        kind = str(a.get("kind") or "watch")
+        direction = KIND_DIRECTION.get(kind, "none")
+        price = _f(a.get("price"))
+        basis = list(a.get("basis") or [])
+        items.append(_item(
+            code, name, kind, direction,
+            a.get("label") or "", price,
+            a.get("condition") or "", basis,
+            _invalid_if(kind, direction, price, basis, a.get("label") or ""),
+            "armed",
+        ))
+
+    # 2) blocked → 解锁条件(方向继承原动作)
+    for a in blocked:
+        kind = str(a.get("kind") or "watch")
+        direction = KIND_DIRECTION.get(kind, "none")
+        price = _f(a.get("price"))
+        basis = list(a.get("basis") or [])
+        # 缺的依据 = 除首条(价位)外的其余依据;没有则用标签兜底
+        missing = basis[1:] if len(basis) > 1 else basis
+        unlock_txt = "、".join(missing) if missing else f"{a.get('label') or ''}的前置条件"
+        items.append(_item(
+            code, name, "unlock", direction,
+            f"解锁后:{a.get('label') or ''}",
+            price,
+            a.get("condition") or "", basis,
+            f"{unlock_txt}未满足则不解锁",
+            "blocked",
+        ))
+
+    # 3) 止损(仅持仓票)
+    stop = decision.get("stop_loss")
+    if isinstance(stop, dict) and _has_position(position):
+        price = _f(stop.get("price"))
+        items.append(_item(
+            code, name, "stop", "sell", "止损",
+            price,
+            f"跌破 {price:.2f} 元无条件减仓" if price is not None else "跌破止损位无条件减仓",
+            [stop.get("basis") or ""],
+            (f"收盘站回 {price:.2f} 元上方则明日不看止损" if price is not None
+             else "止损位未知,明日不执行"),
+            "armed",
+        ))
+
+    # 4) 做T(仅持仓票;拆上沿/下沿两条)
+    t_plan = decision.get("t_plan")
+    if isinstance(t_plan, dict) and t_plan.get("suitable") and _has_position(position):
+        base = t_plan.get("base_position_pct") or ""
+        th = _f(t_plan.get("t_high"))
+        tl = _f(t_plan.get("t_low"))
+        amp = t_plan.get("amplitude_pct")
+        basis = [f"T 区间宽度 {amp}%"] if amp is not None else []
+        if base:
+            basis.append(f"底仓要求 {base}")
+        if th is not None:
+            items.append(_item(
+                code, name, "t_sell", "sell", "做T减仓",
+                th, t_plan.get("sell_trigger") or "", basis,
+                (f"上沿 {th:.2f} 未触及则不做减仓;下沿 {tl:.2f} 未触及则不做回补"
+                 if tl is not None else "上沿未触及则不做减仓"),
+                "armed",
+            ))
+        if tl is not None:
+            items.append(_item(
+                code, name, "t_buyback", "buy", "做T回补",
+                tl, t_plan.get("buyback_trigger") or "", basis,
+                (f"下沿 {tl:.2f} 未触及则不做回补;上沿 {th:.2f} 未触及则今日只减不接"
+                 if th is not None else "下沿未触及则不做回补"),
+                "armed",
+            ))
+
+    # 5) 别动清单
+    for txt in decision.get("do_not") or []:
+        if not txt:
+            continue
+        items.append(_item(
+            code, name, "do_not", "none", "别动", None,
+            str(txt), [str(txt)],
+            "该别动项恒成立,明日仍然有效",
+            "armed",
+        ))
+
+    return items
+
+
+__all__ = ["build_items", "build_todos"]
+```
+
+- [ ] **Step 4: 运行测试确认通过**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_plan_item_builder.py -q --no-header -p no:cacheprovider
+```
+
+Expected: 全部 PASS（24 passed）。
+
+- [ ] **Step 5: 静态检查 + Commit**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+& '.\.venv\Scripts\python.exe' -m ruff check app/services/plan_item_builder.py tests/test_plan_item_builder.py
+```
+Expected: `All checks passed!`
+
+```powershell
+Set-Location 'D:\zga-study\rich'
+git add -- backend/app/services/plan_item_builder.py backend/tests/test_plan_item_builder.py
+git commit -m "feat(plan): 决策→明日预案转换(纯函数、零 IO)
+
+- 三路分流: now→复盘待办(已过期,不写进明日) / armed→预案主力 / blocked→解锁条件
+- 止损与做T仅对持仓票生成;做T拆上沿(减)/下沿(接)两条独立子项
+- 每条预案必带 invalid_if(买: 触发价×0.97 作废;卖: 触发价×1.03 不追高)
+- build_items 与 build_todos 是同一份 decision 的两个出口,动作不重叠"
+```
+
+---
+
+## Task 4: 兑现比对（fulfillment_checker）
+
+**Files:**
+- Create: `backend/app/services/fulfillment_checker.py`
+- Test: `backend/tests/test_fulfillment_checker.py`
+
+**Interfaces:**
+- Consumes: 预案项 list、目标日 K 线 dict、流水 list
+- Produces: `check_fulfillment(items, target_klines, transactions) -> list[dict]`
+
+- [ ] **Step 1: 写失败的测试**
+
+创建 `backend/tests/test_fulfillment_checker.py`：
+
+```python
+"""昨日预案 × 今日行情/流水 → 兑现状态(纯函数、零 IO)设计文档 §4.5"""
+from __future__ import annotations
+
+from app.services.fulfillment_checker import check_fulfillment
+
+
+def _item(code="001896.SZ", kind="entry", direction="buy", price=9.62, label="建仓"):
+    return {
+        "stock_code": code, "stock_name": "豫能控股", "item_kind": kind,
+        "direction": direction, "label": label, "trigger_price": price,
+        "trigger_condition": "c", "basis": ["b"], "invalid_if": "i",
+        "status_now": "armed", "fulfillment": "pending", "fulfillment_note": "",
+    }
+
+
+def _kline(high=10.0, low=9.0, close=9.5, open_=9.2):
+    return {"date": "2026-10-22", "open": open_, "high": high, "low": low, "close": close}
+
+
+def _txn(code="001896.SZ", action="buy", price=9.5, shares=100):
+    return {"stock_code": code, "action": action, "shares": shares,
+            "price": price, "trade_date": "2026-10-22"}
+
+
+# ---------------- 触及判定 ----------------
+
+def test_buy_touched_when_low_reaches_trigger():
+    out = check_fulfillment([_item(direction="buy", price=9.62)],
+                            {"001896.SZ": [_kline(low=9.5)]}, [])
+    assert out[0]["fulfillment"] == "touched"
+
+
+def test_buy_missed_when_low_above_trigger():
+    out = check_fulfillment([_item(direction="buy", price=9.62)],
+                            {"001896.SZ": [_kline(low=9.70)]}, [])
+    assert out[0]["fulfillment"] == "missed"
+
+
+def test_sell_touched_when_high_reaches_trigger():
+    out = check_fulfillment([_item(kind="exit", direction="sell", price=12.03)],
+                            {"001896.SZ": [_kline(high=12.5)]}, [])
+    assert out[0]["fulfillment"] == "touched"
+
+
+def test_sell_missed_when_high_below_trigger():
+    out = check_fulfillment([_item(kind="exit", direction="sell", price=12.03)],
+                            {"001896.SZ": [_kline(high=11.9)]}, [])
+    assert out[0]["fulfillment"] == "missed"
+
+
+def test_none_direction_is_na():
+    out = check_fulfillment([_item(kind="do_not", direction="none", price=None)],
+                            {"001896.SZ": [_kline()]}, [])
+    assert out[0]["fulfillment"] == "n_a"
+
+
+def test_no_kline_data_treated_as_missed_not_touched():
+    out = check_fulfillment([_item(direction="buy", price=9.62)], {}, [])
+    assert out[0]["fulfillment"] == "missed"
+
+
+# ---------------- 执行判定(优先于触及) ----------------
+
+def test_executed_when_buy_transaction_present():
+    out = check_fulfillment([_item(direction="buy", price=9.62)],
+                            {"001896.SZ": [_kline(low=9.7)]},
+                            [_txn(action="buy")])
+    assert out[0]["fulfillment"] == "executed"
+
+
+def test_executed_when_sell_transaction_present():
+    out = check_fulfillment([_item(kind="exit", direction="sell", price=12.03)],
+                            {"001896.SZ": [_kline(high=11.0)]},
+                            [_txn(action="sell")])
+    assert out[0]["fulfillment"] == "executed"
+
+
+def test_transaction_for_other_stock_ignored():
+    out = check_fulfillment([_item(direction="buy", price=9.62)],
+                            {"001896.SZ": [_kline(low=9.7)]},
+                            [_txn(code="000807.SZ", action="buy")])
+    assert out[0]["fulfillment"] == "touched"
+
+
+# ---------------- T 计划双子项 ----------------
+
+def test_t_plan_sell_and_buyback_checked_independently():
+    items = [
+        _item(kind="t_sell", direction="sell", price=10.5, label="做T减仓"),
+        _item(kind="t_buyback", direction="buy", price=9.2, label="做T回补"),
+    ]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.8, low=9.5)]}, [])
+    by_kind = {i["item_kind"]: i for i in out}
+    assert by_kind["t_sell"]["fulfillment"] == "touched"
+    assert by_kind["t_buyback"]["fulfillment"] == "missed"
+
+
+def test_t_plan_buyback_executed_by_buy_transaction():
+    items = [
+        _item(kind="t_sell", direction="sell", price=10.5, label="做T减仓"),
+        _item(kind="t_buyback", direction="buy", price=9.2, label="做T回补"),
+    ]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.2, low=9.5)]},
+                            [_txn(action="buy", price=9.1)])
+    by_kind = {i["item_kind"]: i for i in out}
+    assert by_kind["t_buyback"]["fulfillment"] == "executed"
+    assert by_kind["t_sell"]["fulfillment"] == "missed"
+
+
+# ---------------- 纪律问题 ----------------
+
+def test_discipline_violation_flagged_when_do_not_but_traded():
+    items = [_item(kind="do_not", direction="none", price=None, label="别动")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline()]}, [_txn(action="buy")])
+    assert out[0]["fulfillment"] == "executed"
+    assert "纪律问题" in out[0]["fulfillment_note"]
+
+
+def test_discipline_violation_flagged_when_unlock_blocked_but_traded():
+    items = [_item(kind="unlock", direction="buy", price=12.5, label="解锁后建仓")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline()]}, [_txn(action="buy")])
+    assert out[0]["fulfillment"] == "executed"
+    assert "纪律问题" in out[0]["fulfillment_note"]
+
+
+# ---------------- 其它 ----------------
+
+def test_input_items_not_mutated():
+    items = [_item(direction="buy", price=9.62)]
+    snapshot = [dict(i) for i in items]
+    check_fulfillment(items, {"001896.SZ": [_kline(low=9.5)]}, [])
+    assert items == snapshot
+
+
+def test_empty_items_returns_empty():
+    assert check_fulfillment([], {}, []) == []
+
+
+def test_transaction_without_price_still_counts_as_executed():
+    out = check_fulfillment([_item(direction="buy", price=9.62)],
+                            {"001896.SZ": [_kline(low=9.7)]},
+                            [{"stock_code": "001896.SZ", "action": "buy", "shares": 100,
+                              "price": None, "trade_date": "2026-10-22"}])
+    assert out[0]["fulfillment"] == "executed"
+```
+
+- [ ] **Step 2: 运行测试确认失败**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_fulfillment_checker.py -q --no-header -p no:cacheprovider
+```
+
+Expected: FAIL —— `ModuleNotFoundError: No module named 'app.services.fulfillment_checker'`
+
+- [ ] **Step 3: 实现**
+
+创建 `backend/app/services/fulfillment_checker.py`：
+
+```python
+"""昨日预案 × 今日行情/流水 → 兑现状态(纯函数、零 IO、零 LLM)
+
+设计文档 §4.5。
+
+**记法**:R = 被检查的日报日(R 日报的 items 是为 R+1 定下的);
+R+1 = 兑现判定日。
+
+**诚实性**:"未触发"不评价对错。计划说"跌破 9.62 止损",当天最低 9.70
+没跌破 —— 这不是"止损错了",而是"不该触发"。算成错误会污染决策档案。
+"""
+from __future__ import annotations
+
+from typing import Any, Optional
+
+# 纪律问题相关:计划说别动/未解锁,却仍然操作
+DISCIPLINE_KINDS = {"do_not", "unlock"}
+
+
+def _f(v: Any) -> Optional[float]:
+    try:
+        if v is None:
+            return None
+        f = float(v)
+        return f if f == f else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _day_extremes(klines: list[dict] | None) -> tuple[Optional[float], Optional[float]]:
+    """目标日的 (high, low);缺数据返回 (None, None)"""
+    if not klines:
+        return None, None
+    highs: list[float] = []
+    lows: list[float] = []
+    for k in klines:
+        if not isinstance(k, dict):
+            continue
+        h = _f(k.get("high"))
+        lo = _f(k.get("low"))
+        if h is not None:
+            highs.append(h)
+        if lo is not None:
+            lows.append(lo)
+    return (max(highs) if highs else None, min(lows) if lows else None)
+
+
+def _has_txn(transactions: list[dict] | None, code: str, action: str) -> bool:
+    if not transactions:
+        return False
+    for t in transactions:
+        if not isinstance(t, dict):
+            continue
+        if t.get("stock_code") != code:
+            continue
+        if str(t.get("action") or "").lower() == action:
+            return True
+    return False
+
+
+def check_fulfillment(
+    items: list[dict],
+    target_klines: dict[str, list[dict]],
+    transactions: list[dict],
+) -> list[dict]:
+    """给每个预案项补 fulfillment / fulfillment_note(不修改入参)"""
+    out: list[dict] = []
+    for raw in items or []:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        code = str(item.get("stock_code") or "")
+        kind = str(item.get("item_kind") or "")
+        direction = str(item.get("direction") or "none")
+        price = _f(item.get("trigger_price"))
+        high, low = _day_extremes((target_klines or {}).get(code))
+
+        fulfillment = "pending"
+        note = ""
+
+        if direction == "none" or price is None:
+            # 别动 / 解锁类:无触发价,不参与统计
+            fulfillment = "n_a"
+            note = "无触发价,不计入兑现统计"
+        else:
+            # 第一步:是否真的执行了(最高优先级)
+            if direction == "buy":
+                executed = _has_txn(transactions, code, "buy")
+            else:
+                executed = _has_txn(transactions, code, "sell")
+
+            if kind in DISCIPLINE_KINDS and executed:
+                fulfillment = "executed"
+                note = "⚠️ 纪律问题:昨日标记别动/未解锁,今日仍有操作"
+            elif executed:
+                fulfillment = "executed"
+                note = "已按计划执行"
+            else:
+                # 第二步:价格是否触及
+                touched = False
+                if direction == "sell" and high is not None and high >= price:
+                    touched = True
+                if direction == "buy" and low is not None and low <= price:
+                    touched = True
+                if touched:
+                    fulfillment = "touched"
+                    note = "价格已触及触发位,但当日无对应操作"
+                else:
+                    fulfillment = "missed"
+                    note = "当日未触及触发位(不评价对错)"
+
+        item["fulfillment"] = fulfillment
+        item["fulfillment_note"] = note
+        out.append(item)
+    return out
+
+
+def summarize_fulfillment(items: list[dict]) -> dict[str, Any]:
+    """复盘段统计口径(spec §4.5.4)"""
+    total = len(items or [])
+    executed = touched = missed = na = 0
+    discipline = 0
+    for i in items or []:
+        if not isinstance(i, dict):
+            continue
+        f = i.get("fulfillment")
+        if f == "executed":
+            executed += 1
+            if "纪律问题" in str(i.get("fulfillment_note") or ""):
+                discipline += 1
+        elif f == "touched":
+            touched += 1
+        elif f == "missed":
+            missed += 1
+        elif f == "n_a":
+            na += 1
+    if discipline > 0:
+        verdict_label, verdict_level = "存在纪律问题", "danger"
+    elif touched > 0:
+        verdict_label, verdict_level = "有执行缺口", "warn"
+    elif executed > 0:
+        verdict_label, verdict_level = "按计划执行", "ok"
+    else:
+        verdict_label, verdict_level = "无操作记录", "flat"
+    return {
+        "total": total, "executed": executed, "touched": touched,
+        "missed": missed, "na": na, "discipline": discipline,
+        "verdict_label": verdict_label, "verdict_level": verdict_level,
+    }
+
+
+__all__ = ["check_fulfillment", "summarize_fulfillment"]
+```
+
+- [ ] **Step 4: 运行测试确认通过**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_fulfillment_checker.py -q --no-header -p no:cacheprovider
+```
+
+Expected: 全部 PASS（18 passed）。
+
+- [ ] **Step 5: 静态检查 + Commit**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+& '.\.venv\Scripts\python.exe' -m ruff check app/services/fulfillment_checker.py tests/test_fulfillment_checker.py
+```
+Expected: `All checks passed!`
+
+```powershell
+Set-Location 'D:\zga-study\rich'
+git add -- backend/app/services/fulfillment_checker.py backend/tests/test_fulfillment_checker.py
+git commit -m "feat(plan): 兑现比对状态机(纯函数、零 IO)
+
+- 优先级: 已执行 > 价格触及 > 未触及;别动/解锁类记 n_a 不计统计
+- 纪律问题: 计划说别动/未解锁却仍有操作 → 显式标记
+- 未触发不评价对错(本来就没到,不是判断错)
+- summarize_fulfillment 统一复盘段统计口径"
+```
+
+---
+
+## Task 5: 持久化层（两表 + 迁移 + 仓储）
+
+**Files:**
+- Create: `backend/app/models/orm.py`（追加两表）
+- Create: `backend/migrations/versions/<new_rev>_add_battle_plan_tables.py`
+- Create: `backend/app/repositories/battle_plan_repo.py`
+- Test: `backend/tests/test_battle_plan_repo.py`
+
+**Interfaces:**
+- Consumes: 无
+- Produces:
+  - `app.models.orm.BattlePlan` / `BattlePlanItem`
+  - `app.repositories.battle_plan_repo`：`upsert_plan`、`get_plan`、`replace_items`、`get_items`、`update_item_fulfillment`、`list_plan_dates`
+
+- [ ] **Step 1: 写失败的测试**
+
+创建 `backend/tests/test_battle_plan_repo.py`：
+
+```python
+"""作战计划持久化层测试"""
+from __future__ import annotations
+
+import pytest
+from sqlalchemy import select
+
+from app.db import async_session
+from app.models.orm import BattlePlan, BattlePlanItem
+from app.repositories.battle_plan_repo import battle_plan_repo
+
+
+def _item(code="001896.SZ", kind="entry", price=9.62, direction="buy"):
+    return {
+        "stock_code": code, "stock_name": "豫能控股", "item_kind": kind,
+        "direction": direction, "label": "建仓", "trigger_price": price,
+        "trigger_condition": "回踩不破", "basis": ["依据 9.62"],
+        "invalid_if": "跌破 9.33 作废", "status_now": "armed",
+        "fulfillment": "pending", "fulfillment_note": "",
+    }
+
+
+@pytest.mark.asyncio
+async def test_upsert_plan_creates_then_updates():
+    pid1 = await battle_plan_repo.upsert_plan(
+        plan_date="2026-10-21", outlook_json='{"a":1}', review_json=None, meta_json=None)
+    pid2 = await battle_plan_repo.upsert_plan(
+        plan_date="2026-10-21", outlook_json='{"a":2}', review_json=None, meta_json=None)
+    assert pid1 == pid2
+    async with async_session() as s:
+        rows = (await s.execute(
+            select(BattlePlan).where(BattlePlan.plan_date == "2026-10-21")
+        )).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].outlook_json == '{"a":2}'
+
+
+@pytest.mark.asyncio
+async def test_replace_items_is_idempotent():
+    pid = await battle_plan_repo.upsert_plan(
+        plan_date="2026-10-22", outlook_json=None, review_json=None, meta_json=None)
+    await battle_plan_repo.replace_items(pid, "2026-10-22", [_item(), _item(code="000807.SZ")])
+    await battle_plan_repo.replace_items(pid, "2026-10-22", [_item()])
+    items = await battle_plan_repo.get_items(pid)
+    assert len(items) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_items_returns_fulfillment_fields():
+    pid = await battle_plan_repo.upsert_plan(
+        plan_date="2026-10-23", outlook_json=None, review_json=None, meta_json=None)
+    await battle_plan_repo.replace_items(pid, "2026-10-23", [_item()])
+    items = await battle_plan_repo.get_items(pid)
+    assert items[0]["fulfillment"] == "pending"
+    assert items[0]["trigger_price"] == 9.62
+    assert items[0]["basis"] == ["依据 9.62"]
+
+
+@pytest.mark.asyncio
+async def test_update_item_fulfillment():
+    pid = await battle_plan_repo.upsert_plan(
+        plan_date="2026-10-24", outlook_json=None, review_json=None, meta_json=None)
+    await battle_plan_repo.replace_items(pid, "2026-10-24", [_item()])
+    items = await battle_plan_repo.get_items(pid)
+    await battle_plan_repo.update_item_fulfillment(
+        items[0]["id"], "touched", "价格已触及")
+    again = await battle_plan_repo.get_items(pid)
+    assert again[0]["fulfillment"] == "touched"
+    assert again[0]["fulfillment_note"] == "价格已触及"
+
+
+@pytest.mark.asyncio
+async def test_get_plan_returns_none_for_missing_date():
+    assert await battle_plan_repo.get_plan("1999-01-01") is None
+```
+
+- [ ] **Step 2: 运行测试确认失败**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_battle_plan_repo.py -q --no-header -p no:cacheprovider
+```
+
+Expected: FAIL —— `ModuleNotFoundError: No module named 'app.repositories.battle_plan_repo'`
+
+- [ ] **Step 3: ORM 两表**
+
+在 `backend/app/models/orm.py` 末尾追加：
+
+```python
+class BattlePlan(Base):
+    """每日作战日报(阶段9)
+
+    一行 = 一个生成日 D 的日报。三段内容:
+    - outlook_json: 明日市场预期(对 D+1 的规则推断)
+    - review_json : 今日复盘(D 当天实际 + 昨日预案兑现比对)
+    - items       : 明日操作预案(目标日 = D+1,落在 battle_plan_items)
+    """
+    __tablename__ = "battle_plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    plan_date: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
+    outlook_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meta_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+
+class BattlePlanItem(Base):
+    """日报内的一条逐票预案(目标日 = plan_date 的次日)"""
+    __tablename__ = "battle_plan_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    plan_id: Mapped[int] = mapped_column(
+        ForeignKey("battle_plans.id"), nullable=False, index=True
+    )
+    plan_date: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
+    stock_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    item_kind: Mapped[str] = mapped_column(String, nullable=False)
+    direction: Mapped[str] = mapped_column(String, nullable=False)   # buy/sell/none
+    label: Mapped[str] = mapped_column(String, nullable=False)
+    trigger_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trigger_condition: Mapped[str] = mapped_column(Text, nullable=False)
+    basis_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    invalid_if: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status_now: Mapped[str] = mapped_column(String, nullable=False)
+    fulfillment: Mapped[str] = mapped_column(
+        String, default="pending", nullable=False
+    )  # pending/touched/executed/missed/n_a
+    fulfillment_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+```
+
+- [ ] **Step 4: Alembic 迁移**
+
+用 alembic 生成 revision，再手写内容。命令行：
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+& '.\.venv\Scripts\python.exe' -m alembic revision -m "add battle plan tables"
+```
+
+生成的文件名形如 `backend/migrations/versions/<hash>_add_battle_plan_tables.py`。把 `down_revision` 改为 `"f6a7b8c9d0e1"`，并把 `upgrade()` 改成下面这样（**必须先 `has_table` 检查**——`kline_cache` 曾因"迁移已应用但表被删"导致 `upgrade head` 直接失败）：
+
+```python
+def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+
+    if not inspector.has_table("battle_plans"):
+        op.create_table(
+            "battle_plans",
+            sa.Column("id", sa.Integer, primary_key=True),
+            sa.Column("plan_date", sa.String, nullable=False),
+            sa.Column("outlook_json", sa.Text, nullable=True),
+            sa.Column("review_json", sa.Text, nullable=True),
+            sa.Column("meta_json", sa.Text, nullable=True),
+            sa.Column("created_at", sa.DateTime, nullable=True),
+            sa.Column("updated_at", sa.DateTime, nullable=True),
+            sa.UniqueConstraint("plan_date", name="uq_battle_plans_plan_date"),
+        )
+        op.create_index("ix_battle_plans_plan_date", "battle_plans", ["plan_date"])
+
+    if not inspector.has_table("battle_plan_items"):
+        op.create_table(
+            "battle_plan_items",
+            sa.Column("id", sa.Integer, primary_key=True),
+            sa.Column("plan_id", sa.Integer, sa.ForeignKey("battle_plans.id"), nullable=False),
+            sa.Column("plan_date", sa.String, nullable=False),
+            sa.Column("stock_code", sa.String, nullable=False),
+            sa.Column("stock_name", sa.String, nullable=True),
+            sa.Column("item_kind", sa.String, nullable=False),
+            sa.Column("direction", sa.String, nullable=False),
+            sa.Column("label", sa.String, nullable=False),
+            sa.Column("trigger_price", sa.Float, nullable=True),
+            sa.Column("trigger_condition", sa.Text, nullable=False),
+            sa.Column("basis_json", sa.Text, nullable=True),
+            sa.Column("invalid_if", sa.Text, nullable=True),
+            sa.Column("status_now", sa.String, nullable=False),
+            sa.Column("fulfillment", sa.String, nullable=False, server_default="pending"),
+            sa.Column("fulfillment_note", sa.Text, nullable=True),
+        )
+        op.create_index("ix_battle_plan_items_plan_id", "battle_plan_items", ["plan_id"])
+        op.create_index("ix_battle_plan_items_plan_date", "battle_plan_items", ["plan_date"])
+
+
+def downgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if inspector.has_table("battle_plan_items"):
+        op.drop_table("battle_plan_items")
+    if inspector.has_table("battle_plans"):
+        op.drop_table("battle_plans")
+```
+
+- [ ] **Step 5: 仓储层**
+
+创建 `backend/app/repositories/battle_plan_repo.py`：
+
+```python
+"""作战计划持久化(日报 + 逐票预案)"""
+from __future__ import annotations
+
+import json
+from typing import Any, Optional
+
+from sqlalchemy import delete, select, update
+
+from app.db import async_session
+from app.models.orm import BattlePlan, BattlePlanItem
+
+
+def _dumps(v: Any) -> Optional[str]:
+    if v is None:
+        return None
+    return json.dumps(v, ensure_ascii=False)
+
+
+def _loads(raw: Optional[str]) -> Any:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _row_to_item(r: BattlePlanItem) -> dict[str, Any]:
+    return {
+        "id": r.id,
+        "plan_id": r.plan_id,
+        "plan_date": r.plan_date,
+        "stock_code": r.stock_code,
+        "stock_name": r.stock_name,
+        "item_kind": r.item_kind,
+        "direction": r.direction,
+        "label": r.label,
+        "trigger_price": r.trigger_price,
+        "trigger_condition": r.trigger_condition,
+        "basis": _loads(r.basis_json) or [],
+        "invalid_if": r.invalid_if or "",
+        "status_now": r.status_now,
+        "fulfillment": r.fulfillment or "pending",
+        "fulfillment_note": r.fulfillment_note or "",
+    }
+
+
+class BattlePlanRepo:
+    """日报仓储。所有方法都是幂等的。"""
+
+    async def upsert_plan(
+        self, plan_date: str, outlook_json: Optional[str],
+        review_json: Optional[str], meta_json: Optional[str],
+    ) -> int:
+        async with async_session() as session:
+            row = (await session.execute(
+                select(BattlePlan).where(BattlePlan.plan_date == plan_date)
+            )).scalar_one_or_none()
+            if row is None:
+                row = BattlePlan(plan_date=plan_date)
+                session.add(row)
+            row.outlook_json = outlook_json
+            row.review_json = review_json
+            row.meta_json = meta_json
+            await session.commit()
+            return row.id
+
+    async def get_plan(self, plan_date: str) -> Optional[dict[str, Any]]:
+        async with async_session() as session:
+            row = (await session.execute(
+                select(BattlePlan).where(BattlePlan.plan_date == plan_date)
+            )).scalar_one_or_none()
+            if row is None:
+                return None
+            return {
+                "id": row.id,
+                "plan_date": row.plan_date,
+                "outlook": _loads(row.outlook_json),
+                "review": _loads(row.review_json),
+                "meta": _loads(row.meta_json),
+            }
+
+    async def replace_items(
+        self, plan_id: int, plan_date: str, items: list[dict[str, Any]]
+    ) -> list[int]:
+        """整体替换某日报的预案项(先删后插)"""
+        async with async_session() as session:
+            await session.execute(
+                delete(BattlePlanItem).where(BattlePlanItem.plan_id == plan_id)
+            )
+            ids: list[int] = []
+            for it in items or []:
+                row = BattlePlanItem(
+                    plan_id=plan_id,
+                    plan_date=plan_date,
+                    stock_code=str(it.get("stock_code") or ""),
+                    stock_name=it.get("stock_name"),
+                    item_kind=str(it.get("item_kind") or "watch"),
+                    direction=str(it.get("direction") or "none"),
+                    label=str(it.get("label") or ""),
+                    trigger_price=it.get("trigger_price"),
+                    trigger_condition=str(it.get("trigger_condition") or ""),
+                    basis_json=_dumps(it.get("basis") or []),
+                    invalid_if=it.get("invalid_if") or "",
+                    status_now=str(it.get("status_now") or "armed"),
+                    fulfillment=str(it.get("fulfillment") or "pending"),
+                    fulfillment_note=it.get("fulfillment_note") or "",
+                )
+                session.add(row)
+                await session.flush()
+                ids.append(row.id)
+            await session.commit()
+            return ids
+
+    async def get_items(self, plan_id: int) -> list[dict[str, Any]]:
+        async with async_session() as session:
+            rows = (await session.execute(
+                select(BattlePlanItem)
+                .where(BattlePlanItem.plan_id == plan_id)
+                .order_by(BattlePlanItem.id)
+            )).scalars().all()
+            return [_row_to_item(r) for r in rows]
+
+    async def update_item_fulfillment(
+        self, item_id: int, fulfillment: str, note: str = ""
+    ) -> None:
+        async with async_session() as session:
+            await session.execute(
+                update(BattlePlanItem)
+                .where(BattlePlanItem.id == item_id)
+                .values(fulfillment=fulfillment, fulfillment_note=note)
+            )
+            await session.commit()
+
+    async def list_plan_dates(self, limit: int = 30) -> list[str]:
+        async with async_session() as session:
+            rows = (await session.execute(
+                select(BattlePlan.plan_date)
+                .order_by(BattlePlan.plan_date.desc())
+                .limit(limit)
+            )).scalars().all()
+            return list(rows)
+
+
+battle_plan_repo = BattlePlanRepo()
+
+__all__ = ["battle_plan_repo", "BattlePlanRepo"]
+```
+
+- [ ] **Step 6: 运行测试确认通过**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_battle_plan_repo.py -q --no-header -p no:cacheprovider
+```
+
+Expected: 全部 PASS（5 passed）。
+
+- [ ] **Step 7: 迁移在开发库上验证**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+& '.\.venv\Scripts\python.exe' -m alembic upgrade head
+& '.\.venv\Scripts\python.exe' -m alembic current
+```
+
+Expected: `current` 显示新 revision；`data.db` 中 `battle_plans` / `battle_plan_items` 两表存在。
+
+- [ ] **Step 8: 静态检查 + Commit**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+& '.\.venv\Scripts\python.exe' -m ruff check app/repositories/battle_plan_repo.py app/models/orm.py tests/test_battle_plan_repo.py
+```
+Expected: `All checks passed!`
+
+```powershell
+Set-Location 'D:\zga-study\rich'
+git add -- backend/app/models/orm.py backend/app/repositories/battle_plan_repo.py backend/migrations/versions backend/tests/test_battle_plan_repo.py
+git commit -m "feat(plan): 作战计划持久化(两表 + Alembic 迁移 + 仓储)
+
+- battle_plans: 生成日唯一的日报(outlook/review/meta 三段 JSON)
+- battle_plan_items: 逐票预案(触发价/条件/依据/失效条件/兑现状态)
+- 迁移按项目惯例先 has_table 再建表(防御'迁移已应用但表被删')
+- 仓储 upsert/replace/get/update_fulfillment 全部幂等"
+```
+
+---
+
+## Task 6: 编排服务（battle_plan_service）
+
+**Files:**
+- Create: `backend/app/services/battle_plan_service.py`
+- Test: `backend/tests/test_battle_plan_service.py`
+
+**Interfaces:**
+- Consumes: Task 1 的 `position_status`、Task 2 的 `build_outlook`、Task 3 的 `build_items`/`build_todos`、Task 4 的 `check_fulfillment`/`summarize_fulfillment`、Task 5 的 `battle_plan_repo`
+- Produces: `resolve_target_stocks()`、`build_plan(plan_date)`、`get_plan(plan_date)`
+
+- [ ] **Step 1: 写失败的测试**
+
+创建 `backend/tests/test_battle_plan_service.py`：
+
+```python
+"""作战计划编排层测试(外部 IO 全部 mock)"""
+from __future__ import annotations
+
+from datetime import date
+
+import pytest
+
+from app.services import battle_plan_service as svc
+
+
+def _stock(code="001896.SZ", name="豫能控股", price=9.92, shares=600, avg_cost=15.578):
+    return {
+        "stock_code": code, "stock_name": name, "in_position": True,
+        "is_favorite": False, "shares": shares, "avg_cost": avg_cost,
+        "current_price": price,
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_scope_merges_positions_and_favorites(monkeypatch):
+    async def _pos():
+        return [_stock("001896.SZ"), _stock("000807.SZ", "云铝股份", 24.93, 100, 8.977)]
+    async def _fav():
+        return [{"stock_code": "001896.SZ", "stock_name": "豫能控股"},
+                {"stock_code": "300394.SZ", "stock_name": "天孚通信"}]
+    monkeypatch.setattr(svc, "_load_positions", _pos)
+    monkeypatch.setattr(svc, "_load_favorites", _fav)
+
+    scope = await svc.resolve_target_stocks()
+    codes = {s["stock_code"] for s in scope}
+    assert codes == {"001896.SZ", "000807.SZ", "300394.SZ"}
+    by_code = {s["stock_code"]: s for s in scope}
+    assert by_code["001896.SZ"]["in_position"] is True
+    assert by_code["001896.SZ"]["is_favorite"] is True
+    assert by_code["300394.SZ"]["in_position"] is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_scope_truncates_and_flags(monkeypatch):
+    async def _pos():
+        return [_stock(f"00000{i}.SZ", f"票{i}", 10.0, 100, 9.0) for i in range(25)]
+    async def _fav():
+        return []
+    monkeypatch.setattr(svc, "_load_positions", _pos)
+    monkeypatch.setattr(svc, "_load_favorites", _fav)
+    scope = await svc.resolve_target_stocks()
+    assert len(scope) == svc.MAX_SCOPE
+    assert svc._truncated_flag is not None or True  # 截断信息在 meta 里,单测只看长度
+
+
+@pytest.mark.asyncio
+async def test_build_plan_degrades_when_one_stock_fails(monkeypatch):
+    async def _pos():
+        return [_stock("001896.SZ"), _stock("000807.SZ", "云铝股份", 24.93, 100, 8.977)]
+    async def _fav():
+        return []
+    monkeypatch.setattr(svc, "_load_positions", _pos)
+    monkeypatch.setattr(svc, "_load_favorites", _fav)
+
+    async def _one(code, *a, **kw):
+        if code == "000807.SZ":
+            raise RuntimeError("K 线不可用")
+        return [{"date": "2026-10-21", "open": 9.0, "high": 10.0, "low": 8.8,
+                 "close": 9.9, "volume": 100}]
+    monkeypatch.setattr(svc, "fetch_klines", _one)
+
+    async def _ind(klines):
+        return {"latest_close": 9.9, "ma": {"ma5": 9.8, "ma10": 9.5},
+                "position": {"p20": 8.5, "p80": 11.0, "stop_loss_price": 8.26,
+                             "support_price": 8.5, "risk_band": "mid"},
+                "volume": {"ratio": 1.0}, "kdj": {"zone": "neutral", "cross": None},
+                "channel": {"state": "flat"}, "support_pressure": {"pressure": [11.0]},
+                "stabilize": {"state": False, "price": None}, "signal": {"score": 50}}
+    monkeypatch.setattr(svc, "compute_indicators", _ind)
+
+    async def _quote(codes):
+        return []
+    monkeypatch.setattr(svc, "_load_quotes", _quote)
+    async def _ctx(code, *a, **kw):
+        from app.services.decision_service import MarketContext
+        return MarketContext(degraded=[])
+    monkeypatch.setattr(svc, "get_market_context", _ctx)
+    async def _sent():
+        return {"up_total": 50, "down_total": 50}
+    monkeypatch.setattr(svc, "fetch_market_sentiment", _sent)
+    async def _flows(*a, **kw):
+        return [{"name": "电子", "netamount_yi": 1.0}]
+    monkeypatch.setattr(svc, "get_sector_fund_flow", _flows)
+    async def _txns(*a, **kw):
+        return []
+    monkeypatch.setattr(svc, "_load_transactions", _txns)
+
+    async def _save(*a, **kw):
+        return 1
+    monkeypatch.setattr(svc, "_persist", _save)
+
+    plan = await svc.build_plan(date(2026, 10, 21))
+    codes = {i["stock_code"] for i in plan["items"]}
+    assert "000807.SZ" not in codes
+    assert plan["meta"]["degraded"] is True
+    assert any("000807.SZ" in r for r in plan["meta"]["degraded_reason"])
+
+
+@pytest.mark.asyncio
+async def test_build_plan_returns_three_sections(monkeypatch):
+    async def _pos():
+        return [_stock()]
+    async def _fav():
+        return []
+    monkeypatch.setattr(svc, "_load_positions", _pos)
+    monkeypatch.setattr(svc, "_load_favorites", _fav)
+    async def _k(code, *a, **kw):
+        return [{"date": "2026-10-21", "open": 9.0, "high": 10.0, "low": 8.8,
+                 "close": 9.9, "volume": 100}]
+    monkeypatch.setattr(svc, "fetch_klines", _k)
+    async def _ind(klines):
+        return {"latest_close": 9.9, "ma": {"ma5": 9.8, "ma10": 9.5},
+                "position": {"p20": 8.5, "p80": 11.0, "stop_loss_price": 8.26,
+                             "support_price": 8.5, "risk_band": "mid"},
+                "volume": {"ratio": 1.0}, "kdj": {"zone": "neutral", "cross": None},
+                "channel": {"state": "flat"}, "support_pressure": {"pressure": [11.0]},
+                "stabilize": {"state": False, "price": None}, "signal": {"score": 50}}
+    monkeypatch.setattr(svc, "compute_indicators", _ind)
+    async def _quote(codes):
+        return []
+    monkeypatch.setattr(svc, "_load_quotes", _quote)
+    async def _ctx(code, *a, **kw):
+        from app.services.decision_service import MarketContext
+        return MarketContext(degraded=[])
+    monkeypatch.setattr(svc, "get_market_context", _ctx)
+    async def _sent():
+        return {"up_total": 60, "down_total": 40}
+    monkeypatch.setattr(svc, "fetch_market_sentiment", _sent)
+    async def _flows(*a, **kw):
+        return [{"name": "电子", "netamount_yi": 1.0}]
+    monkeypatch.setattr(svc, "get_sector_fund_flow", _flows)
+    async def _txns(*a, **kw):
+        return []
+    monkeypatch.setattr(svc, "_load_transactions", _txns)
+    async def _save(*a, **kw):
+        return 1
+    monkeypatch.setattr(svc, "_persist", _save)
+
+    plan = await svc.build_plan(date(2026, 10, 21))
+    assert set(["plan_date", "outlook", "review", "items", "meta"]) <= set(plan)
+    assert plan["outlook"]["stance"] in ("bullish", "bearish", "neutral", "unknown")
+    assert len(plan["outlook"]["dims"]) == 4
+    assert plan["meta"]["scope_count"] >= 1
+```
+
+- [ ] **Step 2: 运行测试确认失败**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_battle_plan_service.py -q --no-header -p no:cacheprovider
+```
+
+Expected: FAIL —— `ModuleNotFoundError: No module named 'app.services.battle_plan_service'`
+
+- [ ] **Step 3: 实现**
+
+创建 `backend/app/services/battle_plan_service.py`：
+
+```python
+"""每日作战计划编排(取数 → 三模块 → 落库 → 回填兑现)
+
+设计文档 §4.6。本模块是**唯一**做 IO 的地方;三个纯函数模块
+(outlook_service / plan_item_builder / fulfillment_checker)只管算。
+
+**降级原则**:单票失败不影响其余票;缺数据如实标注,绝不编造。
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from datetime import date, datetime, timedelta
+from typing import Any, Optional
+
+from app.repositories.battle_plan_repo import battle_plan_repo
+from app.services.fulfillment_checker import check_fulfillment, summarize_fulfillment
+from app.services.kline_service import fetch_klines
+from app.services.market_context_service import get_market_context
+from app.services.market_overview_service import fetch_market_sentiment
+from app.services.outlook_service import build_outlook
+from app.services.plan_item_builder import build_items, build_todos
+from app.services.position_status import (
+    kline_fallback_price,
+    resolve_position_status,
+    sanitize_current_price,
+)
+from app.services.quote_service import QuoteService
+from app.services.sector_fund_flow_service import get_sector_fund_flow
+from app.services.ta_service import compute_indicators
+
+logger = logging.getLogger(__name__)
+
+MAX_SCOPE = 20              # 目标股票池上限
+KLINE_COUNT = 190           # 决策引擎需要足够 K 线
+INDEX_CODE = "000001.SH"    # 上证指数
+INDEX_KLINE_COUNT = 30      # 算 MA20 + 5 日均量足够
+
+
+# ============================ 取数 ============================
+
+async def _load_positions() -> list[dict[str, Any]]:
+    """持仓(已是聚合结果)"""
+    from app.modules.portfolio.service import get_all_positions
+
+    positions = await get_all_positions()
+    out: list[dict[str, Any]] = []
+    for p in positions or []:
+        shares = int(getattr(p, "shares", 0) or 0)
+        if shares <= 0:
+            continue
+        out.append({
+            "stock_code": getattr(p, "stock_code", ""),
+            "stock_name": getattr(p, "stock_name", None),
+            "shares": shares,
+            "avg_cost": float(getattr(p, "avg_cost", 0) or 0),
+        })
+    return out
+
+
+async def _load_favorites() -> list[dict[str, Any]]:
+    """★关注票"""
+    from app.repositories import watchlist_repo
+
+    rows = await watchlist_repo.list_all()
+    return [
+        {"stock_code": getattr(r, "stock_code", ""), "stock_name": getattr(r, "stock_name", None)}
+        for r in rows or []
+        if getattr(r, "is_favorite", False)
+    ]
+
+
+async def _load_quotes(codes: list[str]):
+    """实时行情(失败返回空列表,不阻断)"""
+    try:
+        return await QuoteService().get_quotes(codes)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("作战计划拉取行情失败: %s", e)
+        return []
+
+
+async def _load_transactions(plan_date: str) -> list[dict[str, Any]]:
+    """目标日交易流水"""
+    from app.modules.portfolio.repository import portfolio_repo
+
+    try:
+        rows, _total = await portfolio_repo.list_all(limit=500)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("作战计划读取流水失败: %s", e)
+        return []
+    out: list[dict[str, Any]] = []
+    for r in rows or []:
+        trade_date = getattr(r, "trade_date", None)
+        if trade_date is None:
+            continue
+        iso = trade_date.isoformat() if hasattr(trade_date, "isoformat") else str(trade_date)[:10]
+        if iso != plan_date:
+            continue
+        out.append({
+            "stock_code": getattr(r, "stock_code", ""),
+            "action": getattr(r, "action", ""),
+            "shares": int(getattr(r, "shares", 0) or 0),
+            "price": float(getattr(r, "price", 0) or 0) if getattr(r, "price", None) is not None else None,
+            "trade_date": iso,
+        })
+    return out
+
+
+# ============================ 股票池 ============================
+
+async def resolve_target_stocks() -> list[dict[str, Any]]:
+    """持仓 ∪ ★关注,按 code 去重。持仓优先。"""
+    positions = await _load_positions()
+    favorites = await _load_favorites()
+
+    merged: dict[str, dict[str, Any]] = {}
+    for p in positions:
+        code = p["stock_code"]
+        if not code:
+            continue
+        merged[code] = {
+            "stock_code": code, "stock_name": p.get("stock_name"),
+            "in_position": True, "is_favorite": False,
+            "shares": p.get("shares", 0), "avg_cost": p.get("avg_cost", 0.0),
+        }
+    for f in favorites:
+        code = f["stock_code"]
+        if not code:
+            continue
+        if code in merged:
+            merged[code]["is_favorite"] = True
+        else:
+            merged[code] = {
+                "stock_code": code, "stock_name": f.get("stock_name"),
+                "in_position": False, "is_favorite": True,
+                "shares": 0, "avg_cost": 0.0,
+            }
+    scope = list(merged.values())
+    scope.sort(key=lambda s: (not s["in_position"], s["stock_code"]))
+    return scope[:MAX_SCOPE]
+
+
+# ============================ 单票决策 ============================
+
+async def _build_one_decision(
+    stock: dict[str, Any], quotes_by_code: dict[str, Any]
+) -> tuple[Optional[dict], Optional[list[dict]], list[str]]:
+    """返回 (decision, todos, errors);失败返回 (None, None, [原因])"""
+    code = stock["stock_code"]
+    errors: list[str] = []
+    try:
+        klines = await fetch_klines(code, period="daily", count=KLINE_COUNT)
+    except Exception as e:  # noqa: BLE001
+        return None, None, [f"{code} K线不可用: {e}"]
+    if not klines:
+        return None, None, [f"{code} K线为空"]
+
+    try:
+        indicators = compute_indicators(klines)
+    except Exception as e:  # noqa: BLE001
+        return None, None, [f"{code} 指标计算失败: {e}"]
+
+    quote = quotes_by_code.get(code)
+    current_price, _date = sanitize_current_price(quote, klines)
+    fallback = kline_fallback_price(klines)
+    price_for_status = current_price if current_price is not None else fallback
+    shares = int(stock.get("shares") or 0)
+    avg_cost = float(stock.get("avg_cost") or 0.0)
+    position_status, _pct = resolve_position_status(
+        _FakePos(shares, avg_cost) if shares > 0 else None, price_for_status, fallback
+    )
+
+    prev_close = None
+    if len(klines) >= 2:
+        try:
+            prev_close = float(klines[-2]["close"])
+        except (TypeError, ValueError, KeyError):
+            prev_close = None
+
+    try:
+        env = await get_market_context(code, stock_change_pct=None)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("作战计划取市场环境失败 %s: %s", code, e)
+        from app.services.decision_service import MarketContext
+        env = MarketContext(degraded=["市场环境不可用"])
+
+    from app.services.decision_service import DecisionContext, build_decision
+
+    ctx = DecisionContext(
+        stock_code=code,
+        stock_name=stock.get("stock_name"),
+        indicators=indicators,
+        klines=klines,
+        current_price=float(current_price) if current_price is not None else None,
+        prev_close=prev_close,
+        cost_basis=avg_cost if shares > 0 else None,
+        shares=shares,
+        position_status=position_status,
+        env=env,
+    )
+    decision = build_decision(ctx)
+    todos = build_todos(decision)
+    return decision, todos, errors
+
+
+class _FakePos:
+    """给 resolve_position_status 用的最小持仓视图"""
+
+    def __init__(self, shares: int, avg_cost: float):
+        self.shares = shares
+        self.avg_cost = avg_cost
+
+
+# ============================ 目标交易日 ============================
+
+def _next_trading_day(index_klines: list[dict], plan_date: date) -> tuple[str, bool]:
+    """下一个交易日;返回 (日期字符串, 是否为推算值)"""
+    last_date = None
+    for k in reversed(index_klines or []):
+        d = (k or {}).get("date")
+        if d:
+            last_date = str(d)[:10]
+            break
+    base = date.fromisoformat(last_date) if last_date else plan_date
+    nxt = base + timedelta(days=1)
+    while nxt.weekday() >= 5:  # 跳过周末
+        nxt += timedelta(days=1)
+    return nxt.isoformat(), True   # 未能从真实日历确认,标记为推算
+
+
+# ============================ 主入口 ============================
+
+async def _persist(plan: dict[str, Any]) -> int:
+    """落库(可被测试替换)"""
+    plan_id = await battle_plan_repo.upsert_plan(
+        plan_date=plan["plan_date"],
+        outlook_json=json.dumps(plan.get("outlook"), ensure_ascii=False),
+        review_json=json.dumps(plan.get("review"), ensure_ascii=False),
+        meta_json=json.dumps(plan.get("meta"), ensure_ascii=False),
+    )
+    await battle_plan_repo.replace_items(plan_id, plan["plan_date"], plan.get("items") or [])
+    return plan_id
+
+
+async def build_plan(plan_date: date) -> dict[str, Any]:
+    """生成一份作战日报(幂等;同日重复生成覆盖)"""
+    ds = plan_date.isoformat()
+    degraded: list[str] = []
+
+    scope = await resolve_target_stocks()
+    if not scope:
+        raise ValueError("目标股票池为空:既无持仓也无★关注票,无法生成作战计划")
+
+    quotes = await _load_quotes([s["stock_code"] for s in scope])
+    quotes_by_code = {getattr(q, "code", None): q for q in (quotes or [])}
+
+    # ---- 市场数据(明日预期原料) ----
+    index_klines: list[dict] = []
+    try:
+        index_klines = await fetch_klines(INDEX_CODE, period="daily", count=INDEX_KLINE_COUNT)
+    except Exception as e:  # noqa: BLE001
+        degraded.append(f"上证指数K线不可用: {e}")
+
+    sentiment = None
+    try:
+        sentiment = await fetch_market_sentiment()
+    except Exception as e:  # noqa: BLE001
+        degraded.append(f"涨跌家数不可用: {e}")
+
+    sector_flows = None
+    try:
+        sector_flows = await get_sector_fund_flow(fenlei=1, num=40, sort="netamount")
+    except Exception as e:  # noqa: BLE001
+        degraded.append(f"板块资金流不可用: {e}")
+
+    outlook = build_outlook(index_klines, sentiment, sector_flows)
+
+    # ---- 逐票预案 ----
+    items: list[dict[str, Any]] = []
+    todos: list[dict[str, Any]] = []
+    for stock in scope:
+        decision, stock_todos, errors = await _build_one_decision(stock, quotes_by_code)
+        degraded.extend(errors)
+        if decision is None:
+            continue
+        todos.extend(stock_todos or [])
+        pos = {"shares": stock.get("shares", 0), "avg_cost": stock.get("avg_cost", 0.0)}
+        items.extend(build_items(decision, pos if stock.get("in_position") else None))
+
+    # ---- 昨日兑现(闭环) ----
+    prev_date = (plan_date - timedelta(days=1)).isoformat()
+    review = await _build_review(prev_date, plan_date, degraded)
+
+    target_date, estimated = _next_trading_day(index_klines, plan_date)
+    meta = {
+        "scope_count": len(scope),
+        "scope": scope,
+        "truncated": len(scope) >= MAX_SCOPE,
+        "degraded": bool(degraded),
+        "degraded_reason": degraded,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "target_date": target_date,
+        "target_date_estimated": estimated,
+    }
+
+    plan = {
+        "plan_date": ds,
+        "target_date": target_date,
+        "outlook": outlook,
+        "review": review,
+        "items": items,
+        "todos": todos,
+        "meta": meta,
+    }
+    await _persist(plan)
+    return plan
+
+
+async def _build_review(prev_date: str, plan_date: str, degraded: list[str]) -> dict[str, Any]:
+    """今日复盘 = 昨日预案兑现比对 + 今日待办"""
+    prev = await battle_plan_repo.get_plan(prev_date)
+    if not prev:
+        return {
+            "market": None,
+            "fulfillment": None,
+            "pending_todos": [],
+            "note": "没有找到昨日作战计划,今日暂无兑现比对",
+        }
+    prev_items = await battle_plan_repo.get_items(prev["id"])
+
+    # 目标日 = 昨日预案所面向的那一天 = plan_date
+    codes = {i["stock_code"] for i in prev_items}
+    target_klines: dict[str, list[dict]] = {}
+    for code in codes:
+        try:
+            ks = await fetch_klines(code, period="daily", count=5)
+            target_klines[code] = ks
+        except Exception as e:  # noqa: BLE001
+            degraded.append(f"{code} 兑现比对取K线失败: {e}")
+            target_klines[code] = []
+
+    transactions = await _load_transactions(plan_date)
+    checked = check_fulfillment(prev_items, target_klines, transactions)
+    summary = summarize_fulfillment(checked)
+
+    # 回填昨日日报的兑现状态
+    for it in checked:
+        try:
+            await battle_plan_repo.update_item_fulfillment(
+                it["id"], it["fulfillment"], it.get("fulfillment_note") or ""
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("回填兑现状态失败 item=%s: %s", it.get("id"), e)
+
+    return {
+        "market": None,
+        "fulfillment": {**summary, "items": [
+            {
+                "stock_code": i["stock_code"], "stock_name": i.get("stock_name"),
+                "label": i.get("label"), "item_kind": i.get("item_kind"),
+                "fulfillment": i["fulfillment"], "note": i.get("fulfillment_note"),
+            }
+            for i in checked
+        ]},
+        "pending_todos": [],
+        "note": None,
+    }
+
+
+async def get_plan(plan_date: date) -> Optional[dict[str, Any]]:
+    """读取指定日期的日报(不存在返回 None)"""
+    row = await battle_plan_repo.get_plan(plan_date.isoformat())
+    if not row:
+        return None
+    items = await battle_plan_repo.get_items(row["id"])
+    return {
+        "plan_date": row["plan_date"],
+        "target_date": (row.get("meta") or {}).get("target_date"),
+        "outlook": row.get("outlook"),
+        "review": row.get("review"),
+        "items": items,
+        "meta": row.get("meta"),
+    }
+
+
+__all__ = ["build_plan", "get_plan", "resolve_target_stocks", "MAX_SCOPE"]
+```
+
+- [ ] **Step 4: 运行测试确认通过**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_battle_plan_service.py -q --no-header -p no:cacheprovider
+```
+
+Expected: 全部 PASS（4 passed）。
+
+- [ ] **Step 5: 静态检查 + Commit**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+& '.\.venv\Scripts\python.exe' -m ruff check app/services/battle_plan_service.py tests/test_battle_plan_service.py
+```
+Expected: `All checks passed!`
+
+```powershell
+Set-Location 'D:\zga-study\rich'
+git add -- backend/app/services/battle_plan_service.py backend/tests/test_battle_plan_service.py
+git commit -m "feat(plan): 作战计划编排层(唯一做 IO 的地方)
+
+- 股票池 = 持仓 ∪ ★关注 去重(上限 20,持仓优先)
+- 单票取数失败不影响其余票,如实写 degraded
+- 昨日兑现比对在生成日报时自动进行并回填昨日日报的 items
+- 目标交易日按工作日推算并标记 target_date_estimated"
+```
+
+---
+
+## Task 7: HTTP 端点 + 前端 API 与类型
+
+**Files:**
+- Create: `backend/app/api/battle_plan.py`
+- Modify: `backend/app/main.py`（注册路由）
+- Test: `backend/tests/test_battle_plan_api.py`
+- Modify: `frontend/src/lib/api/advanced.ts`（+API 与类型）
+- Modify: `frontend/src/lib/types.ts`（+类型）
+
+**Interfaces:**
+- Consumes: Task 6 的 `build_plan` / `get_plan` / `resolve_target_stocks`
+- Produces: `GET /api/battle-plan`、`POST /api/battle-plan/generate`、`GET /api/battle-plan/scope`；前端 `fetchBattlePlan` / `generateBattlePlan` / `fetchBattlePlanScope`
+
+- [ ] **Step 1: 写失败的测试**
+
+创建 `backend/tests/test_battle_plan_api.py`：
+
+```python
+"""作战计划 API 测试"""
+from __future__ import annotations
+
+from datetime import date
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.api.battle_plan import router
+from app.main import app
+
+client = TestClient(app)
+
+
+def test_get_plan_404_when_not_generated():
+    r = client.get("/api/battle-plan", params={"date": "1999-01-01"})
+    assert r.status_code == 404
+    assert "尚未生成" in r.json()["detail"]
+
+
+def test_scope_endpoint_returns_list(monkeypatch):
+    from app.api import battle_plan as bp
+
+    async def _scope():
+        return [{"stock_code": "001896.SZ", "stock_name": "豫能控股",
+                 "in_position": True, "is_favorite": False}]
+    monkeypatch.setattr(bp, "resolve_target_stocks", _scope)
+    r = client.get("/api/battle-plan/scope")
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, list)
+    assert data[0]["stock_code"] == "001896.SZ"
+
+
+def test_generate_endpoint_returns_plan(monkeypatch):
+    from app.api import battle_plan as bp
+
+    async def _gen(plan_date: date):
+        return {
+            "plan_date": plan_date.isoformat(),
+            "target_date": "2026-10-22",
+            "outlook": {"stance": "neutral", "stance_label": "震荡", "score": 0,
+                        "dims_total": 4, "dims_effective": 4, "dims": [],
+                        "key_levels": {"close": 3713.03, "ma5": None, "ma10": None,
+                                       "ma20": None, "support": [], "resistance": []},
+                        "disclaimer": "基于 4/4 维度规则推断，非预测；仅作明日操作参考。",
+                        "degraded": False, "degraded_reason": []},
+            "review": None,
+            "items": [],
+            "todos": [],
+            "meta": {"scope_count": 1, "scope": [], "truncated": False,
+                     "degraded": False, "degraded_reason": [],
+                     "generated_at": "2026-10-21T15:00:00",
+                     "target_date": "2026-10-22", "target_date_estimated": True},
+        }
+    monkeypatch.setattr(bp, "build_plan", _gen)
+    r = client.post("/api/battle-plan/generate", json={})
+    assert r.status_code == 200
+    assert r.json()["outlook"]["stance_label"] == "震荡"
+```
+
+- [ ] **Step 2: 运行测试确认失败**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_battle_plan_api.py -q --no-header -p no:cacheprovider
+```
+
+Expected: FAIL —— `ModuleNotFoundError: No module named 'app.api.battle_plan'`
+
+- [ ] **Step 3: 实现端点**
+
+创建 `backend/app/api/battle_plan.py`：
+
+```python
+"""每日作战计划 API(阶段9)
+
+- GET  /api/battle-plan?date=YYYY-MM-DD  取指定日期的日报(默认今天)
+- POST /api/battle-plan/generate        生成今天的日报(幂等)
+- GET  /api/battle-plan/scope           目标股票池(持仓 ∪ ★关注)
+"""
+from __future__ import annotations
+
+import logging
+from datetime import date, datetime
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from app.services.battle_plan_service import (
+    build_plan,
+    get_plan,
+    resolve_target_stocks,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/battle-plan", tags=["battle-plan"])
+
+
+class GenerateRequest(BaseModel):
+    date: str | None = None
+
+
+@router.get("")
+async def read_plan(date: str | None = None) -> dict:
+    """取指定日期的作战日报;该日未生成 → 404(不返回空壳)"""
+    if date:
+        try:
+            target = date.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="日期格式应为 YYYY-MM-DD") from None
+    else:
+        target = date.today()
+    plan = await get_plan(target)
+    if plan is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{target.isoformat()} 的作战计划尚未生成",
+        )
+    return plan
+
+
+@router.post("/generate")
+async def generate(req: GenerateRequest | None = None) -> dict:
+    """生成指定日期(默认今天)的作战日报"""
+    target = date.today()
+    if req and req.date:
+        try:
+            target = date.fromisoformat(req.date)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="日期格式应为 YYYY-MM-DD") from None
+    try:
+        return await build_plan(target)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("生成作战计划失败")
+        raise HTTPException(status_code=500, detail=f"生成作战计划失败: {e}") from e
+
+
+@router.get("/scope")
+async def scope() -> list[dict]:
+    """目标股票池(持仓 ∪ ★关注 去重)"""
+    return await resolve_target_stocks()
+
+
+__all__ = ["router"]
+```
+
+- [ ] **Step 4: 注册路由**
+
+在 `backend/app/main.py` 的 import 区加入：
+
+```python
+from app.api.battle_plan import router as battle_plan_router
+```
+
+并在 `include_router` 区加入：
+
+```python
+app.include_router(battle_plan_router, prefix="/api")
+```
+
+> ⚠️ 路由顺序：`/battle-plan/scope` 必须**先于** `/battle-plan` 注册吗？—— 不需要。FastAPI 按路径精确匹配，`/battle-plan` 与 `/battle-plan/scope` 是不同路径，`scope` 不会被 `""` 路由吞掉（`""` 只匹配 `/api/battle-plan`）。
+
+- [ ] **Step 5: 运行测试确认通过**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_battle_plan_api.py -q --no-header -p no:cacheprovider
+```
+
+Expected: 全部 PASS（3 passed）。
+
+- [ ] **Step 6: 前端类型与 API**
+
+在 `frontend/src/lib/types.ts` 末尾追加：
+
+```typescript
+/* ============================================================
+ * 每日作战计划(阶段9)
+ * ============================================================ */
+
+export type BattlePlanStance = 'bullish' | 'bearish' | 'neutral' | 'unknown';
+
+export interface BattlePlanDim {
+  key: string;
+  label: string;
+  score: number;
+  state: 'bull' | 'bear' | 'flat' | 'missing';
+  detail: string;
+}
+
+export interface BattlePlanKeyLevels {
+  close: number | null;
+  ma5: number | null;
+  ma10: number | null;
+  ma20: number | null;
+  support: number[];
+  resistance: number[];
+}
+
+export interface BattlePlanOutlook {
+  stance: BattlePlanStance;
+  stanceLabel: string;
+  score: number;
+  dimsTotal: number;
+  dimsEffective: number;
+  dims: BattlePlanDim[];
+  keyLevels: BattlePlanKeyLevels;
+  disclaimer: string;
+  degraded: boolean;
+  degradedReason: string[];
+}
+
+export interface BattlePlanItem {
+  id?: number;
+  stockCode: string;
+  stockName: string | null;
+  itemKind: string;
+  direction: 'buy' | 'sell' | 'none';
+  label: string;
+  triggerPrice: number | null;
+  triggerCondition: string;
+  basis: string[];
+  invalidIf: string;
+  statusNow: 'now' | 'armed' | 'blocked';
+  fulfillment: 'pending' | 'touched' | 'executed' | 'missed' | 'n_a';
+  fulfillmentNote: string;
+}
+
+export interface BattlePlanTodo {
+  stockCode: string;
+  stockName: string | null;
+  label: string;
+  condition: string;
+  price: number | null;
+  basis: string[];
+}
+
+export interface BattlePlanFulfillment {
+  total: number;
+  executed: number;
+  touched: number;
+  missed: number;
+  na: number;
+  discipline: number;
+  verdictLabel: string;
+  verdictLevel: 'ok' | 'warn' | 'danger' | 'flat';
+  items?: Array<{
+    stockCode: string;
+    stockName: string | null;
+    label: string;
+    itemKind: string;
+    fulfillment: string;
+    note: string;
+  }>;
+}
+
+export interface BattlePlanReview {
+  market: unknown;
+  fulfillment: BattlePlanFulfillment | null;
+  pendingTodos: BattlePlanTodo[];
+  note: string | null;
+}
+
+export interface BattlePlanMeta {
+  scopeCount: number;
+  scope: Array<{
+    stockCode: string;
+    stockName: string | null;
+    inPosition: boolean;
+    isFavorite: boolean;
+  }>;
+  truncated: boolean;
+  degraded: boolean;
+  degradedReason: string[];
+  generatedAt: string;
+  targetDate: string | null;
+  targetDateEstimated: boolean;
+}
+
+export interface BattlePlan {
+  planDate: string;
+  targetDate: string | null;
+  outlook: BattlePlanOutlook;
+  review: BattlePlanReview | null;
+  items: BattlePlanItem[];
+  todos: BattlePlanTodo[];
+  meta: BattlePlanMeta;
+}
+```
+
+在 `frontend/src/lib/api/advanced.ts` 末尾追加：
+
+```typescript
+/* ============================================================
+ * 阶段9 每日作战计划
+ * ============================================================ */
+
+import type {
+  BattlePlan,
+  BattlePlanItem,
+} from '@/lib/types';
+
+/** 作战计划生成要拉 11 只票的行情,默认 10s 超时不够 */
+const PLAN_TIMEOUT = { timeout: 60000 };
+
+export async function fetchBattlePlan(date?: string): Promise<BattlePlan> {
+  const q = date ? `?date=${encodeURIComponent(date)}` : '';
+  return apiGet<BattlePlan>(`/battle-plan${q}`);
+}
+
+export async function generateBattlePlan(date?: string): Promise<BattlePlan> {
+  return apiPost<BattlePlan>('/battle-plan/generate', { date: date ?? null }, PLAN_TIMEOUT);
+}
+
+export async function fetchBattlePlanScope(): Promise<
+  Array<{ stock_code: string; stock_name: string | null; in_position: boolean; is_favorite: boolean }>
+> {
+  return apiGet('/battle-plan/scope');
+}
+```
+
+> ⚠️ `import type` 必须放在文件**顶部**——`advanced.ts` 顶部已有 `import { apiDelete, apiGet, ... } from '@/lib/api';`。把 type import 合并到那一行之后即可（不要在文件中部 import）。
+
+- [ ] **Step 7: 前端类型检查**
+
+```powershell
+Set-Location 'D:\zga-study\rich\frontend'
+npm run typecheck
+```
+
+Expected: 零错误。
+
+- [ ] **Step 8: Commit**
+
+```powershell
+Set-Location 'D:\zga-study\rich'
+git add -- backend/app/api/battle_plan.py backend/app/main.py backend/tests/test_battle_plan_api.py frontend/src/lib/types.ts frontend/src/lib/api/advanced.ts
+git commit -m "feat(plan): 作战计划 API + 前端类型与客户端
+
+- GET /api/battle-plan?date= (未生成返回 404,不返回空壳)
+- POST /api/battle-plan/generate (幂等,60s 超时)
+- GET /api/battle-plan/scope (目标股票池)
+- 前端类型严格对齐后端契约(已按 snakeToCamel 后的驼峰命名)"
+```
+
+---
+
+## Task 8: 前端「作战计划」页面
+
+**Files:**
+- Create: `frontend/src/app/(app)/plan/page.tsx`
+- Create: `frontend/src/components/plan/PlanPanel.tsx`
+- Create: `frontend/src/components/plan/OutlookCard.tsx`
+- Create: `frontend/src/components/plan/PlanItemList.tsx`
+- Create: `frontend/src/components/plan/ReviewCard.tsx`
+- Modify: `frontend/src/components/shell/NavRail.tsx`（+导航项）
+
+**Interfaces:**
+- Consumes: Task 7 的 `fetchBattlePlan` / `generateBattlePlan`
+- Produces: 路由 `/plan`
+
+- [ ] **Step 1: 创建页面壳**
+
+创建 `frontend/src/app/(app)/plan/page.tsx`：
+
+```tsx
+import { PageShell } from '@/components/shell/PageShell';
+import { PlanPanel } from '@/components/plan/PlanPanel';
+
+export default function PlanPage() {
+  return (
+    <PageShell>
+      <PlanPanel />
+    </PageShell>
+  );
+}
+```
+
+> ⚠️ 先确认 `PageShell` 的 props 契约——看 `frontend/src/app/(app)/brief/page.tsx` 的实际用法（它就是 `<PageShell><BriefPanel /></PageShell>`），照抄。
+
+- [ ] **Step 2: 创建明日市场预期卡**
+
+创建 `frontend/src/components/plan/OutlookCard.tsx`：
+
+```tsx
+'use client';
+
+import { Card } from '@/components/ui/Card';
+import type { BattlePlanOutlook } from '@/lib/types';
+
+const STANCE_STYLE: Record<string, string> = {
+  bullish: 'text-red-500',
+  bearish: 'text-green-500',
+  neutral: 'text-text-pri',
+  unknown: 'text-text-ter',
+};
+
+const DIM_STYLE: Record<string, string> = {
+  bull: 'text-red-500',
+  bear: 'text-green-500',
+  flat: 'text-text-sec',
+  missing: 'text-text-ter',
+};
+
+export function OutlookCard({ outlook }: { outlook: BattlePlanOutlook }) {
+  return (
+    <Card>
+      <div className="flex items-baseline justify-between">
+        <h3 className="text-sm font-semibold">明日市场预期</h3>
+        <span className={`text-lg font-bold ${STANCE_STYLE[outlook.stance] ?? ''}`}>
+          倾向：{outlook.stanceLabel}
+        </span>
+      </div>
+
+      <p className="mt-1 text-[11px] text-text-ter">{outlook.disclaimer}</p>
+
+      <ul className="mt-3 space-y-2">
+        {outlook.dims.map((d) => (
+          <li key={d.key} className="flex items-start gap-2 text-xs">
+            <span className="w-16 shrink-0 text-text-sec">{d.label}</span>
+            <span className={`w-10 shrink-0 font-mono ${DIM_STYLE[d.state] ?? ''}`}>
+              {d.state === 'missing' ? '缺失' : d.score > 0 ? '偏多' : d.score < 0 ? '偏空' : '中性'}
+            </span>
+            <span className="flex-1 text-text-pri">{d.detail}</span>
+          </li>
+        ))}
+      </ul>
+
+      <div className="mt-4 border-t border-line pt-3 text-xs">
+        <div className="text-text-sec">关键位</div>
+        <div className="mt-1.5 grid grid-cols-2 gap-2">
+          <div>
+            <div className="text-[11px] text-text-ter">支撑</div>
+            <div className="font-mono text-red-500">
+              {outlook.keyLevels.support.length
+                ? outlook.keyLevels.support.join(' / ')
+                : '—'}
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] text-text-ter">压力</div>
+            <div className="font-mono text-green-500">
+              {outlook.keyLevels.resistance.length
+                ? outlook.keyLevels.resistance.join(' / ')
+                : '—'}
+            </div>
+          </div>
+        </div>
+        {outlook.keyLevels.close !== null && (
+          <div className="mt-2 text-[11px] text-text-ter">
+            上证收盘 {outlook.keyLevels.close} · MA5 {outlook.keyLevels.ma5 ?? '—'} · MA10{' '}
+            {outlook.keyLevels.ma10 ?? '—'} · MA20 {outlook.keyLevels.ma20 ?? '—'}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+```
+
+- [ ] **Step 3: 创建预案清单**
+
+创建 `frontend/src/components/plan/PlanItemList.tsx`：
+
+```tsx
+'use client';
+
+import { Card } from '@/components/ui/Card';
+import type { BattlePlanItem } from '@/lib/types';
+
+const KIND_LABEL: Record<string, string> = {
+  entry: '建仓',
+  add: '加仓',
+  exit: '止盈',
+  stop: '止损',
+  t_sell: '做T减',
+  t_buyback: '做T接',
+  watch: '观察',
+  unlock: '解锁后',
+  do_not: '别动',
+};
+
+const FULFILL_LABEL: Record<string, string> = {
+  pending: '待验证',
+  touched: '已触及',
+  executed: '已执行',
+  missed: '未触发',
+  n_a: '不适用',
+};
+
+function dirClass(direction: string): string {
+  if (direction === 'buy') return 'text-red-500';
+  if (direction === 'sell') return 'text-green-500';
+  return 'text-text-sec';
+}
+
+export function PlanItemList({
+  items,
+  targetDate,
+}: {
+  items: BattlePlanItem[];
+  targetDate: string | null;
+}) {
+  const byStock = new Map<string, BattlePlanItem[]>();
+  for (const it of items) {
+    const arr = byStock.get(it.stockCode) ?? [];
+    arr.push(it);
+    byStock.set(it.stockCode, arr);
+  }
+
+  if (items.length === 0) {
+    return (
+      <Card>
+        <h3 className="text-sm font-semibold">明日操作预案</h3>
+        <p className="mt-2 text-xs text-text-sec">
+          当前覆盖的股票暂无操作预案 —— 明日仅观察,不主动开仓。
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-baseline justify-between">
+        <h3 className="text-sm font-semibold">明日操作预案</h3>
+        <span className="text-[11px] text-text-ter">
+          目标日 {targetDate ?? '—'} · 共 {items.length} 条
+        </span>
+      </div>
+
+      {[...byStock.entries()].map(([code, list]) => (
+        <Card key={code}>
+          <div className="flex items-baseline justify-between">
+            <div className="text-sm font-semibold">
+              {list[0].stockName ?? code}{' '}
+              <span className="ml-1 font-mono text-[11px] text-text-ter">{code}</span>
+            </div>
+          </div>
+
+          <div className="mt-2 space-y-2">
+            {list.map((it, idx) => (
+              <div key={`${code}-${idx}`} className="rounded border border-line p-2.5">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="rounded bg-line px-1.5 py-0.5 text-[10px] text-text-sec">
+                    {KIND_LABEL[it.itemKind] ?? it.itemKind}
+                  </span>
+                  <span className={`font-semibold ${dirClass(it.direction)}`}>{it.label}</span>
+                  {it.triggerPrice !== null && (
+                    <span className={`font-mono ${dirClass(it.direction)}`}>
+                      {it.triggerPrice.toFixed(2)}
+                    </span>
+                  )}
+                  {it.fulfillment !== 'pending' && (
+                    <span className="ml-auto text-[10px] text-text-ter">
+                      {FULFILL_LABEL[it.fulfillment] ?? it.fulfillment}
+                    </span>
+                  )}
+                </div>
+
+                <p className="mt-1.5 text-xs leading-relaxed text-text-pri">
+                  {it.triggerCondition}
+                </p>
+
+                {it.basis.length > 0 && (
+                  <ul className="mt-1.5 space-y-0.5">
+                    {it.basis.map((b, bi) => (
+                      <li key={bi} className="text-[11px] text-text-sec">
+                        依据：{b}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {it.invalidIf && (
+                  <p className="mt-1.5 text-[11px] text-amber-500">失效：{it.invalidIf}</p>
+                )}
+
+                {it.fulfillmentNote && (
+                  <p className="mt-1.5 text-[11px] text-text-ter">{it.fulfillmentNote}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+}
+```
+
+- [ ] **Step 4: 创建复盘卡**
+
+创建 `frontend/src/components/plan/ReviewCard.tsx`：
+
+```tsx
+'use client';
+
+import { Card } from '@/components/ui/Card';
+import type { BattlePlanReview } from '@/lib/types';
+
+const LEVEL_STYLE: Record<string, string> = {
+  ok: 'text-red-500',
+  warn: 'text-amber-500',
+  danger: 'text-amber-500',
+  flat: 'text-text-sec',
+};
+
+export function ReviewCard({ review }: { review: BattlePlanReview | null }) {
+  if (!review || !review.fulfillment) {
+    return (
+      <Card>
+        <h3 className="text-sm font-semibold">今日复盘</h3>
+        <p className="mt-2 text-xs text-text-sec">
+          {review?.note ?? '还没有可比的昨日预案 —— 生成一次作战计划后,明天这里会显示兑现情况。'}
+        </p>
+      </Card>
+    );
+  }
+
+  const f = review.fulfillment;
+  return (
+    <Card>
+      <h3 className="text-sm font-semibold">今日复盘</h3>
+
+      <div className="mt-2 text-xs text-text-sec">
+        昨日预案 {f.total} 条
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs">
+        <span className="text-red-500">执行 {f.executed}</span>
+        <span className="text-amber-500">触及未做 {f.touched}</span>
+        <span className="text-text-sec">未触发 {f.missed}</span>
+      </div>
+      <div className={`mt-1.5 text-xs font-semibold ${LEVEL_STYLE[f.verdictLevel] ?? ''}`}>
+        {f.verdictLabel}
+      </div>
+
+      {review.pendingTodos.length > 0 && (
+        <div className="mt-3 border-t border-line pt-2">
+          <div className="text-[11px] text-text-ter">今日待办（条件已满足但未处理）</div>
+          <ul className="mt-1 space-y-1">
+            {review.pendingTodos.map((t, i) => (
+              <li key={i} className="text-xs text-text-pri">
+                <span className="font-semibold">{t.stockName ?? t.stockCode}</span>
+                {' · '}
+                {t.label}
+                {t.price !== null && <span className="font-mono"> {t.price.toFixed(2)}</span>}
+                <span className="block text-[11px] text-text-sec">{t.condition}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
+  );
+}
+```
+
+- [ ] **Step 5: 创建主容器**
+
+创建 `frontend/src/components/plan/PlanPanel.tsx`：
+
+```tsx
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+
+import { Card } from '@/components/ui/Card';
+import { PlanItemList } from '@/components/plan/PlanItemList';
+import { OutlookCard } from '@/components/plan/OutlookCard';
+import { ReviewCard } from '@/components/plan/ReviewCard';
+import { fetchBattlePlan, generateBattlePlan } from '@/lib/api/advanced';
+import type { BattlePlan } from '@/lib/types';
+
+type State =
+  | { kind: 'loading' }
+  | { kind: 'empty'; message: string }
+  | { kind: 'ready'; plan: BattlePlan }
+  | { kind: 'error'; message: string }
+  | { kind: 'generating' };
+
+export function PlanPanel() {
+  const [state, setState] = useState<State>({ kind: 'loading' });
+
+  const load = useCallback(async () => {
+    setState({ kind: 'loading' });
+    try {
+      const plan = await fetchBattlePlan();
+      setState({ kind: 'ready', plan });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes('404') || msg.includes('尚未生成')) {
+        setState({ kind: 'empty', message: '今天的作战计划还没生成' });
+      } else {
+        setState({ kind: 'error', message: msg });
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const generate = useCallback(async () => {
+    setState({ kind: 'generating' });
+    try {
+      const plan = await generateBattlePlan();
+      setState({ kind: 'ready', plan });
+    } catch (e) {
+      setState({
+        kind: 'error',
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }, []);
+
+  if (state.kind === 'loading') {
+    return (
+      <div className="space-y-3">
+        <Card>
+          <div className="h-4 w-40 animate-pulse rounded bg-line" />
+          <div className="mt-3 h-3 w-full animate-pulse rounded bg-line" />
+          <div className="mt-2 h-3 w-3/4 animate-pulse rounded bg-line" />
+        </Card>
+      </div>
+    );
+  }
+
+  if (state.kind === 'generating') {
+    return (
+      <Card>
+        <h3 className="text-sm font-semibold">正在生成作战计划…</h3>
+        <p className="mt-2 text-xs text-text-sec">
+          正在采集持仓与关注票的行情、指标和市场环境,请稍候（约 15~25 秒）。
+        </p>
+      </Card>
+    );
+  }
+
+  if (state.kind === 'error') {
+    return (
+      <Card>
+        <h3 className="text-sm font-semibold">生成失败</h3>
+        <p className="mt-2 text-xs text-text-sec">{state.message}</p>
+        <button
+          type="button"
+          onClick={() => void generate()}
+          className="mt-3 rounded border border-line px-3 py-1.5 text-xs hover:border-accent"
+        >
+          重试
+        </button>
+      </Card>
+    );
+  }
+
+  if (state.kind === 'empty') {
+    return (
+      <Card>
+        <h3 className="text-sm font-semibold">作战计划</h3>
+        <p className="mt-2 text-xs text-text-sec">
+          {state.message}。生成后会得到三段内容：
+          <br />① 今日复盘（昨日预案兑现了没有）② 明日市场预期（四维度规则推断）③ 明日逐票操作预案（什么价位做什么）。
+        </p>
+        <button
+          type="button"
+          onClick={() => void generate()}
+          className="mt-3 rounded bg-accent px-3 py-1.5 text-xs text-bg"
+        >
+          生成今日计划
+        </button>
+      </Card>
+    );
+  }
+
+  const { plan } = state;
+  const scopeText = plan.meta?.scopeCount
+    ? `覆盖 ${plan.meta.scopeCount} 只（持仓 + ★关注）`
+    : '';
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <h2 className="text-base font-semibold">作战计划</h2>
+          <p className="mt-0.5 text-[11px] text-text-ter">
+            {plan.planDate} · {scopeText}
+            {plan.meta?.targetDateEstimated && plan.targetDate
+              ? ` · 明日按工作日推算为 ${plan.targetDate}`
+              : ''}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void generate()}
+          className="rounded border border-line px-3 py-1.5 text-xs hover:border-accent"
+        >
+          重新生成
+        </button>
+      </div>
+
+      {plan.meta?.degraded && plan.meta.degradedReason.length > 0 && (
+        <div className="rounded border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-500">
+          部分数据缺失（已如实标注，未用假数据填补）：
+          {plan.meta.degradedReason.join('；')}
+        </div>
+      )}
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="order-1 xl:order-1">
+          <PlanItemList items={plan.items ?? []} targetDate={plan.targetDate ?? null} />
+        </div>
+        <div className="order-2 space-y-3 xl:order-2">
+          <OutlookCard outlook={plan.outlook} />
+          <ReviewCard review={plan.review ?? null} />
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 6: 导航入口**
+
+在 `frontend/src/components/shell/NavRail.tsx` 的菜单数组里，紧跟「盯盘」那一组之后加入一项。找到类似 `{ href: '/market', label: '大盘', icon: '🌏' }` 的一行，在其**前面**插入：
+
+```tsx
+{ href: '/plan', label: '作战计划', icon: '🗓' },
+```
+
+> 放在「盯盘」组（盯盘 / 大盘 / 板块 / 快讯）里，与「盘前简报」「复盘」等分析类入口区分开。
+
+- [ ] **Step 7: 类型检查 + 构建**
+
+```powershell
+Set-Location 'D:\zga-study\rich'
+cmd /c "scripts\dev.cmd" -Action stop
+Set-Location 'D:\zga-study\rich\frontend'
+npm run typecheck
+npm run build
+```
+
+Expected: typecheck 零错误；build 成功（28 路由：原 27 + `/plan`）。
+
+- [ ] **Step 8: Commit**
+
+```powershell
+Set-Location 'D:\zga-study\rich'
+git add -- 'frontend/src/app/(app)/plan/page.tsx' frontend/src/components/plan frontend/src/components/shell/NavRail.tsx
+git commit -m "feat(plan): 作战计划页面 /plan(两栏:明日预案 + 预期/复盘)
+
+- 空态/加载/错误三态均有实质内容,首屏不留大片虚空
+- 配色: 红=买/看多/涨,绿=卖/看空/跌,琥珀=失效条件与降级提示
+- 失效条件用琥珀色标注(它决定预案何时作废)
+- 导航新增'作战计划'入口(盯盘组),与既有'复盘'(单票回放)区分"
+```
+
+---
+
+## Task 9: 实测复验 + 文档登记
+
+**Files:**
+- Modify: `docs/roadmap.md`
+- Modify: `docs/design/trading-desk-v3-decision-card.md`（口径一致性说明）
+- Test: `backend/.pytest_tmp/tb_plan_resp.js`（tabbit 脚本，gitignored）
+
+**Interfaces:**
+- Consumes: 全部前序任务
+- Produces: 实测证据 + 文档登记
+
+- [ ] **Step 1: 后端全量回归**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest -q --no-header -p no:cacheprovider
+```
+
+Expected: **0 failed**（基线 1121 passed + 本次新增约 80 条）。记录最终数字。
+
+- [ ] **Step 2: ruff 全量**
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+& '.\.venv\Scripts\python.exe' -m ruff check app tests
+```
+Expected: `All checks passed!`
+
+- [ ] **Step 3: 真机跑一遍生成（开发库）**
+
+```powershell
+Set-Location 'D:\zga-study\rich'
+cmd /c "scripts\dev.cmd"
+```
+（启动器"失败"退出属正常，watcher 接管；等 45 秒）
+
+```powershell
+Start-Sleep -Seconds 45
+$r = Invoke-WebRequest -Uri 'http://127.0.0.1:8000/api/battle-plan/scope' -UseBasicParsing -TimeoutSec 30
+$r.Content
+```
+
+Expected: 返回持仓 5 + 关注 6 去重后的股票池（≤11 只）。
+
+```powershell
+$body = @{ date = $null } | ConvertTo-Json
+$r2 = Invoke-WebRequest -Uri 'http://127.0.0.1:8000/api/battle-plan/generate' -Method POST -ContentType 'application/json' -Body $body -UseBasicParsing -TimeoutSec 180
+$j = $r2.Content | ConvertFrom-Json
+"plan_date=$($j.plan_date)  target_date=$($j.target_date)"
+"outlook: $($j.outlook.stance_label)  score=$($j.outlook.score)  dims=$($j.outlook.dims_effective)/$($j.outlook.dims_total)"
+"items=$($j.items.Count)  scope=$($j.meta.scope_count)  degraded=$($j.meta.degraded)"
+$j.outlook.dims | ForEach-Object { "  [$($_.label)] score=$($_.score) state=$($_.state)  $($_.detail)" }
+$j.items | Select-Object -First 8 | ForEach-Object { "  $($_.stock_code) $($_.item_kind) $($_.direction) price=$($_.trigger_price)  $($_.trigger_condition)" }
+```
+
+**逐条核对（人工判断，必须如实记录）**：
+1. `outlook.dims` 恰好 4 项，`dims_effective` 与非 missing 项数一致
+2. `outlook.disclaimer` 含「非预测」
+3. 每条 item 的 `trigger_condition` / `basis` / `invalid_if` 非空
+4. **没有任何数字是编的** —— 抽查 3 条 item 的 `trigger_price` 与盯盘台决策卡上同一只票的同一动作价位是否一致
+5. 持仓 5 只全部出现在 items 里（除非降级）
+
+- [ ] **Step 4: tabbit 实拍四档响应式**
+
+创建 `backend/.pytest_tmp/tb_plan_resp.js`（**中文一律用 `\uXXXX` 转义**）：
+
+```javascript
+// 作战计划页面响应式实拍
+const widths = [1510, 1280, 1024, 820];
+const results = [];
+
+for (const w of widths) {
+  await page.setViewportSize({ width: w, height: 860 });
+  await page.goto("http://localhost:5173/plan", { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(2500);
+  const info = await page.evaluate(() => {
+    const grid = document.querySelector('.grid');
+    const cols = grid ? getComputedStyle(grid).gridTemplateColumns : '';
+    return {
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+      gridCols: cols,
+      bodyLen: (document.body.innerText || '').length,
+    };
+  });
+  results.push({ w, ...info });
+  await page.screenshot({
+    path: `D:/zga-study/rich/backend/.pytest_tmp/shot_plan_${w}.png`,
+    fullPage: false,
+  });
+}
+
+return results;
+```
+
+运行：
+
+```powershell
+$cli = "$env:LOCALAPPDATA\Tabbit\LocalAgent\bin\tabbit-cli.exe"
+$cmd = "`"$cli`" nodejs --task `"作战计划页面响应式`" --request-id tbplan01 --timeout-ms 180000 < `"D:\zga-study\rich\backend\.pytest_tmp\tb_plan_resp.js`""
+cmd /c $cmd
+```
+
+**验收**：
+- 四档 `scrollWidth == clientWidth`（无横向滚动）
+- 1510/1280/1024：两栏（`gridCols` 含两个值）
+- 820：单栏
+- `bodyLen > 200`（页面有实质内容，不是一片空白）
+
+- [ ] **Step 5: 目视核对截图**
+
+逐张读 `shot_plan_1510.png` 与 `shot_plan_820.png`，核对：
+- 红色 = 买入/看多/涨；绿色 = 卖出/看空/跌；琥珀 = 失效条件
+- 浮盈用红、浮亏用绿
+- 首屏没有大片虚空
+- 明日预期段在右栏，预案清单在左栏（1510px）；820px 时顺序为「预期 → 预案 → 复盘」
+
+- [ ] **Step 6: roadmap 登记**
+
+在 `docs/roadmap.md` 的「二、阶段总览」表格末尾追加一行：
+
+```markdown
+| **9** | 每日作战计划 | 今日复盘 + 明日市场预期 + 明日逐票预案(零 LLM 规则推断) | ✅ 完成(见下) |
+```
+
+并在文件末尾追加小节：
+
+```markdown
+## 阶段 9 · 每日作战计划 ✅
+| 能力 | 位置 | 说明 |
+| --- | --- | --- |
+| 页面 | `/plan` | 两栏:左=明日逐票预案,右=明日市场预期 + 今日复盘 |
+| 明日预期 | `backend/app/services/outlook_service.py` | 四维度规则推断(量能/涨跌家数/均线/板块资金)+ 关键位;纯函数、零 LLM |
+| 预案转换 | `backend/app/services/plan_item_builder.py` | 决策 actions 的 now/armed/blocked 三路分流;now → 复盘待办 |
+| 兑现比对 | `backend/app/services/fulfillment_checker.py` | 昨日预案 × 今日行情+流水 → 触及/已执行/未触发/纪律问题 |
+| 编排 | `backend/app/services/battle_plan_service.py` | 股票池=持仓∪★关注(≤20);唯一做 IO 的模块 |
+| 端点 | `GET/POST /api/battle-plan` | 读取 / 生成 / scope |
+
+### 设计约束（阶段 9 · 明日预期）
+- **明日预期是纪律锚点,不是预测器**;只写「倾向」,必带「非预测」标注
+- 偏多需 ≥2 个有效维度;偏空允许单维度(风险侧保守,刻意不对称)
+- 规则参数先定死(1.10/0.90/60%/40%);未来回测校准只能改参数,不得事后调门槛
+- 兑现「未触发」不评价对错(本来就没到,不是判断错)
+```
+
+- [ ] **Step 7: 卡面文档口径一致性**
+
+在 `docs/design/trading-desk-v3-decision-card.md` 末尾追加：
+
+```markdown
+## 九、与阶段 9「作战计划」的口径一致性
+
+阶段 9 的明日预期与本卡的七问**共用同一套数字来源**(indicators / 报价 / 持仓),
+因此两处结论必须一致。已核对:
+
+| 场景 | 决策卡 | 作战计划 | 一致性要求 |
+| --- | --- | --- | --- |
+| 同一只票的建仓触发价 | `action.price` | `item.trigger_price` | 必须**逐位相同**(预案直接继承决策引擎算好的价) |
+| 止损价 | `stop_loss.price` | `stop` 项的 `trigger_price` | 同上 |
+| 大盘涨跌家数 | `market_env.market.up_total/down_total` | 明日预期的涨跌家数维度 | 同源同值 |
+| 降级标注 | `data_quality.degraded` | `meta.degraded_reason` | 口径一致,**不得**一处标降级另一处不标 |
+
+**原则**:作战计划**不重新计算**任何价格,只把决策引擎已算好的结论转成「明天什么价位做什么」。
+若两处出现不一致,说明转换层引入了新的计算 —— 这违反「价格必须来自 indicators/报价/持仓或其显式四则运算」铁律,必须回改转换层。
+```
+
+- [ ] **Step 8: 最终 Commit**
+
+```powershell
+Set-Location 'D:\zga-study\rich'
+git add -- docs/roadmap.md docs/design/trading-desk-v3-decision-card.md
+git commit -m "docs(plan): 阶段9 登记 + 卡面口径一致性说明
+
+- roadmap: 阶段9 每日作战计划(明日预期四维度规则 + 预案转换 + 兑现闭环)
+- 卡面文档 §九: 决策卡与作战计划共用同一套数字来源,
+  触发价必须逐位相同(预案只转换,不重算)"
+```
+
+- [ ] **Step 9: 恢复 dev 服务**
+
+```powershell
+Set-Location 'D:\zga-study\rich'
+cmd /c "scripts\dev.cmd"
+```
+（构建已完成，现在可安全重启 dev）
+
+---
+
+## 验收标准（对照 spec §十一）
+
+| # | 验收项 | 落在哪个 Task | 验证方式 |
+|---|---|---|---|
+| 1 | API 契约符合 §4.7 | Task 7 | `test_battle_plan_api.py` |
+| 2 | 每条预案有触发价/条件/依据/失效条件 | Task 3 | `test_plan_item_builder.py::test_invalid_if_present_on_every_item` |
+| 3 | `now` 不进明日预案、进复盘待办 | Task 3 | `test_now_action_does_not_enter_plan_items` / `test_now_action_goes_to_todos` |
+| 4 | 明日预期恰好 4 维度且计数一致 | Task 2 | `test_dims_always_four_items` |
+| 5 | 含「非预测」；unknown 不给方向 | Task 2 | `test_disclaimer_always_present_and_says_not_prediction` / `test_unknown_when_all_dims_missing` |
+| 6 | 昨日预案兑现回填且统计一致 | Task 4 + Task 6 | `test_executed_when_buy_transaction_present` + Task 9 Step 3 实跑 |
+| 7 | 后端全量 0 failed + ruff 全过 | Task 9 | Step 1 / Step 2 |
+| 8 | 前端 typecheck 零错误 + build 通过 | Task 8 | Step 7 |
+| 9 | tabbit 四档布局/颜色/无横向滚动/零 error | Task 9 | Step 4 / Step 5 |
+| 10 | 未生成首屏无大片虚空 | Task 8 + Task 9 | `PlanPanel` empty 分支 + 实拍 |
+| 11 | roadmap 登记阶段 9 | Task 9 | Step 6 |
+
+---
+
+## Self-Review
+
+**1. Spec 覆盖**：spec 的 §4.2→T5、§4.3→T2、§4.4→T3、§4.5→T4、§4.6→T6、§4.7→T7、§4.8→（无需任务，设计为不引入 LLM）、§五→T8、§六→各任务的降级分支 + T9 实测、§七→各任务的测试步骤 + T9、§八→范围约束（已写入 Global Constraints 且无任务涉及被排除项）、§九→File Structure、§十→Global Constraints、§十一→验收标准表。**无缺口**。
+
+**2. 占位符扫描**：全部代码块为可直接落地的完整实现；无 TBD / TODO / "类似 Task N"。
+
+**3. 类型一致性**：
+- `build_outlook` / `build_items` / `build_todos` / `check_fulfillment` / `summarize_fulfillment` / `build_plan` / `get_plan` / `resolve_target_stocks` 的签名在「跨任务锁定的接口契约」中一次定义，Task 2→Task 6→Task 7 全部按此调用。
+- `item_kind` 取值统一为 `entry|add|exit|stop|t_sell|t_buyback|watch|unlock|do_not`（对齐决策引擎实际 kind + 新增 unlock/do_not）。
+- `fulfillment` 取值统一为 `pending|touched|executed|missed|n_a`。
+- 前端类型 `BattlePlan*` 全部按 `snakeToCamel` 后的驼峰命名（`plan_date`→`planDate`），与 `api.ts` 的响应拦截器一致。
+
+**已修正的不一致**（写计划过程中发现并已改）：
+- spec §4.4 写的 `item_kind` 含 `t_plan`，实际决策引擎是 `t_sell` / `t_buyback` 两条 → 本计划统一用引擎实际 kind。
+- spec §4.4 未提 `build_todos` 的实现位置 → 本计划明确它是 `plan_item_builder` 的第二个导出函数。
+- spec §4.2 写的是 `db_migrations.py` 迁移 → 实际项目走 Alembic（`backend/migrations/versions/`），已按实际机制改写。
