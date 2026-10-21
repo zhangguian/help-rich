@@ -33,6 +33,13 @@
     ```
 11. **`npm run build` 与 dev server 共用 `.next`，必须先停 dev 再 build**。
 12. **测文件内容用 grep / node 逐字节读**；**Python 调试脚本写成 `.py` 文件再跑**（`python -c` 在本环境会被 shell 吃掉引号）。
+13. **前端配色必须用项目语义 class，不得用 Tailwind 默认色**（2026-10-21 实测编译 Tailwind 得到的权威清单）：
+    - 行情色：`text-up`（红=买/看多/涨）、`text-down`（绿=卖/看空/跌）、`text-warn`（琥珀=预警）
+    - 语义底色：`bg-up-bg`、`bg-warn-bg`、`bg-down-bg`、`bg-bg-subtle`
+    - 边框：`border-border-def`、`border-border-str`、`border-up/40`、`border-down/40`、`border-warn/40`
+    - 文字：`text-text-pri`、`text-text-sec`、`text-text-ter`
+    - 强调：`text-accent`、`bg-accent`、`border-accent`、`text-bg-base`
+    - ⚠️ **`text-red-500` / `text-green-500` / `text-amber-500` / `border-line` / `border-def` / `text-pri` 在本项目不存在**，用它们会**静默掉样式**（typecheck 查不出来，只有实拍才发现）。`text-red-500` 虽被少数旧文件使用，但新代码一律用 `text-up`。
 
 ---
 
@@ -2219,7 +2226,13 @@ async def test_resolve_scope_truncates_and_flags(monkeypatch):
     monkeypatch.setattr(svc, "_load_favorites", _fav)
     scope = await svc.resolve_target_stocks()
     assert len(scope) == svc.MAX_SCOPE
-    assert svc._truncated_flag is not None or True  # 截断信息在 meta 里,单测只看长度
+    # 截断标志必须精确:只有真的砍掉了票才为 True
+    _full, truncated = svc._truncate_scope([_stock(f"00000{i}.SZ") for i in range(25)])
+    assert truncated is True
+    _exact, not_truncated = svc._truncate_scope(
+        [_stock(f"00000{i}.SZ") for i in range(svc.MAX_SCOPE)]
+    )
+    assert not_truncated is False
 
 
 @pytest.mark.asyncio
@@ -2422,10 +2435,10 @@ async def _load_quotes(codes: list[str]):
 
 async def _load_transactions(plan_date: str) -> list[dict[str, Any]]:
     """目标日交易流水"""
-    from app.modules.portfolio.repository import portfolio_repo
+    from app.modules.portfolio.repository import transaction_repo
 
     try:
-        rows, _total = await portfolio_repo.list_all(limit=500)
+        rows, _total = await transaction_repo.list_all(limit=500)
     except Exception as e:  # noqa: BLE001
         logger.warning("作战计划读取流水失败: %s", e)
         return []
@@ -2478,7 +2491,19 @@ async def resolve_target_stocks() -> list[dict[str, Any]]:
             }
     scope = list(merged.values())
     scope.sort(key=lambda s: (not s["in_position"], s["stock_code"]))
-    return scope[:MAX_SCOPE]
+    truncated_scope, _ = _truncate_scope(scope)
+    return truncated_scope
+
+
+def _truncate_scope(scope: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    """超过 MAX_SCOPE 时截断,并**精确**返回是否真的发生了截断。
+
+    为什么不写成 `len(scope) >= MAX_SCOPE`:恰好等于上限时并没有真的截断,
+    那种写法会误报 truncated=True —— 等于向用户谎称"砍掉了一些票"。
+    """
+    if len(scope) > MAX_SCOPE:
+        return scope[:MAX_SCOPE], True
+    return scope, False
 
 
 # ============================ 单票决策 ============================
@@ -2588,7 +2613,7 @@ async def build_plan(plan_date: date) -> dict[str, Any]:
     ds = plan_date.isoformat()
     degraded: list[str] = []
 
-    scope = await resolve_target_stocks()
+    scope, truncated = _truncate_scope(await resolve_target_stocks())
     if not scope:
         raise ValueError("目标股票池为空:既无持仓也无★关注票,无法生成作战计划")
 
@@ -2636,7 +2661,7 @@ async def build_plan(plan_date: date) -> dict[str, Any]:
     meta = {
         "scope_count": len(scope),
         "scope": scope,
-        "truncated": len(scope) >= MAX_SCOPE,
+        "truncated": truncated,
         "degraded": bool(degraded),
         "degraded_reason": degraded,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -3149,6 +3174,12 @@ git commit -m "feat(plan): 作战计划 API + 前端类型与客户端
 - Consumes: Task 7 的 `fetchBattlePlan` / `generateBattlePlan`
 - Produces: 路由 `/plan`
 
+**配色速查（本任务所有 class 必须来自此表，见 Global Constraints 13）**：
+- 买入/看多/涨 → `text-up`；卖出/看空/跌 → `text-down`；预警/失效条件/降级 → `text-warn`
+- 正文 `text-text-pri`、次要 `text-text-sec`、弱化 `text-text-ter`
+- 边框 `border-border-def`；预警边框 `border-warn/40`；降级底色 `bg-warn-bg`
+- 参照实现：`frontend/src/components/desk/DecisionCard.tsx`（已用 `text-up` / `border-up/40` / `bg-up-bg` 这套）
+
 - [ ] **Step 1: 创建页面壳**
 
 创建 `frontend/src/app/(app)/plan/page.tsx`：
@@ -3179,15 +3210,15 @@ import { Card } from '@/components/ui/Card';
 import type { BattlePlanOutlook } from '@/lib/types';
 
 const STANCE_STYLE: Record<string, string> = {
-  bullish: 'text-red-500',
-  bearish: 'text-green-500',
+  bullish: 'text-up',
+  bearish: 'text-down',
   neutral: 'text-text-pri',
   unknown: 'text-text-ter',
 };
 
 const DIM_STYLE: Record<string, string> = {
-  bull: 'text-red-500',
-  bear: 'text-green-500',
+  bull: 'text-up',
+  bear: 'text-down',
   flat: 'text-text-sec',
   missing: 'text-text-ter',
 };
@@ -3216,12 +3247,12 @@ export function OutlookCard({ outlook }: { outlook: BattlePlanOutlook }) {
         ))}
       </ul>
 
-      <div className="mt-4 border-t border-line pt-3 text-xs">
+      <div className="mt-4 border-t border-border-def pt-3 text-xs">
         <div className="text-text-sec">关键位</div>
         <div className="mt-1.5 grid grid-cols-2 gap-2">
           <div>
             <div className="text-[11px] text-text-ter">支撑</div>
-            <div className="font-mono text-red-500">
+            <div className="font-mono text-up">
               {outlook.keyLevels.support.length
                 ? outlook.keyLevels.support.join(' / ')
                 : '—'}
@@ -3229,7 +3260,7 @@ export function OutlookCard({ outlook }: { outlook: BattlePlanOutlook }) {
           </div>
           <div>
             <div className="text-[11px] text-text-ter">压力</div>
-            <div className="font-mono text-green-500">
+            <div className="font-mono text-down">
               {outlook.keyLevels.resistance.length
                 ? outlook.keyLevels.resistance.join(' / ')
                 : '—'}
@@ -3279,8 +3310,8 @@ const FULFILL_LABEL: Record<string, string> = {
 };
 
 function dirClass(direction: string): string {
-  if (direction === 'buy') return 'text-red-500';
-  if (direction === 'sell') return 'text-green-500';
+  if (direction === 'buy') return 'text-up';
+  if (direction === 'sell') return 'text-down';
   return 'text-text-sec';
 }
 
@@ -3329,7 +3360,7 @@ export function PlanItemList({
 
           <div className="mt-2 space-y-2">
             {list.map((it, idx) => (
-              <div key={`${code}-${idx}`} className="rounded border border-line p-2.5">
+              <div key={`${code}-${idx}`} className="rounded border border-border-def p-2.5">
                 <div className="flex items-center gap-2 text-xs">
                   <span className="rounded bg-line px-1.5 py-0.5 text-[10px] text-text-sec">
                     {KIND_LABEL[it.itemKind] ?? it.itemKind}
@@ -3362,7 +3393,7 @@ export function PlanItemList({
                 )}
 
                 {it.invalidIf && (
-                  <p className="mt-1.5 text-[11px] text-amber-500">失效：{it.invalidIf}</p>
+                  <p className="mt-1.5 text-[11px] text-warn">失效：{it.invalidIf}</p>
                 )}
 
                 {it.fulfillmentNote && (
@@ -3389,9 +3420,9 @@ import { Card } from '@/components/ui/Card';
 import type { BattlePlanReview } from '@/lib/types';
 
 const LEVEL_STYLE: Record<string, string> = {
-  ok: 'text-red-500',
-  warn: 'text-amber-500',
-  danger: 'text-amber-500',
+  ok: 'text-up',
+  warn: 'text-warn',
+  danger: 'text-warn',
   flat: 'text-text-sec',
 };
 
@@ -3416,8 +3447,8 @@ export function ReviewCard({ review }: { review: BattlePlanReview | null }) {
         昨日预案 {f.total} 条
       </div>
       <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs">
-        <span className="text-red-500">执行 {f.executed}</span>
-        <span className="text-amber-500">触及未做 {f.touched}</span>
+        <span className="text-up">执行 {f.executed}</span>
+        <span className="text-warn">触及未做 {f.touched}</span>
         <span className="text-text-sec">未触发 {f.missed}</span>
       </div>
       <div className={`mt-1.5 text-xs font-semibold ${LEVEL_STYLE[f.verdictLevel] ?? ''}`}>
@@ -3425,7 +3456,7 @@ export function ReviewCard({ review }: { review: BattlePlanReview | null }) {
       </div>
 
       {review.pendingTodos.length > 0 && (
-        <div className="mt-3 border-t border-line pt-2">
+        <div className="mt-3 border-t border-border-def pt-2">
           <div className="text-[11px] text-text-ter">今日待办（条件已满足但未处理）</div>
           <ul className="mt-1 space-y-1">
             {review.pendingTodos.map((t, i) => (
@@ -3534,7 +3565,7 @@ export function PlanPanel() {
         <button
           type="button"
           onClick={() => void generate()}
-          className="mt-3 rounded border border-line px-3 py-1.5 text-xs hover:border-accent"
+          className="mt-3 rounded border border-border-def px-3 py-1.5 text-xs hover:border-accent"
         >
           重试
         </button>
@@ -3553,7 +3584,7 @@ export function PlanPanel() {
         <button
           type="button"
           onClick={() => void generate()}
-          className="mt-3 rounded bg-accent px-3 py-1.5 text-xs text-bg"
+          className="mt-3 rounded bg-accent px-3 py-1.5 text-xs text-bg-base"
         >
           生成今日计划
         </button>
@@ -3581,14 +3612,14 @@ export function PlanPanel() {
         <button
           type="button"
           onClick={() => void generate()}
-          className="rounded border border-line px-3 py-1.5 text-xs hover:border-accent"
+          className="rounded border border-border-def px-3 py-1.5 text-xs hover:border-accent"
         >
           重新生成
         </button>
       </div>
 
       {plan.meta?.degraded && plan.meta.degradedReason.length > 0 && (
-        <div className="rounded border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-500">
+        <div className="rounded border border-warn/40 bg-warn-bg px-3 py-2 text-[11px] text-warn">
           部分数据缺失（已如实标注，未用假数据填补）：
           {plan.meta.degradedReason.join('；')}
         </div>
