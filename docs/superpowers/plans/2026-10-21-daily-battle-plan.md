@@ -80,8 +80,8 @@
 
 | 文件 | 改动 |
 |---|---|
-| `frontend/src/lib/api/advanced.ts` | +3 个 API 函数 + 类型 |
-| `frontend/src/lib/types.ts` | +计划相关类型 |
+| `frontend/src/lib/api/advanced.ts` | +3 个 API 函数 + 顶部加 type import |
+| `frontend/src/lib/planTypes.ts` | +计划相关类型（**新建独立文件** —— `types.ts` 会被 `npm run gen-types` 覆盖） |
 | `frontend/src/components/shell/NavRail.tsx` | +「作战计划」导航项 |
 
 ### 测试新增
@@ -2177,14 +2177,14 @@ def _assign(
     for _prio, idx, code, kind, direction, price in plan:
         if kind == "t_sell":
             thr = price * T_SELL_TOLERANCE
-            t = _take(lambda x: x["code"] == code and x["action"] == "sell"
+            t = _take(lambda x, code=code, thr=thr: x["code"] == code and x["action"] == "sell"
                       and x["price"] is not None and x["price"] >= thr - _EPS)
             if t is not None:
                 out[idx] = (t, "减仓成交价在计划区间内")
             continue
         if kind == "t_buyback":
             thr = price * T_BUYBACK_TOLERANCE
-            t = _take(lambda x: x["code"] == code and x["action"] == "buy"
+            t = _take(lambda x, code=code, thr=thr: x["code"] == code and x["action"] == "buy"
                       and x["price"] is not None and x["price"] <= thr + _EPS)
             if t is not None:
                 out[idx] = (t, "回补成交价在计划区间内")
@@ -2205,7 +2205,7 @@ def _assign(
             out[idx] = (best, "")
             continue
         # 兜底:没有带价候选 → 方向匹配一条(成交价缺失,不能证明归属 → note 里披露)
-        t = _take(lambda x: x["code"] == code and x["action"] == direction)
+        t = _take(lambda x, code=code, direction=direction: x["code"] == code and x["action"] == direction)
         if t is not None:
             out[idx] = (t, "成交价缺失,仅按方向匹配")
     return out
@@ -3619,8 +3619,8 @@ git commit -m "feat(plan): 作战计划编排层(唯一做 IO 的地方)
 - Create: `backend/app/api/battle_plan.py`
 - Modify: `backend/app/main.py`（注册路由）
 - Test: `backend/tests/test_battle_plan_api.py`
-- Modify: `frontend/src/lib/api/advanced.ts`（+API 与类型）
-- Modify: `frontend/src/lib/types.ts`（+类型）
+- Create: `frontend/src/lib/planTypes.ts`（作战计划类型 —— **独立文件，不进 types.ts**）
+- Modify: `frontend/src/lib/api/advanced.ts`（+API 客户端）
 
 **Interfaces:**
 - Consumes: Task 6 的 `build_plan` / `get_plan` / `resolve_target_stocks`
@@ -3690,6 +3690,29 @@ def test_generate_endpoint_returns_plan(monkeypatch):
     r = client.post("/api/battle-plan/generate", json={})
     assert r.status_code == 200
     assert r.json()["outlook"]["stance_label"] == "震荡"
+
+
+def test_get_plan_fills_degraded_outlook_when_missing(monkeypatch):
+    """落库日报缺 outlook 时,端点补一个**降级**空 outlook。
+
+    前端契约里 `outlook` 是必填非 null(组件直接读 `outlook.stance`),
+    所以兜底放在端点层 —— 前端不必到处判 null。
+    """
+    from app.api import battle_plan as bp
+
+    async def _get(plan_date: date):
+        return {
+            "plan_date": plan_date.isoformat(), "target_date": None,
+            "outlook": None, "review": None, "items": [], "meta": {},
+        }
+
+    monkeypatch.setattr(bp, "get_plan", _get)
+    r = client.get("/api/battle-plan", params={"date": "2026-10-21"})
+    assert r.status_code == 200
+    o = r.json()["outlook"]
+    assert o["stance"] == "unknown"
+    assert o["degraded"] is True
+    assert o["dims"] == []
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -3738,6 +3761,34 @@ class GenerateRequest(BaseModel):
     date: str | None = None
 
 
+def _with_outlook(plan: dict) -> dict:
+    """保证响应里 `outlook` 非 null。
+
+    落库的日报可能没有 outlook_json(早期数据 / 写入时被裁剪),而前端契约里
+    `outlook` 是**必填非 null**(组件直接读 `outlook.stance`)。
+    这里填一个**降级**的空 outlook —— 如实说「数据不足」,而不是让前端到处判 null。
+    """
+    if plan.get("outlook"):
+        return plan
+    out = dict(plan)
+    out["outlook"] = {
+        "stance": "unknown",
+        "stance_label": "数据不足",
+        "score": 0,
+        "dims_total": 0,
+        "dims_effective": 0,
+        "dims": [],
+        "key_levels": {
+            "close": None, "ma5": None, "ma10": None, "ma20": None,
+            "support": [], "resistance": [],
+        },
+        "disclaimer": "数据不足，无法给出明日倾向；请重新生成作战计划。",
+        "degraded": True,
+        "degraded_reason": ["该日期的日报没有市场预期数据"],
+    }
+    return out
+
+
 @router.get("")
 async def read_plan(plan_date: str | None = Query(default=None, alias="date")) -> dict:
     """取指定日期的作战日报;该日未生成 → 404(不返回空壳)
@@ -3760,7 +3811,7 @@ async def read_plan(plan_date: str | None = Query(default=None, alias="date")) -
             status_code=404,
             detail=f"{target.isoformat()} 的作战计划尚未生成",
         )
-    return plan
+    return _with_outlook(plan)
 
 
 @router.post("/generate")
@@ -3773,8 +3824,9 @@ async def generate(req: GenerateRequest | None = None) -> dict:
         except ValueError:
             raise HTTPException(status_code=422, detail="日期格式应为 YYYY-MM-DD") from None
     try:
-        return await build_plan(target)
+        return _with_outlook(await build_plan(target))
     except ValueError as e:
+        # build_plan 在股票池为空时抛 ValueError —— 转成可读的 422,不要 500
         raise HTTPException(status_code=422, detail=str(e)) from e
     except Exception as e:  # noqa: BLE001
         logger.exception("生成作战计划失败")
@@ -3816,15 +3868,24 @@ $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_battle_plan_api.py -q --no-header -p no:cacheprovider
 ```
 
-Expected: 全部 PASS（3 passed）。
+Expected: 全部 PASS（4 passed）。
 
 - [ ] **Step 6: 前端类型与 API**
 
-在 `frontend/src/lib/types.ts` 末尾追加：
+创建 `frontend/src/lib/planTypes.ts`：
+
+> ⚠️ **为什么不写进 `src/lib/types.ts`**：那个文件是「手写 stub + OpenAPI 生成物」拼起来的，
+> 而 `package.json` 里有 `"gen-types": "openapi-typescript ... -o src/lib/types.ts"` ——
+> **跑一次 `npm run gen-types` 整个文件就被覆盖，手写部分全丢**。
+> 作战计划类型是手写的（后端返回体没有 OpenAPI schema 化），必须放独立文件才不会被冲掉。
 
 ```typescript
 /* ============================================================
- * 每日作战计划(阶段9)
+ * 每日作战计划(阶段9)类型
+ *
+ * ⚠️ 独立文件,不进 src/lib/types.ts ——
+ *    那个文件会被 `npm run gen-types`(openapi-typescript -o src/lib/types.ts)整体覆盖。
+ *    本文件的类型是手写的,后端没有 schema 化到 OpenAPI。
  * ============================================================ */
 
 export type BattlePlanStance = 'bullish' | 'bearish' | 'neutral' | 'unknown';
@@ -3934,6 +3995,7 @@ export interface BattlePlanMeta {
 export interface BattlePlan {
   planDate: string;
   targetDate: string | null;
+  /** 非 null —— 端点层保证:落库日报缺 outlook 时会填一个降级的空 outlook(spec §4.6.4) */
   outlook: BattlePlanOutlook;
   review: BattlePlanReview | null;
   items: BattlePlanItem[];
@@ -3944,19 +4006,28 @@ export interface BattlePlan {
   todos?: BattlePlanTodo[];
   meta: BattlePlanMeta;
 }
+
+/** 目标股票池(持仓 ∪ ★关注) */
+export interface BattlePlanScopeRow {
+  stockCode: string;
+  stockName: string | null;
+  inPosition: boolean;
+  isFavorite: boolean;
+}
 ```
 
-在 `frontend/src/lib/api/advanced.ts` 末尾追加：
+在 `frontend/src/lib/api/advanced.ts` **顶部**（第 8 行 `import { apiDelete, apiGet, ... } from '@/lib/api';` 之后）加一行 type import：
+
+```typescript
+import type { BattlePlan, BattlePlanScopeRow } from '@/lib/planTypes';
+```
+
+然后在 `frontend/src/lib/api/advanced.ts` **末尾**追加：
 
 ```typescript
 /* ============================================================
  * 阶段9 每日作战计划
  * ============================================================ */
-
-import type {
-  BattlePlan,
-  BattlePlanItem,
-} from '@/lib/types';
 
 /** 作战计划生成要拉 11 只票的行情,默认 10s 超时不够 */
 const PLAN_TIMEOUT = { timeout: 60000 };
@@ -3970,17 +4041,14 @@ export async function generateBattlePlan(date?: string): Promise<BattlePlan> {
   return apiPost<BattlePlan>('/battle-plan/generate', { date: date ?? null }, PLAN_TIMEOUT);
 }
 
-export async function fetchBattlePlanScope(): Promise<
-  Array<{ stockCode: string; stockName: string | null; inPosition: boolean; isFavorite: boolean }>
-> {
+export async function fetchBattlePlanScope(): Promise<BattlePlanScopeRow[]> {
   // ⚠️ 响应经 axios 拦截器做过 snake→camel(见 lib/api.ts),
   // 所以运行时拿到的是 stockCode / stockName / inPosition / isFavorite —— 类型必须按驼峰写,
   // 写成 snake_case 的话 TS 不报错(泛型是断言),但页面读出来全是 undefined。
-  return apiGet('/battle-plan/scope');
+  // ⚠️ 必须写显式泛型,否则返回 any,ScopeRow 的字段拼错也没人拦。
+  return apiGet<BattlePlanScopeRow[]>('/battle-plan/scope');
 }
 ```
-
-> ⚠️ `import type` 必须放在文件**顶部**——`advanced.ts` 顶部已有 `import { apiDelete, apiGet, ... } from '@/lib/api';`。把 type import 合并到那一行之后即可（不要在文件中部 import）。
 
 - [ ] **Step 7: 前端类型检查**
 
@@ -3995,7 +4063,7 @@ Expected: 零错误。
 
 ```powershell
 Set-Location 'D:\zga-study\rich'
-git add -- backend/app/api/battle_plan.py backend/app/main.py backend/tests/test_battle_plan_api.py frontend/src/lib/types.ts frontend/src/lib/api/advanced.ts
+git add -- backend/app/api/battle_plan.py backend/app/main.py backend/tests/test_battle_plan_api.py frontend/src/lib/planTypes.ts frontend/src/lib/api/advanced.ts
 git commit -m "feat(plan): 作战计划 API + 前端类型与客户端
 
 - GET /api/battle-plan?date= (未生成返回 404,不返回空壳)
@@ -4061,7 +4129,7 @@ export default function PlanPage() {
 'use client';
 
 import { Card } from '@/components/ui/Card';
-import type { BattlePlanOutlook } from '@/lib/types';
+import type { BattlePlanOutlook } from '@/lib/planTypes';
 
 const STANCE_STYLE: Record<string, string> = {
   bullish: 'text-up',
@@ -4141,7 +4209,7 @@ export function OutlookCard({ outlook }: { outlook: BattlePlanOutlook }) {
 'use client';
 
 import { Card } from '@/components/ui/Card';
-import type { BattlePlanItem } from '@/lib/types';
+import type { BattlePlanItem } from '@/lib/planTypes';
 
 const KIND_LABEL: Record<string, string> = {
   entry: '建仓',
@@ -4207,7 +4275,10 @@ export function PlanItemList({
         <Card key={code}>
           <div className="flex items-baseline justify-between">
             <div className="text-sm font-semibold">
-              {list[0].stockName ?? code}{' '}
+              {/* ⚠️ tsconfig 开了 `noUncheckedIndexedAccess` → `list[0]` 类型是
+                  `BattlePlanItem | undefined`,直接写 list[0].stockName 编译不过。
+                  必须用可选链。 */}
+              {list[0]?.stockName ?? code}{' '}
               <span className="ml-1 font-mono text-[11px] text-text-ter">{code}</span>
             </div>
           </div>
@@ -4271,7 +4342,7 @@ export function PlanItemList({
 'use client';
 
 import { Card } from '@/components/ui/Card';
-import type { BattlePlanReview } from '@/lib/types';
+import type { BattlePlanReview } from '@/lib/planTypes';
 
 const LEVEL_STYLE: Record<string, string> = {
   // 「按计划执行」不是行情方向 → 用中性正文色(红=买/涨、绿=卖/跌,都不能用来表示"做得好")
@@ -4351,7 +4422,7 @@ import {
   fetchBattlePlanScope,
   generateBattlePlan,
 } from '@/lib/api/advanced';
-import type { BattlePlan } from '@/lib/types';
+import type { BattlePlan } from '@/lib/planTypes';
 
 type State =
   | { kind: 'loading' }
@@ -4560,13 +4631,13 @@ export function PlanPanel() {
 
 - [ ] **Step 6: 导航入口**
 
-在 `frontend/src/components/shell/NavRail.tsx` 的菜单数组里，紧跟「盯盘」那一组之后加入一项。找到类似 `{ href: '/market', label: '大盘', icon: '🌏' }` 的一行，在其**前面**插入：
+在 `frontend/src/components/shell/NavRail.tsx` 的 `GROUPS` 数组里，**紧跟 `{ href: '/', label: '盯盘', icon: '📈' }` 这一行之后**插入（即「盯盘」组的第一项之后、「大盘」之前）：
 
 ```tsx
 { href: '/plan', label: '作战计划', icon: '🗓' },
 ```
 
-> 放在「盯盘」组（盯盘 / 大盘 / 板块 / 快讯）里，与「盘前简报」「复盘」等分析类入口区分开。
+> 放在「行情」组（盯盘 / 作战计划 / 大盘 / 板块 / 快讯）里 —— 作战计划是盯盘的下一步动作，与「决策」组的「复盘」（单票回放）区分开。
 
 - [ ] **Step 7: 类型检查 + 构建**
 
