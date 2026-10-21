@@ -19,6 +19,7 @@ import type {
   MarketSentiment,
   Position,
   Quote,
+  StockDecision,
   WatchlistItem,
 } from '@/lib/types';
 
@@ -142,6 +143,25 @@ interface MarketHeader {
 function decimal(v: number): string {
   return v.toLocaleString('zh-CN', { maximumFractionDigits: 1 });
 }
+
+/**
+ * 决策端点的错误文案 —— 取出后端给的中文说明
+ *
+ * 后端抛的是 `HTTPException(detail={"code": ..., "message": "..."})`,
+ * 而 axios 拦截器只认 `{code,message}`(顶层)或 `detail` 为**数组**(FastAPI 校验错误),
+ * 所以它认不出这个形状 → 统一落到「请求失败 (HTTP 422)」,
+ * 抛回的 `e.message` 是 `"Request failed with status code 502"`(英文且没说明原因)。
+ * 这里自己取 detail.message,让决策卡显示「K 线数据获取失败」这种能看懂的话。
+ */
+function decisionErrorText(e: unknown): string {
+  const err = e as {
+    response?: { data?: { detail?: { message?: string } } };
+    message?: string;
+  };
+  return (
+    err?.response?.data?.detail?.message ?? (e instanceof Error ? e.message : '未知错误')
+  );
+}
 /**
  * 盯盘台(v0.8 Trading Desk)
  *
@@ -173,6 +193,12 @@ export default function Workbench() {
   // 流式进度:LLM 启动 30s 后开始推,这里存最新的 elapsed_s(供 AnalysisPanel 显示「思考中…Ns」)
   const [analysisProgress, setAnalysisProgress] = useState<number | null>(null);
   const [selectedQuote, setSelectedQuote] = useState<Quote | null>(null);
+  // 操作决策卡(确定性引擎):与 AI 解读**并行**拉取,互不阻塞 —— 不等 LLM 就能看到「该干什么」
+  const [decision, setDecision] = useState<StockDecision | null>(null);
+  const [decisionLoading, setDecisionLoading] = useState(false);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
+  // 请求序号守卫:快速切票时,A 的慢响应不得覆盖 B 的结果(否则会显示另一只票的价位)
+  const decisionSeq = useRef(0);
   // 当前选中股票(异步回调防串:分析/缓存返回时比对,避免贴到别的股票面板)
   const activeCodeRef = useRef<string | null>(null);
   const [showCalc, setShowCalc] = useState(false);
@@ -334,23 +360,57 @@ export default function Workbench() {
     };
   }, [autoRefresh, fetchBase, fetchMarketHeader]);
 
-  const selectStock = useCallback((code: string) => {
-    setActiveCode(code);
-    activeCodeRef.current = code;
-    setAnalysis(null);
-    setAnalysisStarted(false);
-    setSelectedQuote(null);
-    // 记住这次盯的票,刷新后直接回到它(见上方 LAST_SELECTED_KEY 注释)
+  /**
+   * 决策卡:纯确定性、无 LLM —— 与 analysis 并行拉取,互不阻塞
+   *
+   * 为什么要 60s 超时:该端点会串起 5 个外部数据源(全市场情绪快照 5500+ 只
+   * 逐页翻页 + 大盘指数 + 行业归属 + 行业等权 K 线 + 板块/个股资金流),
+   * 实测冷启动 5.8~7.6s、稳态 0.6~1.5s;而 axios 默认 timeout 只有 10000ms
+   * (api.ts:23),慢一点就直接超时 → 决策卡永远显示「暂不可用」。
+   */
+  const fetchDecision = useCallback(async (code: string) => {
+    const seq = ++decisionSeq.current; // 本次请求的序号
+    setDecisionLoading(true);
+    setDecisionError(null);
+    setDecision(null); // 立刻清掉上一只票的决策,避免旧价位残留
     try {
-      localStorage.setItem(LAST_SELECTED_KEY, code);
-    } catch {
-      /* 隐私模式下 localStorage 不可写,忽略即可 */
+      const r = await apiGet<{ decision: StockDecision }>(
+        `/stock/${encodeURIComponent(code)}/decision`,
+        { timeout: 60000 },
+      );
+      if (seq !== decisionSeq.current) return; // 已有更新的请求,丢弃本次结果
+      setDecision(r.decision ?? null);
+    } catch (e) {
+      if (seq !== decisionSeq.current) return;
+      setDecision(null);
+      setDecisionError(decisionErrorText(e));
+    } finally {
+      if (seq === decisionSeq.current) setDecisionLoading(false);
     }
-    apiGet<Quote>(`/quotes/${encodeURIComponent(code)}`)
-      .then(setSelectedQuote)
-      .catch(() => {});
-    // 无存档回显:分析面板显示空态,由用户手动点「开始分析」(每次实时拉 K + 实时 LLM)
   }, []);
+
+  const selectStock = useCallback(
+    (code: string) => {
+      setActiveCode(code);
+      activeCodeRef.current = code;
+      setAnalysis(null);
+      setAnalysisStarted(false);
+      setSelectedQuote(null);
+      // 记住这次盯的票,刷新后直接回到它(见上方 LAST_SELECTED_KEY 注释)
+      try {
+        localStorage.setItem(LAST_SELECTED_KEY, code);
+      } catch {
+        /* 隐私模式下 localStorage 不可写,忽略即可 */
+      }
+      apiGet<Quote>(`/quotes/${encodeURIComponent(code)}`)
+        .then(setSelectedQuote)
+        .catch(() => {});
+      // 决策卡:与 AI 解读并行,不等 LLM
+      fetchDecision(code);
+      // 无存档回显:分析面板显示空态,由用户手动点「开始分析」(每次实时拉 K + 实时 LLM)
+    },
+    [fetchDecision],
+  );
 
   /** 流式:用户手动点「开始分析/重新分析」 — 每次实时拉 K + 实时 LLM,无节点缓存 */
   const refreshAnalysis = useCallback(() => {
@@ -702,6 +762,9 @@ export default function Workbench() {
               gainers={marketHeader?.gainers ?? []}
               losers={marketHeader?.losers ?? []}
               amountTrend={amountTrend}
+              decision={decision}
+              decisionLoading={decisionLoading}
+              decisionError={decisionError}
               chat={{
                 stockCode: activeCode,
                 stockName: selectedQuote?.name ?? null,

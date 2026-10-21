@@ -7,10 +7,12 @@ import type {
   AnalysisResult,
   MarketMover,
   Position,
+  StockDecision,
 } from '@/lib/types';
 
 import { AnalysisPanel, BeginnersGuide } from '@/components/advice/AnalysisPanel';
 import { ChatPanel } from '@/components/chat/ChatPanel';
+import { DecisionCard } from '@/components/desk/DecisionCard';
 
 /**
  * 决策栏(v0.8 右栏)
@@ -20,6 +22,7 @@ import { ChatPanel } from '@/components/chat/ChatPanel';
  * 小白用户要在整页滚动里找「怎么看这只票」。
  * 现在它们固定在右栏,**顺序按「盯盘动作」的思考顺序排**:
  *
+ *   0. 操作决策 —— **我现在该干什么**(确定性引擎,置顶)
  *   1. 持仓概览 —— 我现在拿着什么、赚了多少
  *   2. AI 解读 —— 这只票怎么讲
  *   3. 新手速看 —— 我该怎么看(5 步阅读顺序)
@@ -57,6 +60,9 @@ export function DecisionColumn({
   losers,
   amountTrend,
   chat,
+  decision,
+  decisionLoading,
+  decisionError,
 }: {
   positions: Position[];
   analysis: AnalysisResult | null;
@@ -69,6 +75,10 @@ export function DecisionColumn({
   gainers: MarketMover[];
   losers: MarketMover[];
   amountTrend: AmountTrendResponse['items'];
+  /** 确定性决策卡的载荷(与 AI 解读并行拉取,互不阻塞) */
+  decision: StockDecision | null;
+  decisionLoading: boolean;
+  decisionError: string | null;
   /** AI 问一问(ChatPanel)所需的当前标的上下文 */
   chat: {
     stockCode: string | null;
@@ -97,6 +107,11 @@ export function DecisionColumn({
 
   return (
     <div className="flex flex-col min-h-0">
+      {/* 0. 操作决策卡(确定性引擎,置顶 —— 用户问的第一个问题是「我现在该干什么」) */}
+      <section className="px-3 py-2.5 border-b border-border-def">
+        <DecisionCard decision={decision} loading={decisionLoading} error={decisionError} />
+      </section>
+
       {/* 1. 持仓概览 */}
       <section className="px-3 py-2.5 border-b border-border-def">
         <div className="flex items-baseline gap-2 mb-2">
