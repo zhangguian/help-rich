@@ -45,6 +45,14 @@ export interface BattlePlanOutlook {
 
 export interface BattlePlanItem {
   id?: number;
+  /**
+   * 后端 `_row_to_item` 返回的 `plan_id`(拦截器转成 `planId`)。
+   * ⚠️ 只有**库里那一份** items 才有这三个字段(GET /api/battle-plan);
+   * POST /generate 直接返回编排层算出的 items,没有它们 → 必须可选。
+   */
+  planId?: number;
+  /** 后端 `_row_to_item` 返回的 `plan_date`(拦截器转成 `planDate`) */
+  planDate?: string;
   stockCode: string;
   stockName: string | null;
   itemKind: string;
