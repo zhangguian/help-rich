@@ -791,11 +791,9 @@ def _flow_dim(sector_flows: list[dict] | None) -> dict[str, Any]:
     if abs(total) < FLOW_TOTAL_EPS:
         total = 0.0
     if total > 0:
+        # total > 0 必然蕴含至少一个 net > 0,故此处 top 一定非 None(无需 None 兜底分支)
         score = 1
-        detail = (
-            f"板块资金净流入合计 {total:.2f} 亿,主攻 {top[1]} {top[0]:.2f} 亿"
-            if top else f"板块资金净流入合计 {total:.2f} 亿"
-        )
+        detail = f"板块资金净流入合计 {total:.2f} 亿,主攻 {top[1]} {top[0]:.2f} 亿"
     elif total < 0:
         score = -1
         detail = f"板块资金净流出合计 {abs(total):.2f} 亿,无主攻方向"
@@ -957,6 +955,8 @@ git commit -m "feat(outlook): 明日市场预期四维度规则推断(纯函数�
 """决策 → 明日预案转换(纯函数、零 IO)设计文档 §4.4"""
 from __future__ import annotations
 
+import pytest
+
 from app.services.plan_item_builder import build_items, build_todos
 
 
@@ -1112,6 +1112,19 @@ def test_t_plan_skipped_when_no_position():
     assert [i for i in items if i["item_kind"].startswith("t_")] == []
 
 
+def test_dict_position_raises_instead_of_silently_skipping_position_items():
+    """传 dict 必须**响亮失败**:静默当空仓会让持仓票的止损/做T子项整条消失"""
+    d = _decision(stop_loss={"price": 9.62, "basis": "参考支撑 9.92 元 × 0.97"})
+    with pytest.raises(TypeError):
+        build_items(d, {"shares": 600, "avg_cost": 15.578})
+
+
+def test_none_position_is_not_an_error():
+    """position=None 是合法输入(该票没持仓) —— 不能抛异常"""
+    d = _decision([_action(status="armed", price=9.62)])
+    assert build_items(d, None) != []
+
+
 def test_do_not_items():
     d = _decision(do_not=["下跌通道中不要抄底", "距上次卖出仅 1 天,勿频繁操作"])
     items = build_items(d, _Pos(600, 15.578))
@@ -1240,9 +1253,20 @@ def _has_position(position) -> bool:
     不用 dict —— 后者的契约已写进 docstring 并通过 Task 1 复审,
     改它要动既有代码(且 `api/diagnose.py` 在用);而本模块是新代码,改它零成本。
     接线层(Task 6)造一个 PositionView 同时传给两者。
+
+    **传 dict 抛 TypeError(不静默降级)**:dict 没有 `.shares` 属性,
+    会被读成 0 股 → 持仓票的「止损」与两条「做T」子项被**静默漏掉** →
+    用户拿到的计划里根本没有止损,复盘时却显示「按计划执行」。
+    这种漏项比报错更难发现,所以这里选择**响亮地失败**
+    (与 `position_status.resolve_position_status` 的契约处理一致)。
     """
     if position is None:
         return False
+    if not hasattr(position, "shares"):
+        raise TypeError(
+            "position 须为含 .shares 属性的对象(如 PositionView / Position),"
+            f"收到 {type(position).__name__} —— 传 dict 会静默漏掉止损与做T子项"
+        )
     try:
         return int(getattr(position, "shares", 0) or 0) > 0
     except (TypeError, ValueError):
@@ -1440,7 +1464,7 @@ $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_plan_item_builder.py -q --no-header -p no:cacheprovider
 ```
 
-Expected: 全部 PASS（24 passed）。
+Expected: 全部 PASS（22 passed）。
 
 - [ ] **Step 5: 静态检查 + Commit**
 
@@ -1471,7 +1495,7 @@ git commit -m "feat(plan): 决策→明日预案转换(纯函数、零 IO)
 
 **Interfaces:**
 - Consumes: 预案项 list、目标日 K 线 dict、流水 list
-- Produces: `check_fulfillment(items, target_klines, transactions) -> list[dict]`
+- Produces: `check_fulfillment(items, target_klines, transactions) -> list[dict]`、`summarize_fulfillment(items) -> dict`
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -1603,6 +1627,29 @@ def test_discipline_violation_flagged_when_unlock_blocked_but_traded():
     assert "纪律问题" in out[0]["fulfillment_note"]
 
 
+def test_do_not_with_sell_operation_also_flagged():
+    """别动项:买卖任一方向的操作都算违规(spec §4.5 第四步:「有该票的买卖操作」)"""
+    items = [_item(kind="do_not", direction="none", price=None, label="别动")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline()]}, [_txn(action="sell")])
+    assert out[0]["fulfillment"] == "executed"
+    assert "纪律问题" in out[0]["fulfillment_note"]
+
+
+def test_unlock_without_operation_is_not_counted_as_gap():
+    """解锁类(未解锁)本来就不该执行 —— 没操作记 n_a,不计入统计(spec §4.5.4)"""
+    items = [_item(kind="unlock", direction="buy", price=12.5, label="解锁后建仓")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(low=9.0)]}, [])
+    assert out[0]["fulfillment"] == "n_a"
+
+
+def test_t_buyback_not_executed_when_bought_above_target_price():
+    """T 回补按**价格区间**匹配(spec §4.5):买价高于下沿×1.02 → 不算按计划回补"""
+    items = [_item(kind="t_buyback", direction="buy", price=9.2, label="做T回补")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.2, low=9.4)]},
+                            [_txn(action="buy", price=9.5)])
+    assert out[0]["fulfillment"] == "missed"
+
+
 # ---------------- 其它 ----------------
 
 def test_input_items_not_mutated():
@@ -1653,13 +1700,19 @@ R+1 = 兑现判定日。
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 # 纪律问题相关:计划说别动/未解锁,却仍然操作
 DISCIPLINE_KINDS = {"do_not", "unlock"}
 
+# T 操作的「减」与「接」方向相反,**不能只看 action**,必须按价格区间匹配(spec §4.5):
+#   卖出价 ≥ 上沿 × 0.98 → 算「减仓」子项已执行
+#   买价   ≤ 下沿 × 1.02 → 算「回补」子项已执行
+T_SELL_TOLERANCE = 0.98
+T_BUYBACK_TOLERANCE = 1.02
 
-def _f(v: Any) -> Optional[float]:
+
+def _f(v: Any) -> float | None:
     try:
         if v is None:
             return None
@@ -1669,7 +1722,7 @@ def _f(v: Any) -> Optional[float]:
         return None
 
 
-def _day_extremes(klines: list[dict] | None) -> tuple[Optional[float], Optional[float]]:
+def _day_extremes(klines: list[dict] | None) -> tuple[float | None, float | None]:
     """目标日的 (high, low);缺数据返回 (None, None)"""
     if not klines:
         return None, None
@@ -1700,6 +1753,36 @@ def _has_txn(transactions: list[dict] | None, code: str, action: str) -> bool:
     return False
 
 
+def _executed_at_price(
+    transactions: list[dict] | None,
+    code: str,
+    action: str,
+    threshold: float,
+    at_least: bool,
+) -> bool:
+    """T 子项按**价格区间**匹配(spec §4.5)。
+
+    at_least=True → 成交价 ≥ threshold 算已执行(如减仓卖出价 ≥ 上沿 × 0.98);
+    at_least=False → 成交价 ≤ threshold 算已执行(如回补买价 ≤ 下沿 × 1.02)。
+    成交价缺失(price=None)不算匹配 —— 无价流水无法证明是按哪条预案执行的。
+    """
+    for t in transactions or []:
+        if not isinstance(t, dict):
+            continue
+        if t.get("stock_code") != code:
+            continue
+        if str(t.get("action") or "").lower() != action:
+            continue
+        p = _f(t.get("price"))
+        if p is None:
+            continue
+        if at_least and p >= threshold:
+            return True
+        if (not at_least) and p <= threshold:
+            return True
+    return False
+
+
 def check_fulfillment(
     items: list[dict],
     target_klines: dict[str, list[dict]],
@@ -1720,36 +1803,54 @@ def check_fulfillment(
         fulfillment = "pending"
         note = ""
 
-        if direction == "none" or price is None:
-            # 别动 / 解锁类:无触发价,不参与统计
+        # 第一步:是否真的执行了(最高优先级)
+        if kind in DISCIPLINE_KINDS:
+            # 别动 / 未解锁类:买卖任一方向都算"动了手"(spec §4.5 第四步)
+            executed = _has_txn(transactions, code, "buy") or _has_txn(transactions, code, "sell")
+        elif kind == "t_sell":
+            executed = _executed_at_price(
+                transactions, code, "sell", price * T_SELL_TOLERANCE, at_least=True
+            )
+        elif kind == "t_buyback":
+            executed = _executed_at_price(
+                transactions, code, "buy", price * T_BUYBACK_TOLERANCE, at_least=False
+            )
+        elif direction == "buy":
+            executed = _has_txn(transactions, code, "buy")
+        elif direction == "sell":
+            executed = _has_txn(transactions, code, "sell")
+        else:
+            # direction=none 且非纪律类(如 watch):无明确动作可判定
+            executed = False
+
+        if kind in DISCIPLINE_KINDS and executed:
+            # 纪律问题优先于「不计入统计」—— 这是最该被看见的一条
+            fulfillment = "executed"
+            note = "⚠️ 纪律问题:昨日标记别动/未解锁,今日仍有操作"
+        elif kind in DISCIPLINE_KINDS:
+            # 别动 / 未解锁类:本来就不该执行 → 不计入统计(spec §4.5.4)
+            fulfillment = "n_a"
+            note = "别动/未解锁类,不计入兑现统计"
+        elif direction == "none" or price is None:
+            # 无触发价(如 watch):不参与统计
             fulfillment = "n_a"
             note = "无触发价,不计入兑现统计"
+        elif executed:
+            fulfillment = "executed"
+            note = "已按计划执行"
         else:
-            # 第一步:是否真的执行了(最高优先级)
-            if direction == "buy":
-                executed = _has_txn(transactions, code, "buy")
+            # 第二步:价格是否触及
+            touched = False
+            if direction == "sell" and high is not None and high >= price:
+                touched = True
+            if direction == "buy" and low is not None and low <= price:
+                touched = True
+            if touched:
+                fulfillment = "touched"
+                note = "价格已触及触发位,但当日无对应操作"
             else:
-                executed = _has_txn(transactions, code, "sell")
-
-            if kind in DISCIPLINE_KINDS and executed:
-                fulfillment = "executed"
-                note = "⚠️ 纪律问题:昨日标记别动/未解锁,今日仍有操作"
-            elif executed:
-                fulfillment = "executed"
-                note = "已按计划执行"
-            else:
-                # 第二步:价格是否触及
-                touched = False
-                if direction == "sell" and high is not None and high >= price:
-                    touched = True
-                if direction == "buy" and low is not None and low <= price:
-                    touched = True
-                if touched:
-                    fulfillment = "touched"
-                    note = "价格已触及触发位,但当日无对应操作"
-                else:
-                    fulfillment = "missed"
-                    note = "当日未触及触发位(不评价对错)"
+                fulfillment = "missed"
+                note = "当日未触及触发位(不评价对错)"
 
         item["fulfillment"] = fulfillment
         item["fulfillment_note"] = note
@@ -1804,7 +1905,7 @@ $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_fulfillment_checker.py -q --no-header -p no:cacheprovider
 ```
 
-Expected: 全部 PASS（18 passed）。
+Expected: 全部 PASS（19 passed）。
 
 - [ ] **Step 5: 静态检查 + Commit**
 
