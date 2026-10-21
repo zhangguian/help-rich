@@ -21,6 +21,8 @@ from __future__ import annotations
 from typing import Any
 
 # 决策引擎 kind → 预案方向
+# ⚠️ 只列**会被查询**的 kind。unlock / do_not 不在此表:
+# unlock 项的 direction 继承被它派生的原动作 kind;do_not 项恒为 none(直接写死)。
 KIND_DIRECTION: dict[str, str] = {
     "entry": "buy",
     "add": "buy",
@@ -29,8 +31,6 @@ KIND_DIRECTION: dict[str, str] = {
     "stop": "sell",
     "t_sell": "sell",
     "watch": "none",
-    "unlock": "none",   # 由 blocked 派生,方向在转换时覆盖
-    "do_not": "none",
 }
 
 # 失效条件系数(显式四则运算,不是拍脑袋的魔法数)
@@ -48,17 +48,25 @@ def _f(v: Any) -> float | None:
         return None
 
 
-def _has_position(position: dict | None) -> bool:
-    if not position:
+def _has_position(position) -> bool:
+    """持仓判定:`position` 须为含 `.shares` **属性**的对象。
+
+    ⚠️ 契约统一(2026-10-21 跨任务裁决):本模块与
+    `services/position_status.resolve_position_status` **统一用属性形状**,
+    不用 dict —— 后者的契约已写进 docstring 并通过 Task 1 复审,
+    改它要动既有代码(且 `api/diagnose.py` 在用);而本模块是新代码,改它零成本。
+    接线层(Task 6)造一个 PositionView 同时传给两者。
+    """
+    if position is None:
         return False
     try:
-        return int(position.get("shares") or 0) > 0
+        return int(getattr(position, "shares", 0) or 0) > 0
     except (TypeError, ValueError):
         return False
 
 
 def _invalid_if(item_kind: str, direction: str, price: float | None,
-                basis: list[str], label: str) -> str:
+                label: str) -> str:
     """算失效条件(不得为空,除非是恒成立的别动项)"""
     if item_kind == "do_not":
         return "该别动项恒成立,明日仍然有效"
@@ -137,8 +145,12 @@ def build_todos(decision: dict) -> list[dict]:
     return out
 
 
-def build_items(decision: dict, position: dict | None) -> list[dict]:
-    """明日操作预案项(纯函数)"""
+def build_items(decision: dict, position) -> list[dict]:
+    """明日操作预案项(纯函数)
+
+    `position` 须为含 `.shares` **属性**的对象(或 None)——与
+    `services/position_status.resolve_position_status` 同契约(属性形状,不是 dict)。
+    """
     code = decision.get("stock_code") or ""
     name = decision.get("stock_name")
     _, armed, blocked = _split_actions(decision)
@@ -154,7 +166,7 @@ def build_items(decision: dict, position: dict | None) -> list[dict]:
             code, name, kind, direction,
             a.get("label") or "", price,
             a.get("condition") or "", basis,
-            _invalid_if(kind, direction, price, basis, a.get("label") or ""),
+            _invalid_if(kind, direction, price, a.get("label") or ""),
             "armed",
         ))
 

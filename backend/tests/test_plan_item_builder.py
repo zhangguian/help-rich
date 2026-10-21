@@ -13,6 +13,14 @@ def _action(kind="entry", status="armed", price=10.0, label="支撑企稳建仓"
     }
 
 
+class _Pos:
+    """持仓视图(属性形状,与 services/position_status.resolve_position_status 同契约)"""
+
+    def __init__(self, shares=0, avg_cost=0.0):
+        self.shares = shares
+        self.avg_cost = avg_cost
+
+
 def _decision(actions=None, **kw):
     d = {
         "stock_code": "001896.SZ", "stock_name": "豫能控股",
@@ -34,7 +42,7 @@ def _decision(actions=None, **kw):
 
 def test_armed_action_becomes_plan_item():
     d = _decision([_action(status="armed", price=9.62)])
-    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    items = build_items(d, _Pos(600, 15.578))
     assert len(items) == 1
     it = items[0]
     assert it["item_kind"] == "entry"
@@ -81,14 +89,14 @@ def test_blocked_action_becomes_unlock_item():
 def test_direction_mapping_buy_kinds():
     for kind in ("entry", "add", "t_buyback"):
         d = _decision([_action(kind=kind, status="armed")])
-        items = build_items(d, {"shares": 100, "avg_cost": 10.0})
+        items = build_items(d, _Pos(100, 10.0))
         assert items and items[0]["direction"] == "buy", kind
 
 
 def test_direction_mapping_sell_kinds():
     for kind in ("exit", "stop", "t_sell"):
         d = _decision([_action(kind=kind, status="armed")])
-        items = build_items(d, {"shares": 100, "avg_cost": 10.0})
+        items = build_items(d, _Pos(100, 10.0))
         assert items and items[0]["direction"] == "sell", kind
 
 
@@ -103,14 +111,14 @@ def test_watch_action_direction_none():
 def test_stop_loss_item_only_when_has_position():
     d = _decision(stop_loss={"price": 9.62, "basis": "参考支撑 9.92 元 × 0.97"})
     assert build_items(d, None) == []
-    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    items = build_items(d, _Pos(600, 15.578))
     kinds = [i["item_kind"] for i in items]
     assert "stop" in kinds
 
 
 def test_stop_loss_item_invalid_if():
     d = _decision(stop_loss={"price": 9.62, "basis": "参考支撑 9.92 元 × 0.97"})
-    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    items = build_items(d, _Pos(600, 15.578))
     stop = next(i for i in items if i["item_kind"] == "stop")
     assert stop["direction"] == "sell"
     assert stop["trigger_price"] == 9.62
@@ -123,7 +131,7 @@ def test_t_plan_splits_into_two_items():
         "sell_trigger": "冲高至 10.50 元附近卖出 T 仓", "buyback_trigger": "回落至 9.20 元附近买回",
         "base_position_pct": "≥50%", "unsuitable_signals": "", "needs_position": False,
     })
-    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    items = build_items(d, _Pos(600, 15.578))
     tp = [i for i in items if i["item_kind"] in ("t_sell", "t_buyback")]
     assert len(tp) == 2
     sell = next(i for i in tp if i["item_kind"] == "t_sell")
@@ -134,7 +142,7 @@ def test_t_plan_splits_into_two_items():
 
 def test_t_plan_skipped_when_not_suitable():
     d = _decision()   # suitable=False
-    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    items = build_items(d, _Pos(600, 15.578))
     assert [i for i in items if i["item_kind"].startswith("t_")] == []
 
 
@@ -150,7 +158,7 @@ def test_t_plan_skipped_when_no_position():
 
 def test_do_not_items():
     d = _decision(do_not=["下跌通道中不要抄底", "距上次卖出仅 1 天,勿频繁操作"])
-    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    items = build_items(d, _Pos(600, 15.578))
     dn = [i for i in items if i["item_kind"] == "do_not"]
     assert len(dn) == 2
     assert all(i["direction"] == "none" for i in dn)
@@ -167,7 +175,7 @@ def test_entry_invalid_if_uses_097():
 
 def test_exit_invalid_if_uses_103():
     d = _decision([_action(kind="exit", status="armed", price=12.03)])
-    items = build_items(d, {"shares": 100, "avg_cost": 10.0})
+    items = build_items(d, _Pos(100, 10.0))
     assert "12.39" in items[0]["invalid_if"]
 
 
@@ -177,7 +185,7 @@ def test_invalid_if_present_on_every_item():
         stop_loss={"price": 9.62, "basis": "b"},
         do_not=["别动"],
     )
-    items = build_items(d, {"shares": 100, "avg_cost": 10.0})
+    items = build_items(d, _Pos(100, 10.0))
     for it in items:
         assert it["invalid_if"], it
 
@@ -185,7 +193,7 @@ def test_invalid_if_present_on_every_item():
 # ---------------- 边界 ----------------
 
 def test_empty_actions_returns_empty_list():
-    assert build_items(_decision([]), {"shares": 100, "avg_cost": 10.0}) == []
+    assert build_items(_decision([]), _Pos(100, 10.0)) == []
 
 
 def test_action_with_none_price_yields_none_trigger():
