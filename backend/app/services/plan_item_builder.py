@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 # 决策引擎 kind → 预案方向
@@ -71,12 +72,16 @@ def _has_position(position) -> bool:
             f"收到 {type(position).__name__} —— 传 dict 会静默漏掉止损与做T子项"
         )
     shares = getattr(position, "shares", 0)
-    if not isinstance(shares, (int, float)):
+    # ⚠️ 数值类型契约必须与 `position_status.resolve_position_status` **完全一致**:
+    # 那里声明「int / float / bool / Decimal 实测均可」(比较运算成立即通过)。
+    # 这里若只收 (int, float),同一个 Decimal 持仓在两个模块里结论不同 —— 契约分裂。
+    # bool 是 int 的子类,天然通过(与 position_status 相同)。
+    if not isinstance(shares, (int, float, Decimal)):
         # 形状对了但**值畸形**(如 'abc' / None):同样必须响亮失败。
         # 静默当成「无持仓」会让止损与做T子项整条消失 —— 与 position_status 的契约一致
         # (那里 `position.shares <= 0` 特意放在 try 之外,字符串会抛 TypeError)。
         raise TypeError(
-            f"position.shares 须为数值(与 position_status 同契约),"
+            f"position.shares 须为数值(int / float / Decimal,与 position_status 同契约),"
             f"收到 {type(shares).__name__}: {shares!r}"
         )
     if shares != shares:  # NaN:与任何数比较都是 False → 会被静默当成「无持仓」

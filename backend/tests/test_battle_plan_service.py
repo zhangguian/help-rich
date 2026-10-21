@@ -729,6 +729,32 @@ async def test_persist_keeps_judged_items():
 
 
 @pytest.mark.asyncio
+async def test_persist_returns_library_items_when_already_judged():
+    """已有可信判定 → **返回给前端的 items 必须就是库里那份**(不能是 pending 的新算值)。
+
+    为什么:命中「已有可信判定」时库里保留的是**已判定态**,而 `plan["items"]` 还是本次
+    新算的(fulfillment=pending)。若直接把新算的返回出去,前端会短暂显示 pending,
+    而库里是已判定态 —— 同一个接口两种口径。返回前用库里那份覆盖返回值。
+    """
+    pid = await svc._persist(_plan_payload())
+    items = await battle_plan_repo.get_items(pid)
+    await battle_plan_repo.update_item_fulfillment(items[0]["id"], "executed", "已按计划执行")
+
+    plan = _plan_payload(items=[_prev_item(item_id=0, kind="watch", direction="none",
+                                           price=None, label="不该出现")])
+    await svc._persist(plan)
+
+    # 返回值 = 库里那份(已判定),不是新算的 pending
+    assert [i["fulfillment"] for i in plan["items"]] == ["executed"]
+    assert plan["items"][0]["label"] == "建仓"
+    # 与 GET 口径逐条一致
+    got = await svc.get_plan(date(2026, 11, 2))
+    assert got is not None
+    assert [(i["id"], i["label"], i["fulfillment"]) for i in got["items"]] == \
+           [(i["id"], i["label"], i["fulfillment"]) for i in plan["items"]]
+
+
+@pytest.mark.asyncio
 async def test_persist_replaces_items_when_all_pending():
     """全是 pending(还没判)→ 不可信 → items 被替换成新值"""
     pid = await svc._persist(_plan_payload())

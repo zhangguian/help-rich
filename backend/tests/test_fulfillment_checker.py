@@ -261,6 +261,65 @@ def test_multiple_candidates_pick_closest_price():
     assert "8.00" not in out[0]["fulfillment_note"]
 
 
+# ---------------- 全局择优(spec §4.5.2.1「配对顺序」第二段) ----------------
+
+def test_same_stock_two_plans_one_txn_goes_to_closest_trigger():
+    """同票两条同向预案 + 一笔流水 → 流水归给**触发价更接近成交价**的那条。
+
+    复现真实事故(2026-10-22 最终评审):000807.SZ 当日有 exit/29.03、exit/25.49、
+    stop/23.793 三条同向卖出预案,用户只卖一次、成交 25.50。
+    「逐条预案先到先得」会把流水记给 exit/29.03(「已按计划执行(成交价 25.50 与触发价
+    29.03 不符)」),而用户**实际照做**的 exit/25.49 被记成「价格已触及触发位,
+    但当日无对应操作」—— 这是**往复盘档案写错事实**,不是显示瑕疵。
+    """
+    items = [
+        _item(code="000807.SZ", kind="exit", direction="sell", price=29.03, label="止盈29"),
+        _item(code="000807.SZ", kind="exit", direction="sell", price=25.49, label="止盈25"),
+    ]
+    out = check_fulfillment(items, {"000807.SZ": [_kline(high=29.50, low=23.00)]},
+                            [_txn(code="000807.SZ", action="sell", price=25.50)])
+    # 29.03 那条没拿到流水 → 只能记「触及」,不得记「已执行」
+    assert out[0]["fulfillment"] == "touched"
+    assert "已按计划执行" not in out[0]["fulfillment_note"]
+    # 25.49 那条才是用户实际做的那条 → 记「已执行」,且价位相符(偏离 <3%)
+    assert out[1]["fulfillment"] == "executed"
+    assert "不符" not in out[1]["fulfillment_note"]
+
+
+def test_t_subitem_takes_txn_even_when_plain_trigger_is_closer():
+    """T 子项硬匹配优先于普通预案 —— 即使普通预案的触发价与成交价**完全一致**。
+
+    spec §4.5.2.1 第一段:T 子项优先于**所有**普通预案;
+    否则「T 回补的那笔买入」会被记成「建仓预案已执行」—— 假阳性污染复盘档案。
+    """
+    items = [
+        _item(kind="entry", direction="buy", price=9.10, label="建仓"),
+        _item(kind="t_buyback", direction="buy", price=9.20, label="做T回补"),
+    ]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.2, low=9.30)]},
+                            [_txn(action="buy", price=9.10)])
+    by_kind = {i["item_kind"]: i for i in out}
+    assert by_kind["t_buyback"]["fulfillment"] == "executed"
+    assert by_kind["entry"]["fulfillment"] == "missed"
+
+
+def test_inf_price_never_counts_as_touched():
+    """±inf 价格(脏数据源)→ 不得被当成「已触及」。
+
+    口径与 `outlook_service._f` 统一(`math.isfinite`):只滤 NaN 不滤 ±inf 时,
+    K 线 low = -inf 会让 `low <= 触发价` 恒成立 → buy 项被判**假触及**。
+    """
+    # K 线 low = -inf → 判定所需的 low 无效 → no_data(不是 touched)
+    out = check_fulfillment([_item(direction="buy", price=9.62)],
+                            {"001896.SZ": [_kline(high=10.0, low=float("-inf"))]}, [])
+    assert out[0]["fulfillment"] != "touched"
+    assert out[0]["fulfillment"] == "no_data"
+    # 触发价 = +inf → 无有效触发价 → n_a(不参与统计,更不会被判「已触及」)
+    out2 = check_fulfillment([_item(direction="buy", price=float("inf"))],
+                             {"001896.SZ": [_kline(high=10.0, low=9.0)]}, [])
+    assert out2[0]["fulfillment"] == "n_a"
+
+
 def test_transaction_without_price_fallback_disclosed():
     """成交价缺失 → 兜底消费并在 note 披露(不能装作知道是哪条预案)"""
     items = [_item(kind="entry", direction="buy", price=9.62, label="建仓")]

@@ -310,14 +310,21 @@ async def _persist(plan: dict[str, Any]) -> int:
     `TRUSTED_FULFILLMENTS`)的 fulfillment,说明那批兑现状态已被判定过(生成 D+1 日报时
     回填的)。重新生成 D 日报时**保留原 items 不动**,只更新 outlook / review / meta ——
     否则会把已判定的兑现状态冲回 pending,把复盘历史抹掉。
+
+    ⚠️ **返回值必须与库里一致**(2026-10-22 收口修复):命中「已有可信判定」分支时,
+    库里保留的是**已判定态**的 items,而 `plan["items"]` 还是本次新算的(fulfillment=pending)。
+    若直接把新算的返回给前端,前端会短暂显示 pending,而库里是已判定态 —— 同一个接口
+    两种口径。这里用**库里那份 items 覆盖返回值**,保证「接口返回 = 库里内容」。
     """
     plan_date = plan["plan_date"]
     meta = plan.setdefault("meta", {})
 
     judged = False
+    kept_items: list[dict[str, Any]] = []
     row = await battle_plan_repo.get_plan(plan_date)
     if row:
         existing = await battle_plan_repo.get_items(row["id"])
+        kept_items = existing
         judged = any(
             (i.get("fulfillment") or "pending") in TRUSTED_FULFILLMENTS for i in existing
         )
@@ -329,7 +336,10 @@ async def _persist(plan: dict[str, Any]) -> int:
         review_json=json.dumps(plan.get("review"), ensure_ascii=False),
         meta_json=json.dumps(meta, ensure_ascii=False),
     )
-    if not judged:
+    if judged:
+        # 库里那份已判定态才是真相 → 返回值也用它(与 GET /api/battle-plan 同口径)
+        plan["items"] = kept_items
+    else:
         await battle_plan_repo.replace_items(plan_id, plan_date, plan.get("items") or [])
     return plan_id
 

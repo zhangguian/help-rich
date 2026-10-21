@@ -1,6 +1,8 @@
 """决策 → 明日预案转换(纯函数、零 IO)设计文档 §4.4"""
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from app.services.plan_item_builder import build_items, build_todos
@@ -334,6 +336,18 @@ def test_item_labels_use_mingri_wording():
                   do_not=["下跌通道中不要抄底"])
     items = build_items(d, _Pos(600, 15.578))
     assert all(i["label"].startswith("明日") for i in items)
+
+
+def test_decimal_shares_accepted_like_position_status():
+    """Decimal 股数必须被接受 —— 与 `position_status.resolve_position_status` **同契约**。
+
+    为什么:position_status 的契约明写「int / float / bool / Decimal 实测均可」;
+    若本模块只收 (int, float),同一个 Decimal 持仓在两个模块里结论不同 ——
+    契约分裂,谁也不认谁的账。选定的契约:数值(int / float / bool / Decimal)一律接受。
+    """
+    d = _decision(stop_loss={"price": 9.62, "basis": "b"})
+    items = build_items(d, _Pos(Decimal("600"), 15.578))
+    assert any(i["item_kind"] == "stop" for i in items)
 
 
 def test_malformed_shares_raises_instead_of_silently_no_position():

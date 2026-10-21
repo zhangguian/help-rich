@@ -8,15 +8,22 @@ R+1 = 兑现判定日。
 **诚实性**:"未触发"不评价对错。计划说"跌破 9.62 止损",当天最低 9.70
 没跌破 —— 这不是"止损错了",而是"不该触发"。算成错误会污染决策档案。
 
-**归属规则(spec §4.5.3 第一步细化,2026-10-21 T4 评审后补)**:
-一条流水最多被一条预案消费。
-  1. **T 子项硬匹配**(按价格区间):t_sell 卖出价 ≥ 上沿×0.98、t_buyback 买价 ≤ 下沿×1.02;
-  2. **其余预案按方向**匹配**尚未被消费**的流水,多条候选时取「成交价与触发价最接近」的一条;
-  3. 成交价缺失的流水**不能证明是哪条预案** → 只在没有带价候选时兜底,并在 note 里披露;
+**归属规则(spec §4.5.2.1,2026-10-22 澄清后为「全局三段配对」)**:
+一条流水最多被一条预案消费。配对是**全局**的,不是「逐条预案各走一遍」:
+  1. **第一段 · T 子项硬匹配**(按价格区间):t_sell 卖出价 ≥ 上沿×0.98、t_buyback 买价 ≤ 下沿×1.02
+     —— T 子项优先于**所有**普通预案;
+  2. **第二段 · 普通预案全局择优**:枚举全部同票、方向兼容、流水带价的 (预案, 流水) 候选对,
+     按「成交价与触发价的绝对价差」**全局升序**贪心配对,一条流水被配走即消费;
+  3. **第三段 · 无价流水兜底**:前两段配完仍有流水无归属,才轮到「成交价缺失」的流水按方向兜底
+     并在 note 里披露;
   4. 纪律类(do_not/unlock)**不参与流水归属** —— 它的「executed」表示「当日有操作(违规)」,
      同一笔操作也可能同时构成别的预案的执行,两个结论都成立,不该互相吞掉。
 
-为什么:只看方向时,同票多笔同向预案会把「T 回补的那笔买入」也算成「建仓预案已执行」——
+为什么不能逐条「先到先得」:同票多条同向预案时,先遍历到的那条会抢走流水,哪怕另一条的触发价
+明显更接近成交价 —— 结果是「用户实际照做的那条」被记成执行缺口,抢到的那条被记成
+「已执行但价位不符」。这不是显示瑕疵,是**往复盘档案写错事实**。
+
+为什么 T 子项要先做:只看方向时,同票多笔同向预案会把「T 回补的那笔买入」也算成「建仓预案已执行」——
 那种假阳性会直接污染复盘档案,而本模块存在的意义就是不污染。
 
 **输入范围约束**:传入的 target_klines 与 transactions **必须只含目标日(R+1)的数据**。
@@ -34,6 +41,7 @@ R+1 = 兑现判定日。
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 # 纪律问题相关:计划说别动/未解锁,却仍然操作
@@ -55,11 +63,17 @@ _EPS = 1e-9
 
 
 def _f(v: Any) -> float | None:
+    """转 float;**非有限值(NaN / ±inf)一律当无效**。
+
+    ⚠️ 与 `services/outlook_service._f` 口径统一(用 `math.isfinite`)。
+    只滤 NaN 不滤 ±inf 会出**假触及**:K 线 low = -inf 时 `low <= 触发价` 恒成立 →
+    buy 项被判「已触及」;触发价 = ±inf 时同理。
+    """
     try:
         if v is None:
             return None
         f = float(v)
-        return f if f == f else None
+        return f if math.isfinite(f) else None
     except (TypeError, ValueError):
         return None
 
@@ -95,6 +109,16 @@ def _has_txn(transactions: list[dict] | None, code: str, action: str) -> bool:
     return False
 
 
+def _take_free(pool: list[dict[str, Any]], pred) -> dict[str, Any] | None:
+    """取第一条满足 pred 且未被消费的流水,并立刻标记为已消费"""
+    for t in pool:
+        if t["used"] or not pred(t):
+            continue
+        t["used"] = True
+        return t
+    return None
+
+
 def _assign(
     items: list[dict],
     transactions: list[dict],
@@ -103,6 +127,11 @@ def _assign(
 
     规则见模块 docstring。**一条流水最多被一条预案消费。**
     纪律类不参与归属(它的 executed 表示违规,不是「执行了这条预案」)。
+
+    ⚠️ **配对是全局三段(spec §4.5.2.1「配对顺序」),不是「逐条预案各走一遍」**:
+      1. 第一段 · T 子项硬匹配(价格区间)—— 优先于所有普通预案;
+      2. 第二段 · 普通预案**全局择优** —— 枚举全部候选对,按绝对价差全局升序贪心配对;
+      3. 第三段 · 无价流水兜底 —— 前两段配完仍有流水无归属才轮到它(并披露「成交价缺失」)。
     """
     pool: list[dict[str, Any]] = []
     for t in transactions or []:
@@ -117,15 +146,9 @@ def _assign(
             "price": _f(t.get("price")), "used": False,
         })
 
-    def _take(pred) -> dict[str, Any] | None:
-        for t in pool:
-            if t["used"] or not pred(t):
-                continue
-            t["used"] = True
-            return t
-        return None
-
-    plan: list[tuple[int, int, str, str, str, float | None]] = []
+    # 预案分两组:T 子项(硬匹配)与普通预案(全局择优)
+    t_items: list[tuple[int, str, str, float]] = []   # (idx, code, kind, 触发价)
+    plain: list[tuple[int, str, str, float]] = []      # (idx, code, direction, 触发价)
     for idx, it in enumerate(items or []):
         if not isinstance(it, dict):
             continue
@@ -136,45 +159,61 @@ def _assign(
         price = _f(it.get("trigger_price"))
         if price is None or direction not in ("buy", "sell"):
             continue  # 无触发价/无方向 → n_a,不占流水
-        prio = 1 if kind in ("t_sell", "t_buyback") else 2
-        plan.append((prio, idx, str(it.get("stock_code") or ""), kind, direction, price))
-    plan.sort(key=lambda x: (x[0], x[1]))
+        code = str(it.get("stock_code") or "")
+        if kind in ("t_sell", "t_buyback"):
+            t_items.append((idx, code, kind, price))
+        else:
+            plain.append((idx, code, direction, price))
 
     out: dict[int, tuple[dict[str, Any] | None, str]] = {}
-    for _prio, idx, code, kind, direction, price in plan:
+
+    # ---- 第一段 · T 子项硬匹配(按价格区间,优先于所有普通预案) ----
+    for idx, code, kind, price in t_items:
         if kind == "t_sell":
             thr = price * T_SELL_TOLERANCE
-            t = _take(lambda x, code=code, thr=thr: x["code"] == code and x["action"] == "sell"
-                      and x["price"] is not None and x["price"] >= thr - _EPS)
-            if t is not None:
-                out[idx] = (t, "减仓成交价在计划区间内")
-            continue
-        if kind == "t_buyback":
+            hit = _take_free(pool, lambda x, code=code, thr=thr: x["code"] == code
+                             and x["action"] == "sell" and x["price"] is not None
+                             and x["price"] >= thr - _EPS)
+            hint = "减仓成交价在计划区间内"
+        else:  # t_buyback
             thr = price * T_BUYBACK_TOLERANCE
-            t = _take(lambda x, code=code, thr=thr: x["code"] == code and x["action"] == "buy"
-                      and x["price"] is not None and x["price"] <= thr + _EPS)
-            if t is not None:
-                out[idx] = (t, "回补成交价在计划区间内")
-            continue
-        # 其余预案:按方向匹配尚未被消费的流水,多条候选时取价差最小的
-        best: dict[str, Any] | None = None
-        best_diff: float | None = None
-        for x in pool:
+            hit = _take_free(pool, lambda x, code=code, thr=thr: x["code"] == code
+                             and x["action"] == "buy" and x["price"] is not None
+                             and x["price"] <= thr + _EPS)
+            hint = "回补成交价在计划区间内"
+        if hit is not None:
+            out[idx] = (hit, hint)
+
+    # ---- 第二段 · 普通预案全局择优 ----
+    # 候选集是「(预案, 流水) 对」的**全局**集合:先枚举全部同票、方向兼容、流水带价的对,
+    # 再按绝对价差**全局升序**排序后依次配对 —— 一条流水被配走即消费。
+    # ⚠️ 绝不能「逐条预案各挑一条」:那会让先遍历到的预案抢走流水,
+    # 把「用户实际照做的那条」记成执行缺口(往复盘档案写错事实)。
+    pairs: list[tuple[float, int, int]] = []
+    for idx, code, direction, price in plain:
+        for j, x in enumerate(pool):
             if x["used"] or x["code"] != code or x["action"] != direction:
                 continue
             if x["price"] is None:
                 continue
-            diff = abs(x["price"] - price)
-            if best_diff is None or diff < best_diff:
-                best, best_diff = x, diff
-        if best is not None:
-            best["used"] = True
-            out[idx] = (best, "")
+            pairs.append((abs(x["price"] - price), idx, j))
+    pairs.sort(key=lambda p: (p[0], p[1], p[2]))
+    for _diff, idx, j in pairs:
+        if idx in out or pool[j]["used"]:
             continue
-        # 兜底:没有带价候选 → 方向匹配一条(成交价缺失,不能证明归属 → note 里披露)
-        t = _take(lambda x, code=code, direction=direction: x["code"] == code and x["action"] == direction)
-        if t is not None:
-            out[idx] = (t, "成交价缺失,仅按方向匹配")
+        pool[j]["used"] = True
+        out[idx] = (pool[j], "")
+
+    # ---- 第三段 · 无价流水兜底 ----
+    # 成交价缺失的流水**不能证明是哪条预案** → 只在前两段配完还有流水无归属时兜底,
+    # 并在 note 里披露「成交价缺失」。
+    for idx, code, direction, _price in plain:
+        if idx in out:
+            continue
+        hit = _take_free(pool, lambda x, code=code, direction=direction: x["code"] == code
+                         and x["action"] == direction and x["price"] is None)
+        if hit is not None:
+            out[idx] = (hit, "成交价缺失,仅按方向匹配")
     return out
 
 
