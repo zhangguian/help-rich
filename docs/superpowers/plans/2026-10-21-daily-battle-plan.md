@@ -3483,7 +3483,8 @@ async def build_plan(plan_date: date) -> dict[str, Any]:
         "outlook": outlook,
         "review": review,
         "items": items,
-        "todos": todos,
+        # ⚠️ 无顶层 `todos` —— 待办统一在 review.pending_todos(spec §4.7 契约)。
+        # 首版实现里这里多了一个 `todos`,已由「Task 6 · fix round 1 / F11」删掉。
         "meta": meta,
     }
     await _persist(plan)
@@ -3613,6 +3614,649 @@ git commit -m "feat(plan): 作战计划编排层(唯一做 IO 的地方)
 
 ---
 
+## Task 6 · fix round 1（编排层缺陷修复）
+
+> **背景**：Task 6 的实现已落（commit `8cce90f`），独立评审 **VERDICT = FAIL**：
+> 1 条 Critical + 7 条 Important。本轮把 **Critical + 7 条 Important** 全部修掉，
+> 另顺带处理 3 条 Minor。
+>
+> **本轮与 Task 4 的 fix round 3 合并执行**：两者都要改 `fulfillment_checker.py`
+> （T4 要补 `unlock` 场景用例 + 偏离比较的 `_EPS`；T6 的 F1 要加 `no_data` 状态）。
+> 合并成一轮，避免两个 worker 同时改同一文件。
+
+**改动文件清单（只许动这 6 个）**：
+
+| 文件 | 改动 |
+|---|---|
+| `backend/app/services/fulfillment_checker.py` | F1（`no_data` 状态）+ T4-2（偏离比较 `_EPS`） |
+| `backend/app/services/outlook_service.py` | F8（新增纯函数 `build_market_snapshot`） |
+| `backend/app/services/battle_plan_service.py` | F1/F2/F3/F4/F5/F7/F8/F9/F11/F12/F13 |
+| `backend/tests/test_fulfillment_checker.py` | T4-1/T4-3 补用例 + F1 的 `no_data` 用例 |
+| `backend/tests/test_outlook_service.py` | `build_market_snapshot` 用例 |
+| `backend/tests/test_battle_plan_service.py` | F1/F2/F4/F5/F6/F7/F13 用例 |
+
+---
+
+### F1 · Critical：「无数据」被永久判定为「未兑现」且不可自愈
+
+**问题**：`fetch_klines` 只在 15:00 后强刷新鲜度 → **盘前/盘中缓存里没有当天的日 K**。
+早上 09:00 生成日报 → 昨日日报的 `meta.target_date` 是今天 → 取不到今天的 K 线 →
+`day_ks = []` → 判定层拿到极值 `(None, None)` → 判 `missed` → **「当日未触及触发位」被永久写进昨日日报**。
+更糟的是 `_persist` 的 `items_preserved` 冻结机制会让这个错误结论**永远改不掉**。
+
+**修法（三处联动，缺一不可）**：
+
+**(1) 判定层新增 `no_data` 状态** — `backend/app/services/fulfillment_checker.py`
+
+把 `check_fulfillment` 里的 `else:` 分支替换为：
+
+```python
+        else:
+            # 第二步:价格是否触及
+            if high is None and low is None:
+                # ⚠️ 目标日**没有该票的行情数据**(停牌 / 数据源未出 / 节假日)——
+                # 我们根本无从判定触没触发。判 missed 等于「用无知冒充事实」:
+                # 会把「没拿到数据」永久写进复盘档案(spec §4.5.3 第三步之二)。
+                fulfillment = "no_data"
+                note = "目标日无行情数据,未判定"
+            else:
+                touched = False
+                if direction == "sell" and high is not None and high >= price:
+                    touched = True
+                if direction == "buy" and low is not None and low <= price:
+                    touched = True
+                if touched:
+                    fulfillment = "touched"
+                    note = "价格已触及触发位,但当日无对应操作"
+                else:
+                    fulfillment = "missed"
+                    note = "当日未触及触发位(不评价对错)"
+```
+
+> 注意：纪律类分支与「无触发价 → n_a」分支**在更前面**，不受影响。
+> 「当日**有流水**」的分支也在前面 → 有流水时按 `executed` 判，不受日K缺失影响。
+
+`summarize_fulfillment` 同步改：加 `no_data` 计数，并调整 verdict 优先级。
+
+```python
+def summarize_fulfillment(items: list[dict]) -> dict[str, Any]:
+    """复盘段统计口径(spec §4.5.4)
+
+    `no_data` = 目标日无行情数据,**不计入统计**(与 n_a 同性质),
+    且 verdict 不允许因为它而说成「按计划执行」——「没判定」不是「做对了」。
+    """
+    total = len(items or [])
+    executed = touched = missed = na = no_data = 0
+    discipline = 0
+    for i in items or []:
+        if not isinstance(i, dict):
+            continue
+        f = i.get("fulfillment")
+        if f == "executed":
+            executed += 1
+            if "纪律问题" in str(i.get("fulfillment_note") or ""):
+                discipline += 1
+        elif f == "touched":
+            touched += 1
+        elif f == "missed":
+            missed += 1
+        elif f == "n_a":
+            na += 1
+        elif f == "no_data":
+            no_data += 1
+    if discipline > 0:
+        verdict_label, verdict_level = "存在纪律问题", "danger"
+    elif touched > 0:
+        verdict_label, verdict_level = "有执行缺口", "warn"
+    elif no_data > 0:
+        verdict_label, verdict_level = "数据不足", "warn"
+    elif executed > 0:
+        verdict_label, verdict_level = "按计划执行", "ok"
+    else:
+        verdict_label, verdict_level = "无操作记录", "flat"
+    return {
+        "total": total, "executed": executed, "touched": touched,
+        "missed": missed, "na": na, "no_data": no_data, "discipline": discipline,
+        "verdict_label": verdict_label, "verdict_level": verdict_level,
+    }
+```
+
+**(2) 编排层不回填 `no_data`** — `backend/app/services/battle_plan_service.py` 的 `_build_review`
+
+回填循环里跳过 `no_data`（保持 `pending`，等数据补齐后可重判）：
+
+```python
+    # 回填昨日日报的兑现状态
+    # ⚠️ `no_data` **不回填** —— 那是「没判定」,不是判定结果。
+    # 写回去会让「数据不足」变成「未兑现」,还会被 items_preserved 冻结成永久结论。
+    for it in checked:
+        if it.get("fulfillment") == "no_data":
+            continue
+        try:
+            await battle_plan_repo.update_item_fulfillment(
+                it["id"], it["fulfillment"], it.get("fulfillment_note") or ""
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("回填兑现状态失败 item=%s: %s", it.get("id"), e)
+```
+
+**(3) 收紧 `_persist` 的冻结条件** — 只认**可信判定**
+
+```python
+# 只有基于完整数据得出的判定才可信,才允许冻结 items。
+# `pending`(还没判)与 `no_data`(没数据,判不了)都**不可信** ——
+# 冻结它们等于把「还没判定」永久定成「没兑现」(spec §4.6.3)。
+TRUSTED_FULFILLMENTS = {"executed", "touched", "missed"}
+```
+
+`_persist` 里把
+
+```python
+        judged = any((i.get("fulfillment") or "pending") != "pending" for i in existing)
+```
+
+改成
+
+```python
+        judged = any(
+            (i.get("fulfillment") or "pending") in TRUSTED_FULFILLMENTS for i in existing
+        )
+```
+
+> 这样：全部 `no_data` → `judged=False` → items 重建（都是 pending）→ 数据补齐后可重判 ✓；
+> 有 `executed` → `judged=True` → items 保留 ✓。
+
+---
+
+### F2 · Important：R 的取法从「自然日减一」改成「数据驱动」
+
+**问题**：`prev_date = (plan_date - timedelta(days=1)).isoformat()` →
+周一的减一是**周日** → 必然找不到昨日日报 → 复盘段恒为「没有找到昨日作战计划」。
+更糟的是**周五面向下个交易日的预案永远停在 `pending`**，闭环每周一断裂。
+
+**修法**：用「最近一份**早于** plan_date 的日报」当 R。
+
+在 `backend/app/services/battle_plan_service.py` 新增：
+
+```python
+async def _find_prev_plan_date(plan_date: date) -> str | None:
+    """找最近一份**早于** plan_date 的日报日期(数据驱动)。
+
+    为什么不能用「plan_date 减一天」:周一的减一是周日 → 必然找不到;
+    每个长假后的第一个交易日同理。而「上一份日报」天然就是「上一个交易日的那份」——
+    不需要交易日历,也不需要节假日表。
+    """
+    try:
+        dates = await battle_plan_repo.list_plan_dates(limit=60)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("作战计划查找上一份日报失败: %s", e)
+        return None
+    for d in dates or []:
+        if str(d) < plan_date.isoformat():
+            return str(d)
+    return None
+```
+
+`build_plan` 里把
+
+```python
+    prev_date = (plan_date - timedelta(days=1)).isoformat()
+    review = await _build_review(prev_date, plan_date, degraded, todos)
+```
+
+改成
+
+```python
+    prev_date = await _find_prev_plan_date(plan_date)
+    review = await _build_review(prev_date, plan_date, degraded, todos)
+```
+
+`_build_review` 的 `prev_date` 形参类型改成 `str | None`，开头加一段：
+
+```python
+    todos = list(pending_todos or [])
+    if not prev_date:
+        return {
+            "market": None,
+            "fulfillment": None,
+            "pending_todos": todos,
+            "note": "没有找到上一份作战计划,今日暂无兑现比对",
+        }
+    prev = await battle_plan_repo.get_plan(prev_date)
+```
+
+> 同步修订 spec §4.6.2 第 4 步（已在本轮 spec 提交中改）。
+
+---
+
+### F3 · Important：`target_date` 的基准从「指数最后一根 K 线」改成 `plan_date`
+
+**问题**：盘中生成时指数 K 线还没到今天 → `_next_trading_day` 返回**今天** →
+卡面写「明日 = 今天」，D/D+1 契约塌陷。
+
+**修法**：
+
+```python
+def _next_trading_day(plan_date: date) -> tuple[str, bool]:
+    """下一个交易日 = plan_date(D) 之后的第一个工作日。
+
+    ⚠️ 基准必须是 **plan_date**,不能是「指数最后一根 K 线的日期」——
+    盘中生成时最后一根 K 线还是昨天,用它当基准会算出「明天 = 今天」,
+    把 D/D+1 契约(明日)塌成今日,整份日报的语义就错了。
+    工作日推算无法覆盖法定节假日 → 恒为推算值,标注 target_date_estimated。
+    """
+    nxt = plan_date + timedelta(days=1)
+    while nxt.weekday() >= 5:  # 跳过周末
+        nxt += timedelta(days=1)
+    return nxt.isoformat(), True
+```
+
+`build_plan` 里把
+
+```python
+    target_date, estimated = _next_trading_day(index_klines, plan_date)
+```
+
+改成
+
+```python
+    target_date, estimated = _next_trading_day(plan_date)
+```
+
+---
+
+### F4 · Important：流水读取失败必须降级披露，不能静默吞掉
+
+**问题**：`_load_transactions` 读失败时 `return []` → 调用方分不清「今天没流水」与「没读到」；
+spec §六 要求这种情况必须标「流水不可用，未核对执行」。
+
+**修法**：`battle_plan_service.py`
+
+`_load_transactions` 改成返回 `(rows, ok)`：
+
+```python
+async def _load_transactions(plan_date: str) -> tuple[list[dict[str, Any]], bool]:
+    """目标日交易流水 → (流水列表, 是否读取成功)
+
+    第二个返回值是 `ok`:读失败时为 False,调用方**必须**据此降级披露
+    (spec §六:「流水读取失败 → 只判触及不判执行,note 标注『流水不可用，未核对执行』」)。
+    静默返回空列表等于把「没读到数据」说成「今天没操作」——用户无从分辨。
+    """
+    from app.modules.portfolio.repository import transaction_repo
+
+    try:
+        rows, _total = await transaction_repo.list_all(limit=500)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("作战计划读取流水失败: %s", e)
+        return [], False
+    out: list[dict[str, Any]] = []
+    for r in rows or []:
+        ...   # 原有转换逻辑不变
+    return out, True
+```
+
+`_build_review` 里改成：
+
+```python
+    transactions, tx_ok = await _load_transactions(target_day)
+    if not tx_ok:
+        degraded.append("流水不可用,今日只判触及不判执行")
+    checked = check_fulfillment(prev_items, target_klines, transactions)
+    if not tx_ok:
+        # 没读到流水 → 不能说「当日无对应操作」(那是我们没看到,不是没有)
+        for it in checked:
+            if it.get("fulfillment") == "missed":
+                it["fulfillment_note"] = "流水不可用,未核对执行"
+            elif it.get("fulfillment") == "touched":
+                it["fulfillment_note"] = "价格已触及触发位,但当日无对应操作(流水不可用,未核对执行)"
+```
+
+---
+
+### F5 · Important：取数并发化
+
+**问题**：逐票串行 `await`，20 只票 × 2 次上游往返，60s 超时预算会被打爆。
+
+**修法**：`battle_plan_service.py` 的 `build_plan` 里，把逐票 for 循环换成并发：
+
+```python
+    # ---- 逐票预案(并发,限流) ----
+    # ⚠️ 必须并发:逐票串行 20 轮 × (K线 + 市场环境) 上游往返,
+    # 会打爆前端 60s 的超时预算(spec §4.7)。单票异常已在 _build_one_decision 内隔离。
+    sem = asyncio.Semaphore(6)
+
+    async def _one(stock: dict[str, Any]):
+        async with sem:
+            return await _build_one_decision(stock, quotes_by_code)
+
+    results = await asyncio.gather(
+        *[_one(stock) for stock in scope], return_exceptions=True
+    )
+
+    items: list[dict[str, Any]] = []
+    todos: list[dict[str, Any]] = []
+    for stock, res in zip(scope, results):
+        if isinstance(res, BaseException):
+            degraded.append(f"{stock.get('stock_code')} 决策失败: {res}")
+            continue
+        decision, stock_todos, errors = res
+        degraded.extend(errors)
+        if decision is None:
+            continue
+        todos.extend(stock_todos or [])
+        pos = PositionView(
+            shares=int(stock.get("shares") or 0),
+            avg_cost=float(stock.get("avg_cost") or 0.0),
+        )
+        items.extend(build_items(decision, pos if stock.get("in_position") else None))
+```
+
+文件头补 `import asyncio`（**当前文件没有 import asyncio**）。
+
+---
+
+### F6 · Important：`_persist` 幂等两条集成测试缺失
+
+**问题**：spec §七 明确要求两条集成测试（同日重复生成幂等 / 已有非 pending 时 items 不被冲掉），
+当前测试把 `_persist` mock 掉了 → 零覆盖。
+
+**修法**：在 `backend/tests/test_battle_plan_service.py` 里加 2 条**不打桩 `_persist`** 的用例
+（用真 DB 或 fake repo 都行，但必须真的走 `_persist`）：
+
+- `test_persist_is_idempotent_for_same_day`：同一天连续 `upsert_plan` 两次 → `battle_plans` 里该 plan_date 只有 1 行。
+- `test_persist_keeps_judged_items`：库里已有 items 且其中一条 fulfillment 是 `executed` → 再走一次 `_persist` → items 内容不变（`replace_items` 未被调用 / items 仍是原值）。
+- `test_persist_replaces_items_when_all_pending`：库里 items 全是 `pending` → 再走一次 `_persist` → items 被替换成新值。
+- `test_persist_replaces_items_when_only_no_data`：库里 items 全是 `no_data` → 再走一次 `_persist` → items 被替换（`no_data` 不可信，不冻结）。
+
+---
+
+### F7 · Important：股票池排序要保留「关注按加入时间倒序」
+
+**问题**：`scope.sort(key=lambda s: (not s["in_position"], s["stock_code"]))` 把关注票按 code 重排，
+丢掉了 `watchlist_repo.list_all()` 已经排好的 `added_at desc` → 截断时会先砍掉**最近加入**的关注票。
+
+**修法**：`resolve_target_stocks` 里**删掉那行 sort**（`merged` 是 dict，Python 3.7+ 保序，
+插入顺序 = 持仓顺序 → 关注顺序，后者已是 added_at desc）。改成注释：
+
+```python
+    scope = list(merged.values())
+    # ⚠️ **不要按 stock_code 重排** —— 关注票的顺序来自 watchlist_repo.list_all()
+    # (按 added_at 倒序),重排会把「最近加入的关注票」排到最后,
+    # 截断上限时先砍掉最该保留的票。持仓在前、关注在后,组内保持源顺序。
+```
+
+---
+
+### F8 · Important：`review.market` 不能恒为 `None`
+
+**问题**：spec §4.7 的响应契约里 `review.market` 有内容，实现恒为 `None` → 「今日复盘」缺了「今天大盘怎么走」。
+
+**修法**：在**决策层**（`backend/app/services/outlook_service.py`）加一个纯函数：
+
+```python
+def build_market_snapshot(klines: list[dict] | None, target_date: str) -> dict[str, Any] | None:
+    """目标日的指数实况快照(纯函数、零 IO)→ {index_close, change_pct, volume_note}
+
+    只做**事实转述**,不做任何指标推断:
+    - index_close = 目标日收盘价
+    - change_pct  = (收盘 - 前收) / 前收 × 100
+    - volume_note = 目标日成交额(亿元)的文字描述
+
+    **为什么必须放在决策层**:编排层只该做 IO 与编排;
+    涨跌幅与成交额换算属于「把行情数字翻译成人话」,和 build_outlook 同域。
+
+    目标日没有数据(盘前 / 停牌 / 节假日)→ 返回 None(调用方如实留空,不编造)。
+    """
+    bars = [k for k in (klines or []) if isinstance(k, dict)]
+    idx = None
+    for i, k in enumerate(bars):
+        if str((k or {}).get("date") or "")[:10] == target_date:
+            idx = i
+    if idx is None:
+        return None
+    close = _f((bars[idx] or {}).get("close"))
+    if close is None:
+        return None
+    prev_close = None
+    if idx > 0:
+        prev_close = _f((bars[idx - 1] or {}).get("close"))
+    change_pct = None
+    if prev_close is not None and prev_close > 0:
+        change_pct = (close - prev_close) / prev_close * 100.0
+    volume_note = None
+    amount = _f((bars[idx] or {}).get("amount"))
+    if amount is not None and amount > 0:
+        volume_note = f"成交额 {amount / 1e8:.0f} 亿"
+    return {
+        "index_close": round(close, 2),
+        "change_pct": round(change_pct, 2) if change_pct is not None else None,
+        "volume_note": volume_note,
+    }
+```
+
+并把 `__all__` 改成 `["build_outlook", "build_market_snapshot"]`。
+
+> ⚠️ `amount` 字段：K 线的 `amount` 是**字符串**（见数据契约），`_f` 会转 float；
+> 若该日 K 线没有 amount 字段 → `volume_note` 为 None（如实留空）。
+
+编排层接线（`battle_plan_service.py`）：
+
+```python
+from app.services.outlook_service import build_market_snapshot, build_outlook
+```
+
+`_build_review` 的两个 return 分支里，`"market": None` 改成传入快照：
+
+```python
+async def _build_review(
+    prev_date: str | None,
+    plan_date: str,
+    degraded: list[str],
+    pending_todos: list[dict[str, Any]] | None = None,
+    market: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+```
+
+两个 return 里的 `"market": None` 改成 `"market": market`。
+
+`build_plan` 里：
+
+```python
+    market_snapshot = build_market_snapshot(index_klines, plan_date)
+    ...
+    review = await _build_review(prev_date, plan_date, degraded, todos, market_snapshot)
+```
+
+> `review.market` 是「D 当天的实况」→ 用 `plan_date`（D）而不是 target_date（D+1）✓。
+
+---
+
+### F9 / F11 · Minor：顶层 `todos` 键去掉；`meta.scope` 形状同步
+
+**F11**：spec §4.7 的响应契约里**没有**顶层 `todos`（待办在 `review.pending_todos`），
+而实现 `build_plan` 返回了顶层 `todos`、`get_plan` 又不返回 → 契约不对称，前端切 GET 时待办会凭空消失。
+
+**修法**：`build_plan` 的返回 dict 里删掉 `"todos": todos,` 这一行。
+`get_plan` 不用改（它本来就没有）。
+
+**F9 / F10**：`meta.scope` 里含 `shares` / `avg_cost`（真实持仓成本）→ 不必要的数据扩散。
+**修法**：`build_plan` 的 meta 里改成只留 4 个字段：
+
+```python
+        "scope": [
+            {
+                "stock_code": s.get("stock_code"),
+                "stock_name": s.get("stock_name"),
+                "in_position": bool(s.get("in_position")),
+                "is_favorite": bool(s.get("is_favorite")),
+            }
+            for s in scope
+        ],
+```
+
+（`scope` 变量本身仍带 shares/avg_cost，供决策层用；只是**落库/出参**的 meta 里裁掉。）
+
+---
+
+### F12 · Minor：`generated_at` 带时区
+
+`battle_plan_service.py`：
+
+```python
+from datetime import date, datetime, timedelta, timezone
+```
+
+```python
+        "generated_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+```
+
+> 本机时区为 +08:00，输出形如 `2026-10-21T15:12:33+08:00`，与 spec §4.7 示例一致。
+
+---
+
+### F13 · Minor：单票「决策/转换」阶段的异常未隔离
+
+**问题**：`build_decision` / `build_todos` / `build_items` 在 try 之外 → 一只票抛异常会让**整份日报 500**。
+
+**修法**：`battle_plan_service.py` 的 `_build_one_decision` 里，把决策与转换包进 try：
+
+```python
+    try:
+        decision = build_decision(ctx)
+        todos = build_todos(decision)
+    except Exception as e:  # noqa: BLE001
+        # 单票失败不影响其余票(spec §4.6.2 降级原则)
+        return None, None, [f"{code} 决策计算失败: {e}"]
+    return decision, todos, errors
+```
+
+`build_plan` 里的 `items.extend(build_items(...))` 同样要包：
+
+```python
+        try:
+            items.extend(build_items(decision, pos if stock.get("in_position") else None))
+        except Exception as e:  # noqa: BLE001
+            degraded.append(f"{stock.get('stock_code')} 预案转换失败: {e}")
+```
+
+---
+
+### T4-1 · Important（来自 T4 复审）：纪律守卫用例是**假锁**
+
+**问题**：`test_discipline_item_does_not_consume_transaction` 用的是 `do_not`（`direction="none"`），
+它本来就会被方向过滤排除 → 删掉实现里的纪律守卫（`_assign` 里跳过 `DISCIPLINE_KINDS`）后**30 条用例全绿**。
+真正能观察该守卫的是 `unlock` 项（`plan_item_builder` 让 unlock 继承原动作的 direction 并带触发价）。
+
+**修法**：把那条用例**换成 unlock 场景**（或新增一条 unlock 版）：
+
+```python
+def test_discipline_item_does_not_consume_transaction():
+    """纪律类不参与流水归属 —— 同一笔操作可同时构成纪律违规与别的预案的执行。
+
+    ⚠️ 必须用 **unlock**(direction=buy + 有触发价)而不是 do_not(direction=none):
+    do_not 本来就会被方向过滤排除,删掉纪律守卫它照样绿 —— 那是假锁。
+    """
+    items = [
+        _item(kind="unlock", direction="buy", price=12.50, label="解锁后建仓"),
+        _item(kind="entry", direction="buy", price=9.62, label="建仓"),
+    ]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.2, low=9.3)]},
+                            [_txn(action="buy", price=9.62)])
+    by_kind = {i["item_kind"]: i for i in out}
+    assert by_kind["unlock"]["fulfillment"] == "executed"
+    assert "纪律问题" in by_kind["unlock"]["fulfillment_note"]
+    assert by_kind["entry"]["fulfillment"] == "executed"
+```
+
+> 删掉实现里的纪律守卫后，这条用例必须**转红**（`entry` 会变成 `touched`）。
+
+---
+
+### T4-2 / T4-3 · Minor（来自 T4 复审）
+
+**T4-2 偏离比例比较加 `_EPS`**（spec §4.5.2.1 写明「阈值比较（价格区间、偏离比例）统一加 1e-9 容差」）：
+
+`fulfillment_checker.py`：
+
+```python
+            if tp is not None and abs(tp - price) > price * DEVIATION_TOLERANCE + _EPS:
+```
+
+**T4-3 `t_buyback` 的同票过滤补一条用例**：
+
+```python
+def test_t_buyback_ignores_other_stock_transaction():
+    """T 回补的同票过滤:别的票的买入不能算本票的回补"""
+    items = [_item(kind="t_buyback", direction="buy", price=9.20, label="做T回补")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.2, low=9.4)]},
+                            [_txn(code="000807.SZ", action="buy", price=9.10)])
+    assert out[0]["fulfillment"] == "missed"
+```
+
+---
+
+### 本轮必须新增的测试清单
+
+`backend/tests/test_fulfillment_checker.py`（现 30 条 → **33 条**）：
+
+| 用例 | 锁住的规则 |
+|---|---|
+| `test_no_data_when_target_day_has_no_kline` | 目标日无 K 线 → `no_data`，**不是** `missed` |
+| `test_no_data_not_counted_in_statistics` | `no_data` 不计入统计；verdict = 「数据不足」 |
+| `test_transaction_proves_execution_even_without_kline` | 当日有流水 → `executed`（不受日K缺失影响） |
+| `test_discipline_item_does_not_consume_transaction`（改写为 unlock 版） | T4-1 |
+| `test_t_buyback_ignores_other_stock_transaction` | T4-3 |
+
+`backend/tests/test_outlook_service.py`（新增 **4 条**）：
+
+| 用例 | 锁住的规则 |
+|---|---|
+| `test_market_snapshot_returns_target_day_close` | 取目标日收盘与前收算涨跌幅 |
+| `test_market_snapshot_returns_none_when_target_day_missing` | 目标日无 K 线 → `None`（不编造） |
+| `test_market_snapshot_volume_note_none_when_amount_missing` | 无成交额 → `volume_note` 为 None |
+| `test_market_snapshot_handles_string_amount` | `amount` 是字符串 → 正确转 float |
+
+`backend/tests/test_battle_plan_service.py`（现 7 条 → **至少 17 条**）：
+
+| 用例 | 锁住的规则 |
+|---|---|
+| `test_prev_plan_date_skips_weekend` | F2：周一 → 找到的是周五那份 |
+| `test_prev_plan_date_none_when_no_earlier_plan` | F2：库里没有更早的日报 → `None` |
+| `test_next_trading_day_from_plan_date_not_last_bar` | F3：基准是 plan_date |
+| `test_transactions_load_failure_marks_degraded` | F4：读失败 → degraded 有记录 |
+| `test_transactions_failure_does_not_claim_no_operation` | F4：note 不说「当日无对应操作」 |
+| `test_no_data_items_are_not_written_back` | F1：`no_data` 不回填 |
+| `test_persist_is_idempotent_for_same_day` | F6 |
+| `test_persist_keeps_judged_items` | F6 |
+| `test_persist_replaces_items_when_all_pending` | F6 |
+| `test_persist_replaces_items_when_only_no_data` | F1/F6 |
+| `test_scope_keeps_favorite_order_by_added_at_desc` | F7：关注顺序不被 code 重排 |
+| `test_scope_meta_excludes_cost_fields` | F9：meta.scope 只有 4 字段 |
+| `test_review_market_snapshot_present` | F8 |
+| `test_top_level_todos_removed` | F11：顶层无 `todos` |
+| `test_generated_at_has_timezone` | F12 |
+| `test_one_stock_failure_does_not_break_others` | F13 |
+
+---
+
+### 本轮验收
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_fulfillment_checker.py tests/test_outlook_service.py tests/test_battle_plan_service.py -q --no-header -p no:cacheprovider
+& '.\.venv\Scripts\python.exe' -m pytest -q --no-header -p no:cacheprovider
+& '.\.venv\Scripts\python.exe' -m ruff check app/services/fulfillment_checker.py app/services/outlook_service.py app/services/battle_plan_service.py tests/test_fulfillment_checker.py tests/test_outlook_service.py tests/test_battle_plan_service.py
+```
+
+- 三个测试文件**全绿**（用例数按上表：33 / +4 / ≥17）。
+- **全量回归 0 failed**。
+- 六个文件 ruff `All checks passed!`。
+  （全仓 `ruff check app tests` 有 **224 条历史存量**，不在本轮范围 —— 见 T9 Step 2。）
+
+---
+
 ## Task 7: HTTP 端点 + 前端 API 与类型
 
 **Files:**
@@ -3680,10 +4324,9 @@ def test_generate_endpoint_returns_plan(monkeypatch):
                         "degraded": False, "degraded_reason": []},
             "review": None,
             "items": [],
-            "todos": [],
             "meta": {"scope_count": 1, "scope": [], "truncated": False,
                      "degraded": False, "degraded_reason": [],
-                     "generated_at": "2026-10-21T15:00:00",
+                     "generated_at": "2026-10-21T15:00:00+08:00",
                      "target_date": "2026-10-22", "target_date_estimated": True},
         }
     monkeypatch.setattr(bp, "build_plan", _gen)
@@ -3934,7 +4577,8 @@ export interface BattlePlanItem {
   statusNow: 'now' | 'armed' | 'blocked';
   /** 溯源:decision.actions / decision.stop_loss / decision.t_plan / decision.do_not */
   source: string;
-  fulfillment: 'pending' | 'touched' | 'executed' | 'missed' | 'n_a';
+  /** `no_data` = 目标日无该票行情数据 → 未判定(不计入统计) */
+  fulfillment: 'pending' | 'touched' | 'executed' | 'missed' | 'n_a' | 'no_data';
   fulfillmentNote: string;
 }
 
@@ -3953,6 +4597,8 @@ export interface BattlePlanFulfillment {
   touched: number;
   missed: number;
   na: number;
+  /** 目标日无行情数据 → 未判定(不计入统计) */
+  noData: number;
   discipline: number;
   verdictLabel: string;
   verdictLevel: 'ok' | 'warn' | 'danger' | 'flat';
@@ -4000,10 +4646,9 @@ export interface BattlePlan {
   review: BattlePlanReview | null;
   items: BattlePlanItem[];
   /**
-   * 仅 `POST /battle-plan/generate` 的响应含 todos;
-   * `GET /battle-plan` 读的是已落库的日报,不含该字段 —— 故为可选。
+   * ⚠️ **没有顶层 `todos`** —— 待办统一在 `review.pending_todos`。
+   * 契约对称性:POST 与 GET 返回的字段集必须一致,否则前端切到 GET 时待办会凭空消失。
    */
-  todos?: BattlePlanTodo[];
   meta: BattlePlanMeta;
 }
 
@@ -4229,6 +4874,7 @@ const FULFILL_LABEL: Record<string, string> = {
   executed: '已执行',
   missed: '未触发',
   n_a: '不适用',
+  no_data: '数据不足',
 };
 
 function dirClass(direction: string): string {
@@ -4377,6 +5023,7 @@ export function ReviewCard({ review }: { review: BattlePlanReview | null }) {
         <span className="text-text-pri">执行 {f.executed}</span>
         <span className="text-warn">触及未做 {f.touched}</span>
         <span className="text-text-sec">未触发 {f.missed}</span>
+        {f.noData > 0 && <span className="text-warn">数据不足 {f.noData}</span>}
       </div>
       <div className={`mt-1.5 text-xs font-semibold ${LEVEL_STYLE[f.verdictLevel] ?? ''}`}>
         {f.verdictLabel}
@@ -4687,15 +5334,23 @@ $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
 & '.\.venv\Scripts\python.exe' -m pytest -q --no-header -p no:cacheprovider
 ```
 
-Expected: **0 failed**（基线 1121 passed + 本次新增约 80 条）。记录最终数字。
+Expected: **0 failed**。基线是 **1230 passed**（2026-10-21 实测，含 T4 fix2 的 30 条兑现用例）；
+本轮（T6 fix1 新增 ~27 条 + T7 端点 4 条）后总数会上升 —— **记录最终数字**，不要预设。
 
-- [ ] **Step 2: ruff 全量**
+- [ ] **Step 2: ruff 定向检查**
 
 ```powershell
 Set-Location 'D:\zga-study\rich\backend'
-& '.\.venv\Scripts\python.exe' -m ruff check app tests
+& '.\.venv\Scripts\python.exe' -m ruff check app/services/fulfillment_checker.py app/services/outlook_service.py app/services/battle_plan_service.py app/api/battle_plan.py tests/test_fulfillment_checker.py tests/test_outlook_service.py tests/test_battle_plan_service.py tests/test_battle_plan_api.py
 ```
 Expected: `All checks passed!`
+
+> ⚠️ **不要跑 `ruff check app tests` 当门禁** —— 全仓有 **224 条历史存量错误**
+> （`api/calculator.py` / `api/fund_flow.py` / `api/quotes.py` / `core/cost_engine.py` /
+> `services/ta_service.py` / `tests/conftest.py` 等，均不在本功能范围）。
+> 本功能的门禁 = **本功能涉及的 8 个文件 ruff 全绿**。
+> 存量 224 条单独立项（见台账），不在阶段 9 范围内 —— spec §十一 #7 的措辞相应为
+> 「**本功能涉及文件** ruff 全过」。
 
 - [ ] **Step 3: 真机跑一遍生成（开发库）**
 

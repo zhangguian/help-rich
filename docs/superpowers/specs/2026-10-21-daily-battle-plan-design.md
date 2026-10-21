@@ -416,6 +416,16 @@ def check_fulfillment(
 **第三步：都没中**
 - 有 trigger_price 但 R+1 当日最高/最低都没碰到 → `missed`
 
+**第三步之二：无数据 → `no_data`（不是 `missed`）**
+- 若该票在 R+1 **没有拿到日K**（当日停牌 / 数据源未出 / 节假日），且**当日也没有该票的流水**，
+  则我们**根本无从判定**它触没触发 → 判 `no_data`，note 写「目标日无行情数据，未判定」。
+- ⚠️ **不能判 `missed`**：`missed` 的语义是「当天没碰到价位」，
+  而 `no_data` 的真相是「我们没拿到那天的行情」。两者混同 = **用无知冒充事实**，
+  直接违反本模块的诚实性底线（也会把复盘档案永久写脏）。
+- `no_data` **不计入统计**（与 `n_a` 一样），且**不写回** R 日报的 items（保持 `pending`），
+  等数据补齐后可重新判定 —— 不可让「无数据」冻结成「未兑现」。
+- 若当日**有流水**，则流水是充分证据 → 按「第一步」判 `executed`，**不受日K缺失影响**。
+
 **T 操作特例**：`t_plan` 同时含上沿（减）与下沿（接）。拆成两条子项分别判定：
 - 上沿触发：R+1 `high >= 上沿` → 该子项 touched
 - 下沿触发：R+1 `low <= 下沿` → 该子项 touched
@@ -433,9 +443,14 @@ def check_fulfillment(
 | `touched` | 触发了但没做 | ⚠️ 执行缺口（价格到了，你没动） |
 | `missed` | 一天都没碰到 | ➖ 不评价对错（本来就没到） |
 | `n_a` | 无触发价（别动/解锁类） | 不计入统计 |
+| `no_data` | 目标日**没有该票的行情数据** | 不计入统计；**不写回**（保持 pending，等数据补齐再判） |
 | `executed` + 纪律标记 | 计划说别动却动了 | ❌ 纪律问题 |
 
-**统计数字**：复盘段展示「R 日报为 R+1 定下的 N 条预案：触及 X · 执行 Y · 未触发 Z」+ 一句话评价（按最严重项给：纪律问题 > 执行缺口 > 正常）。
+**统计数字**：复盘段展示「R 日报为 R+1 定下的 N 条预案：触及 X · 执行 Y · 未触发 Z」+ 一句话评价（按最严重项给：纪律问题 > 执行缺口 > 数据不足 > 正常）。
+
+> **「数据不足」优先于「按计划执行」**：有项没数据时不能说「按计划执行」——
+> 「没判定」不是「做对了」。同理 `no_data` 绝不可写回 items：写回去就等于把
+> 「没拿到数据」永久定成「没兑现」，且会被幂等冻结机制锁死。
 
 > **诚实性**：说「未触发」不评价对错，是刻意的。计划说「跌破 9.62 止损」，结果当天最低 9.70 没跌破——这不是「止损错了」，而是「不该触发」。把它算成错误会污染决策档案。
 
@@ -462,11 +477,13 @@ async def build_plan(plan_date: date) -> dict:
     # 2) outlook = build_outlook(index_klines, sentiment, sector_flows)
     # 3) items = [build_items(build_decision(ctx), pos) for 每票]
     #    todos = [build_todos(build_decision(ctx)) for 每票]   # 同一份 decision 的另一个出口
-    # 4) 兑现比对：R = plan_date - 1 天，R+1 = plan_date
-    #    → 读 R 日报的 items（它们面向 R+1），用 R+1 的日K + 流水判定
+    # 4) 兑现比对：R = **最近一份早于 plan_date 的日报**(数据驱动),R+1 = 该日报的 meta.target_date
+    #    → 读 R 日报的 items(它们面向 R+1),用 R+1 的日K + 流水判定
     #    → check_fulfillment(R_items, R+1_klines, R+1_transactions)
+    #    ⚠️ R **不能**用「plan_date 减一天」:周一的减一是周日 → 必然找不到,
+    #       每个长假后的第一个交易日同理;且「上一份日报」天然就是上一交易日那份。
     # 5) 落库：upsert battle_plans(D) + 替换 battle_plan_items(D)
-    #    同时把兑现结果回填到 R 日报（R = D-1）的 items
+    #    同时把兑现结果回填到 R 日报的 items(**no_data 不回填**)
     # 6) 返回完整日报
 ```
 
@@ -474,18 +491,26 @@ async def build_plan(plan_date: date) -> dict:
 - 单票取数失败 → 该票不出现在 items，`meta.degraded` 记「002185.SZ 数据不可用」，**不编造该票预案**
 - 大盘数据部分缺失 → 对应维度 `state="missing"`，`dims_effective` 相应减少
 - 全部大盘数据缺失 → `stance="unknown"`，卡面显示「明日预期：数据不足」
+- **流水读取失败** → 兑现比对只判触及不判执行，`meta.degraded_reason` 记「流水不可用」，
+  note 标注「流水不可用，未核对执行」—— **不得**写成「当日无对应操作」（那是我们没看到，不是没有）
+- **目标日无该票行情数据** → 该条判 `no_data`，不计入统计、不写回 items
 
 #### 4.6.3 幂等与覆盖
 
 - `battle_plans.plan_date` 唯一索引 → 同一天重复生成走 UPSERT。
 - `battle_plan_items` 每次生成**整体替换**（先删该 plan_id 的旧行再插）。
-- **例外**：D 日报的 items 若已有 `fulfillment != "pending"`，重新生成 D 日报时**保留原 items 不动**（防止把已判定的兑现状态冲掉），只更新 `outlook` / `review` / `meta`。实现方式：生成前检查该 plan 是否已有 items 且存在非 pending 状态 → 跳过 items 重建。
+- **例外**：D 日报的 items 若已有**可信判定**（`fulfillment ∈ {executed, touched, missed}`），
+  重新生成 D 日报时**保留原 items 不动**（防止把已判定的兑现状态冲掉），只更新 `outlook` / `review` / `meta`。
+  实现方式：生成前检查该 plan 是否已有 items 且存在**可信判定** → 跳过 items 重建。
+- ⚠️ **`pending`（还没判）与 `no_data`（没数据，判不了）都不可信** → 不触发例外，items 照常重建。
+  否则「无数据」会被冻结成永久的「未兑现」，且再也无法自愈（这是阶段 9 首版实现里最严重的一个缺陷）。
 
 #### 4.6.4 目标交易日
 
 「明日」= **下一个交易日**，不是「明天自然日」。
-- 取法：`kline_service._last_trading_day()` 附近逻辑 + 用交易日历推算。
-- 简化实现：拉上证日K，取**最后一根 K 线的日期之后**的下一个交易日（若数据源有未来交易日历则直接取；否则用「工作日 + 排除已知节假日」的近似，并**在 meta 中标注 `target_date_estimated: true`**）。
+- 基准 = **生成日 D 本身**（不是「指数最后一根 K 线的日期」—— 盘中生成时那还是昨天，用它当基准会算出「明天 = 今天」，把 D/D+1 契约塌成今日）。
+- 取法：D 之后的第一个工作日（跳过周末）。无真实交易日历（项目内 `kline_service._last_trading_day()` 也只跳周末，没有法定节假日表），
+  因此一律用「工作日」近似，并**在 meta 中标注 `target_date_estimated: true`**。
 
 > 这一处是**诚实披露点**：若目标日只是工作日推算（可能撞上法定节假日导致顺延），必须在卡面标注「明日 = YYYY-MM-DD（按交易日历推算）」。
 
@@ -507,7 +532,7 @@ async def build_plan(plan_date: date) -> dict:
   "review": {
     "market": { "index_close": 3713.03, "change_pct": -0.6, "volume_note": "..." },
     "fulfillment": {
-      "total": 7, "executed": 1, "touched": 2, "missed": 3, "na": 1,
+      "total": 7, "executed": 1, "touched": 2, "missed": 3, "na": 1, "no_data": 0,
       "verdict_label": "有执行缺口", "verdict_level": "warn",
       "items": [ { "stock_code": "...", "label": "...", "fulfillment": "touched", "note": "..." } ]
     },
