@@ -79,6 +79,8 @@ def _has_position(position) -> bool:
             f"position.shares 须为数值(与 position_status 同契约),"
             f"收到 {type(shares).__name__}: {shares!r}"
         )
+    if shares != shares:  # NaN:与任何数比较都是 False → 会被静默当成「无持仓」
+        raise TypeError(f"position.shares 不得为 NaN: {shares!r}")
     return float(shares) > 0
 
 

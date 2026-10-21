@@ -74,10 +74,15 @@ def test_todos_and_items_never_overlap():
     为什么不用价格:同一个价位可能同时出现在「今日待办」与「明日预案」
     (如止损动作 status=now 与 stop_loss 字段同价) —— 价格集合会误判成重叠,
     这条测试就永远抓不到真正的动作级回归。
+
+    ⚠️ 比较前必须把 item 侧的「明日」前缀去掉:预案项的 label 带「明日」(那是明日预案),
+    待办的不带(那是今日待办)。不剥前缀的话,同一动作在两个出口的 label 必然不等 →
+    集合交恒为空 → 这条测试对「同一动作同时出现在两个出口」完全免疫,失去判别力。
     """
     d = _decision([_action(status="now", price=1.0, label="分批止盈"),
                    _action(status="armed", price=2.0, label="支撑企稳建仓")])
-    item_keys = {(i["label"], i["trigger_condition"]) for i in build_items(d, None)}
+    item_keys = {(i["label"].removeprefix("明日"), i["trigger_condition"])
+                 for i in build_items(d, None)}
     todo_keys = {(t["label"], t["condition"]) for t in build_todos(d)}
     assert not (item_keys & todo_keys)
 
@@ -86,10 +91,24 @@ def test_todos_and_items_never_overlap_even_with_same_price():
     """同价位、不同动作 → 仍必须不重叠(价格集合法在这里会误判)"""
     d = _decision([_action(status="now", price=9.62, label="分批止盈"),
                    _action(status="armed", price=9.62, label="支撑企稳建仓")])
-    item_keys = {(i["label"], i["trigger_condition"]) for i in build_items(d, None)}
+    item_keys = {(i["label"].removeprefix("明日"), i["trigger_condition"])
+                 for i in build_items(d, None)}
     todo_keys = {(t["label"], t["condition"]) for t in build_todos(d)}
     assert not (item_keys & todo_keys)
     assert len(item_keys) == 1 and len(todo_keys) == 1
+
+
+def test_same_action_in_both_exports_is_detected():
+    """判别力自检:同一个动作若同时出现在两个出口,身份键集合**必须**相交
+
+    (这条测试保证上面两条不会因为「前缀/字段不一致」而恒真)
+    """
+    same = _action(status="now", price=9.62, label="分批止盈")
+    d = _decision([same, dict(same, status="armed")])
+    item_keys = {(i["label"].removeprefix("明日"), i["trigger_condition"])
+                 for i in build_items(d, None)}
+    todo_keys = {(t["label"], t["condition"]) for t in build_todos(d)}
+    assert item_keys & todo_keys, "同一动作同时出现在两个出口时,身份键必须相交"
 
 
 def test_blocked_action_becomes_unlock_item():
@@ -284,7 +303,9 @@ def test_stop_item_wording_normal_when_stop_not_yet_triggered():
 
 def test_every_item_carries_source():
     """溯源字段(spec §4.4.4):每条预案都要能说清来自决策引擎的哪一块"""
-    d = _decision([_action(status="armed", price=9.62)],
+    blocked = _action(status="blocked", price=12.5, label="放量突破追进",
+                      basis=["压力位 12.50 元", "量能仅 0.90 倍,未达 1.50 倍确认标准"])
+    d = _decision([_action(status="armed", price=9.62), blocked],
                   stop_loss={"price": 9.62, "basis": "b"},
                   t_plan={"suitable": True, "t_high": 10.5, "t_low": 9.2,
                           "amplitude_pct": 12.0, "sell_trigger": "s", "buyback_trigger": "b",
@@ -298,6 +319,8 @@ def test_every_item_carries_source():
     assert by_kind["entry"] == "decision.actions"
     assert by_kind["stop"] == "decision.stop_loss"
     assert by_kind["t_sell"] == "decision.t_plan"
+    assert by_kind["do_not"] == "decision.do_not"
+    assert by_kind["unlock"] == "decision.actions"
 
 
 def test_item_labels_use_mingri_wording():
@@ -318,3 +341,10 @@ def test_malformed_shares_raises_instead_of_silently_no_position():
     d = _decision(stop_loss={"price": 9.62, "basis": "b"})
     with pytest.raises(TypeError):
         build_items(d, _Pos("abc", 15.578))
+
+
+def test_nan_shares_raises_instead_of_silently_no_position():
+    """NaN 与任何数比较都是 False → 会被静默当成「无持仓」,必须响亮失败"""
+    d = _decision(stop_loss={"price": 9.62, "basis": "b"})
+    with pytest.raises(TypeError):
+        build_items(d, _Pos(float("nan"), 15.578))
