@@ -37,6 +37,7 @@ const GROUPS: NavGroup[] = [
     title: '行情',
     items: [
       { href: '/', label: '盯盘', icon: '📈' },
+      { href: '/plan', label: '作战计划', icon: '🗓' },
       { href: '/market', label: '大盘', icon: '🌏' },
       { href: '/sector-fund-flow', label: '板块', icon: '🗂' },
       { href: '/news', label: '快讯', icon: '📰' },
