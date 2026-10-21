@@ -1727,7 +1727,7 @@ git commit -m "feat(plan): 决策→明日预案转换(纯函数、零 IO)
 """昨日预案 × 今日行情/流水 → 兑现状态(纯函数、零 IO)设计文档 §4.5"""
 from __future__ import annotations
 
-from app.services.fulfillment_checker import check_fulfillment
+from app.services.fulfillment_checker import check_fulfillment, summarize_fulfillment
 
 
 def _item(code="001896.SZ", kind="entry", direction="buy", price=9.62, label="建仓"):
@@ -1900,6 +1900,127 @@ def test_t_item_without_trigger_price_does_not_raise():
     items = [_item(kind="t_sell", direction="sell", price=None, label="做T减仓")]
     out = check_fulfillment(items, {"001896.SZ": [_kline()]}, [])
     assert out[0]["fulfillment"] == "n_a"
+
+
+# ---------------- 流水归属规则(spec §4.5.2.1:一条流水只归一条预案) ----------------
+
+def test_single_transaction_consumed_by_only_one_plan():
+    """同票两条同向预案 + 一笔流水 → 只能有一条 executed,另一条不许白嫖"""
+    items = [
+        _item(kind="entry", direction="buy", price=9.62, label="建仓"),
+        _item(kind="add", direction="buy", price=9.90, label="加仓"),
+    ]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.2, low=9.95)]},
+                            [_txn(action="buy", price=9.62)])
+    assert out[0]["fulfillment"] == "executed"
+    assert out[1]["fulfillment"] == "missed"
+
+
+def test_t_item_price_match_takes_priority_over_plain_plan():
+    """T 子项按价格区间硬匹配 → 优先于同向的普通预案拿走流水"""
+    items = [
+        _item(kind="entry", direction="buy", price=9.60, label="建仓"),
+        _item(kind="t_buyback", direction="buy", price=9.20, label="做T回补"),
+    ]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.2, low=9.7)]},
+                            [_txn(action="buy", price=9.10)])
+    by_kind = {i["item_kind"]: i for i in out}
+    assert by_kind["t_buyback"]["fulfillment"] == "executed"
+    assert by_kind["entry"]["fulfillment"] == "missed"
+
+
+def test_multiple_candidates_pick_closest_price():
+    """同票同向多笔流水 → 取成交价与触发价最接近的那笔"""
+    items = [_item(kind="entry", direction="buy", price=8.60, label="建仓")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=9.2, low=8.0)]},
+                            [_txn(action="buy", price=8.30),
+                             _txn(action="buy", price=8.00)])
+    assert out[0]["fulfillment"] == "executed"
+    assert "8.30" in out[0]["fulfillment_note"]
+    assert "8.00" not in out[0]["fulfillment_note"]
+
+
+def test_transaction_without_price_fallback_disclosed():
+    """成交价缺失 → 兜底消费并在 note 披露(不能装作知道是哪条预案)"""
+    items = [_item(kind="entry", direction="buy", price=9.62, label="建仓")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.2, low=9.3)]},
+                            [{"stock_code": "001896.SZ", "action": "buy",
+                              "shares": 100, "price": None,
+                              "trade_date": "2026-10-22"}])
+    assert out[0]["fulfillment"] == "executed"
+    assert "成交价缺失" in out[0]["fulfillment_note"]
+
+
+def test_discipline_item_does_not_consume_transaction():
+    """纪律类不参与流水归属 —— 同一笔操作可同时构成纪律违规与别的预案的执行"""
+    items = [
+        _item(kind="do_not", direction="none", price=None, label="别动"),
+        _item(kind="entry", direction="buy", price=9.62, label="建仓"),
+    ]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.2, low=9.3)]},
+                            [_txn(action="buy", price=9.62)])
+    by_kind = {i["item_kind"]: i for i in out}
+    assert by_kind["do_not"]["fulfillment"] == "executed"
+    assert "纪律问题" in by_kind["do_not"]["fulfillment_note"]
+    assert by_kind["entry"]["fulfillment"] == "executed"
+
+
+def test_deviation_beyond_3pct_disclosed_in_note():
+    """成交价与触发价偏离 >3% → note 里看得见(追高买/提前卖)"""
+    items = [_item(kind="entry", direction="buy", price=10.00, label="建仓")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.5, low=9.9)]},
+                            [_txn(action="buy", price=10.40)])
+    assert out[0]["fulfillment"] == "executed"
+    assert "不符" in out[0]["fulfillment_note"]
+
+
+def test_deviation_within_3pct_not_disclosed():
+    """偏离在 3% 以内 → 不披露(避免把按计划执行也标成不符)"""
+    items = [_item(kind="entry", direction="buy", price=10.00, label="建仓")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.5, low=9.9)]},
+                            [_txn(action="buy", price=10.20)])
+    assert out[0]["fulfillment"] == "executed"
+    assert "不符" not in out[0]["fulfillment_note"]
+
+
+def test_t_buyback_boundary_price_within_epsilon_counts_as_executed():
+    """浮点容差:买价 9.384 与下沿 9.2×1.02(=9.383999999999999) 差 1e-15 → 算按计划回补"""
+    items = [_item(kind="t_buyback", direction="buy", price=9.20, label="做T回补")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.2, low=9.4)]},
+                            [_txn(action="buy", price=9.384)])
+    assert out[0]["fulfillment"] == "executed"
+
+
+# ---------------- 统计口径 ----------------
+
+def test_summarize_counts_every_state():
+    """统计口径:四态各计各的(spec §4.5.4)"""
+    items = [
+        {**(_item(direction="buy", price=9.62)), "fulfillment": "executed"},
+        {**(_item(direction="sell", price=12.0)), "fulfillment": "touched"},
+        {**(_item(direction="buy", price=9.9)), "fulfillment": "missed"},
+        {**(_item(kind="do_not", direction="none", price=None)), "fulfillment": "n_a"},
+    ]
+    s = summarize_fulfillment(items)
+    assert s["total"] == 4
+    assert s["executed"] == 1
+    assert s["touched"] == 1
+    assert s["missed"] == 1
+    assert s["na"] == 1
+    assert s["discipline"] == 0
+
+
+def test_summarize_flags_discipline_as_most_severe():
+    """纪律问题优先级最高(spec §4.5.4)"""
+    items = [
+        {**(_item(direction="buy", price=9.62)), "fulfillment": "executed",
+         "fulfillment_note": "⚠️ 纪律问题:昨日标记别动/未解锁,今日仍有操作"},
+        {**(_item(direction="sell", price=12.0)), "fulfillment": "touched"},
+    ]
+    s = summarize_fulfillment(items)
+    assert s["discipline"] == 1
+    assert s["verdict_label"] == "存在纪律问题"
+    assert s["verdict_level"] == "danger"
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -1939,6 +2060,10 @@ R+1 = 兑现判定日。
 
 为什么:只看方向时,同票多笔同向预案会把「T 回补的那笔买入」也算成「建仓预案已执行」——
 那种假阳性会直接污染复盘档案,而本模块存在的意义就是不污染。
+
+**输入范围约束**:传入的 target_klines 与 transactions **必须只含目标日(R+1)的数据**。
+本模块是纯函数、零 IO,不做日期过滤(那是编排层的职责);若上游喂进多日 K 线,
+多日极值会被当成单日极值 —— 这正是「假触及」的来源。
 """
 from __future__ import annotations
 
@@ -2190,7 +2315,12 @@ $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_fulfillment_checker.py -q --no-header -p no:cacheprovider
 ```
 
-Expected: 全部 PASS（20 passed）。
+Expected: 全部 PASS（30 passed —— 原有 20 条 + 本轮新增 10 条：8 条流水归属/偏离披露 + 2 条统计口径）。
+
+> 本轮新增用例的目的（fix round 2，2026-10-21 T4 独立评审后）：
+> 旧实现只按方向找流水，同票多条同向预案会互相白嫖同一笔流水（假阳性）。
+> 新增用例锁死「一条流水最多被一条预案消费」+「纪律类不参与归属」+「偏离 3% 披露」三条口径。
+> 用例数固定为 30 —— 若你改了用例条数，必须同步改这里的数字（简报与实现必须逐行一致）。
 
 - [ ] **Step 5: 静态检查 + Commit**
 
