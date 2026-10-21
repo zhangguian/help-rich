@@ -297,3 +297,146 @@ def test_loss_plan_unlock_path_shows_in_build_decision(monkeypatch):
     assert len(_unlock_actions(d["actions"])) == 1
     assert "可解套" in d["headline"]
 
+
+# ==================================================================
+# 买入候选的 status 契约(2026-10-21 父代理评审新增)
+#
+# 背景:实跑发现卡片会同时出现
+#   「可以建仓 · 现在可做」  +  「🚫 别动: 下跌通道中不要抄底」
+# 且 C2 的 condition 写着「站回 15.19 元且 KDJ 出金叉」,
+# 现价 14.35(未站回)却标「现在可做」—— 与设计文档 §5
+# 「now = 此刻条件已满足」直接冲突。
+# ==================================================================
+
+
+def _ind(**over) -> dict:
+    """一份最小可用的 indicators(只给判定器真正读到的字段)"""
+    base = {
+        "latest_close": 14.35,
+        "ma": {"ma5": 14.0, "ma10": 14.2, "ma20": 14.8, "ma60": 15.0},
+        "volume": {"ratio": 1.0, "state": "normal"},
+        "volume_price": {"direction": "flat"},
+        "channel": {"state": "sideways"},
+        "support_pressure": {"support": [], "pressure": []},
+        "stabilize": {"state": False, "price": None, "reasons": []},
+        "macd": {"dif": 0.0, "dea": 0.0, "hist": 0.0, "cross": None},
+        "kdj": {"k": 50.0, "d": 50.0, "j": 50.0, "zone": "neutral", "cross": None},
+        "boll": {"upper": 15.0, "mid": 14.0, "lower": 13.0, "bandwidth": 0.1,
+                 "squeeze": False, "position": "middle"},
+        "position": {"p20": 15.19, "p80": 19.16, "support_price": 13.61,
+                     "stop_loss_price": 13.2, "risk_band": "mid", "band": "mid"},
+        "liar": {"bull_liars": [], "bear_liars": []},
+        "signal": {"view": "neutral", "score": 50, "confidence": "medium",
+                   "reasons": [], "summary": ""},
+        "data_quality": {"kline_count": 190, "degraded": []},
+    }
+    for k, v in over.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            base[k] = {**base[k], **v}
+        else:
+            base[k] = v
+    return base
+
+
+def _ctx_ind(ind: dict, current_price: float, klines=None, **kw) -> DecisionContext:
+    klines = klines if klines is not None else _kline([current_price] * 60)
+    return DecisionContext(
+        stock_code="002185.SZ", stock_name="华天科技",
+        indicators=ind, klines=klines,
+        current_price=current_price,
+        prev_close=kw.get("prev_close", current_price),
+        cost_basis=kw.get("cost_basis"), shares=kw.get("shares", 0),
+        position_status=kw.get("position_status", "empty"),
+        env=kw.get("env", MarketContext()),
+    )
+
+
+def test_entry_c2_not_now_when_price_below_p20():
+    """C2 的 condition 是合取式:未站回 P20 就不能标「现在可做」"""
+    ind = _ind(
+        position={"risk_band": "low"},
+        kdj={"zone": "oversold", "cross": "golden", "k": 12.0, "d": 10.0},
+    )
+    ctx = _ctx_ind(ind, current_price=14.35)   # 14.35 < P20 15.19
+    c2 = [a for a in judge_entry(ctx) if a["label"] == "超跌反弹建仓"]
+    assert len(c2) == 1
+    assert c2[0]["status"] == "armed", "未站回 P20 却标 now = 卡片自相矛盾"
+    assert any("未站回" in b for b in c2[0]["basis"]), "必须写明还差什么"
+
+
+def test_entry_c2_now_when_reclaimed_and_golden():
+    """站回 P20 且 KDJ 金叉 → 才允许「现在可做」"""
+    ind = _ind(
+        position={"risk_band": "low"},
+        kdj={"zone": "oversold", "cross": "golden", "k": 12.0, "d": 10.0},
+    )
+    ctx = _ctx_ind(ind, current_price=15.5)     # 15.5 > P20 15.19
+    c2 = [a for a in judge_entry(ctx) if a["label"] == "超跌反弹建仓"]
+    assert len(c2) == 1
+    assert c2[0]["status"] == "now"
+
+
+def test_entry_c2_armed_when_no_golden_cross_even_if_reclaimed():
+    """已站回 P20 但 KDJ 未金叉 → 仍只能「待触发」"""
+    ind = _ind(
+        position={"risk_band": "low"},
+        kdj={"zone": "oversold", "cross": None, "k": 10.0, "d": 11.0},
+    )
+    ctx = _ctx_ind(ind, current_price=15.5)
+    c2 = [a for a in judge_entry(ctx) if a["label"] == "超跌反弹建仓"]
+    assert len(c2) == 1
+    assert c2[0]["status"] == "armed"
+    assert any("金叉" in b for b in c2[0]["basis"])
+
+
+def test_entry_not_now_in_down_channel():
+    """下跌通道 = 全局「别动」规则生效,建仓候选一律不得标「现在可做」"""
+    ind = _ind(
+        channel={"state": "down"},
+        stabilize={"state": True, "price": 14.0, "reasons": []},
+    )
+    ctx = _ctx_ind(ind, current_price=14.5)     # ep 14.5 > 企稳价 14.0 → 技术条件已满足
+    c1 = [a for a in judge_entry(ctx) if a["label"] == "支撑企稳建仓"]
+    assert len(c1) == 1
+    assert c1[0]["status"] == "armed", "下跌通道里不得出现「现在可做」"
+    assert any("下跌通道" in b for b in c1[0]["basis"])
+
+
+def test_entry_c3_not_now_in_down_channel():
+    """C3 放量突破同样受下跌通道守卫约束"""
+    ind = _ind(
+        channel={"state": "down"},
+        volume={"ratio": 2.0, "state": "expand"},
+        support_pressure={"support": [], "pressure": [14.0]},
+    )
+    ctx = _ctx_ind(ind, current_price=14.5)     # 已突破 14.0 且量比 2.0 → 技术条件全满足
+    c3 = [a for a in judge_entry(ctx) if a["label"] == "放量突破追进"]
+    assert len(c3) == 1
+    assert c3[0]["status"] == "armed"
+
+
+def test_build_decision_no_buy_verdict_in_down_channel():
+    """端到端:下跌通道里结论不能是「可以建仓」,也不能和「别动」打架"""
+    ind = _ind(
+        channel={"state": "down"},
+        stabilize={"state": True, "price": 14.0, "reasons": []},
+    )
+    ctx = _ctx_ind(ind, current_price=14.5)
+    d = build_decision(ctx)
+    assert d["verdict"] != "buy", "下跌通道里不该给「可以建仓」"
+    assert any("下跌通道" in s for s in d["do_not"])
+    # 卡片里「现在可做」的动作一个都不能有
+    assert not [a for a in d["actions"] if a["status"] == "now"]
+
+
+def test_build_decision_buy_verdict_outside_down_channel():
+    """对照组:非下跌通道时,技术条件满足就该给「可以建仓」"""
+    ind = _ind(
+        channel={"state": "sideways"},
+        stabilize={"state": True, "price": 14.0, "reasons": []},
+    )
+    ctx = _ctx_ind(ind, current_price=14.5)
+    d = build_decision(ctx)
+    assert d["verdict"] == "buy"
+    assert [a for a in d["actions"] if a["status"] == "now"]
+

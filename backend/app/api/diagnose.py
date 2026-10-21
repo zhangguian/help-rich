@@ -18,7 +18,11 @@ import json
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
-from app.api.stock import _resolve_position_status, _sanitize_current_price
+from app.api.stock import (
+    _kline_fallback_price,
+    _resolve_position_status,
+    _sanitize_current_price,
+)
 from app.core.db_lock import safe_write
 from app.core.stock_code import normalize_code
 from app.models.schemas import DiagnoseOut, FeedbackUpdate, ReplaySummaryOut
@@ -219,7 +223,9 @@ async def get_latest_analysis(stock_code: str) -> dict:
         quote = None
     current_price, _ = _sanitize_current_price(quote, klines)
     position = await get_position(norm)
-    position_status, cost_basis_pct = _resolve_position_status(position, current_price)
+    position_status, cost_basis_pct = _resolve_position_status(
+        position, current_price, _kline_fallback_price(klines)
+    )
 
     payload = await get_latest_as_analysis_result(
         norm,

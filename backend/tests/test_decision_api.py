@@ -311,3 +311,73 @@ def test_existing_industry_endpoint_still_works():
         r = client.get(f"/api/stock/{CODE}/industry")
     assert r.status_code == 200
     assert r.json()["industry"] == "C39"
+
+
+# ==================================================================
+# 持仓状态判定(2026-10-21 父代理实跑评审新增)
+#
+# 真实事故:实时报价缺失(非交易时段/报价源抖动/报价与 K 线偏差>10% 被降级)
+# 是常态,原实现直接把有持仓的用户判成「空仓」→
+# 决策卡切到「建仓参考」,对着已深套的持仓说「首仓 30%,可以建仓」。
+# 修法:按设计文档 §5 用 effective_price(报价缺失时取 K 线最新收盘价)判定。
+# ==================================================================
+
+
+def test_position_status_not_empty_when_quote_missing():
+    """报价拿不到时,持有 700 股的用户绝不能被说成「空仓」"""
+    pos = Position(
+        stock_code=CODE,
+        stock_name="华天科技",
+        shares=700,
+        total_cost=Decimal("16128.80"),   # 均价 23.04
+    )
+    with _patched(position=pos):
+        r = client.get(f"/api/stock/{CODE}/decision")
+
+    assert r.status_code == 200
+    d = r.json()["decision"]
+    assert d["position_status"] == "loss"       # K 线收盘 10.2 << 成本 23.04
+    assert d["role"] == "解套参考"
+    assert d["verdict"] != "buy"
+    assert "当前无底仓" not in d["headline"]
+
+
+def test_position_status_uses_kline_close_as_fallback():
+    """兜底价 = K 线最新收盘价(测试数据里是 10.2)"""
+    pos = Position(
+        stock_code=CODE, stock_name="华天科技", shares=1000, total_cost=Decimal("9500"),
+    )  # 均价 9.5 < 收盘 10.2 → 浮盈
+    with _patched(position=pos):
+        r = client.get(f"/api/stock/{CODE}/decision")
+
+    assert r.status_code == 200
+    d = r.json()["decision"]
+    assert d["position_status"] == "profit"
+    assert d["role"] == "止盈参考"
+
+
+def test_resolve_position_status_breakeven_is_profit_not_empty():
+    """持平也归 profit(§5 的规则是 >= )—— 归 empty 会给出「建仓参考」误导"""
+    pos = Position(
+        stock_code=CODE, stock_name="x", shares=100, total_cost=Decimal("1020"),
+    )  # 均价 10.2 == 收盘 10.2
+    status, pct = stock_api._resolve_position_status(pos, "10.2")
+    assert status == "profit"
+    assert pct == pytest.approx(0.0)
+
+
+def test_resolve_position_status_no_price_at_all_is_loss():
+    """有持仓但连兜底价都没有 → 保守取 loss,绝不给 empty"""
+    pos = Position(
+        stock_code=CODE, stock_name="x", shares=100, total_cost=Decimal("1020"),
+    )
+    status, pct = stock_api._resolve_position_status(pos, None, None)
+    assert status == "loss"
+    assert pct is None
+
+
+def test_resolve_position_status_empty_stays_empty():
+    """空仓仍然是 empty(这是唯一该说 empty 的情形)"""
+    pos = Position(stock_code=CODE, stock_name="x", shares=0, total_cost=Decimal("0"))
+    assert stock_api._resolve_position_status(pos, None, "10.2")[0] == "empty"
+    assert stock_api._resolve_position_status(None, "10.2", None)[0] == "empty"

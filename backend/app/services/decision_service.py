@@ -282,11 +282,31 @@ def judge_entry(ctx: DecisionContext) -> list[dict[str, Any]]:
         return []
     actions: list[dict[str, Any]] = []
 
+    # 下跌通道守卫(设计文档 §6.3 补充条款)
+    # ------------------------------------------------------------------
+    # 为什么要有:§6.6 把「下跌通道中不要抄底」列为**全局**别动规则,
+    # 但 C1/C2/C3 原来完全不看通道 —— 结果卡片会同时出现
+    #   「可以建仓 · 现在可做」  +  「🚫 别动: 下跌通道中不要抄底」
+    # 两条互相打架的指令,股民该听哪条?全局规则必须赢。
+    # 触发时机:channel=='down'(与 §6.6 判据完全一致,不多不少)。
+    # 实测影响(30 只 × 120 交易日 = 3600 个信号日):
+    #   现状 entry 触发日 339 → 本守卫后 158(仍 > 闸门要求的 100 条有效信号)。
+    down_channel = (ind.get("channel") or {}).get("state") == "down"
+
+    def _guard(action: dict[str, Any]) -> dict[str, Any]:
+        """下跌通道里,把已满足技术条件的建仓候选降级为「待触发」"""
+        if down_channel and action["status"] == "now":
+            action["status"] = "armed"
+            action["basis"] = list(action["basis"]) + [
+                "下跌通道中(趋势未修复),按全局「别动」规则不抄底"
+            ]
+        return action
+
     # C1 支撑企稳
     st = ind.get("stabilize") or {}
     st_price = _f(st.get("price"))
     if bool(st.get("state")) and st_price is not None:
-        actions.append({
+        actions.append(_guard({
             "kind": "entry",
             "label": "支撑企稳建仓",
             "condition": f"回踩 {st_price:.2f} 元不破且 MACD 绿柱缩短时,首仓建仓",
@@ -296,15 +316,27 @@ def judge_entry(ctx: DecisionContext) -> list[dict[str, Any]]:
                 "stabilize.state=true",
             ],
             "status": "now" if ep >= st_price else "armed",
-        })
+        }))
 
     # C2 超跌反弹
+    # ------------------------------------------------------------------
+    # status 必须与 condition 自述的触发条件**同时成立**(设计文档 §5:
+    # 「now = 此刻条件已满足」)。condition 是合取式:
+    #   「站回 P20 低位带」**且**「KDJ 出金叉」
+    # 原来只判了「KDJ 出金叉」一个合取项 → 现价还在 P20 之下也标「现在可做」,
+    # 而 basis 里明明白白写着「站回 15.19 元」—— 卡片自相矛盾。
     pos = ind.get("position") or {}
     p20 = _f(pos.get("p20"))
     kdj = ind.get("kdj") or {}
     if pos.get("risk_band") == "low" and kdj.get("zone") == "oversold" and p20 is not None:
         golden = kdj.get("cross") == "golden"
-        actions.append({
+        reclaimed = ep >= p20
+        missing: list[str] = []
+        if not reclaimed:
+            missing.append(f"现价 {ep:.2f} 元未站回 P20 低位带 {p20:.2f} 元")
+        if not golden:
+            missing.append("KDJ 尚未出金叉")
+        actions.append(_guard({
             "kind": "entry",
             "label": "超跌反弹建仓",
             "condition": f"站回 {p20:.2f} 元(P20 低位带)且 KDJ 出金叉时小仓位试仓",
@@ -312,9 +344,9 @@ def judge_entry(ctx: DecisionContext) -> list[dict[str, Any]]:
             "basis": [
                 f"P20 低位带 {p20:.2f} 元",
                 f"KDJ {kdj.get('zone')}(K={kdj.get('k')},D={kdj.get('d')})",
-            ],
-            "status": "now" if golden else "armed",
-        })
+            ] + missing,
+            "status": "now" if (golden and reclaimed) else "armed",
+        }))
 
     # C3 突破确认
     vol_ratio = _f((ind.get("volume") or {}).get("ratio"))
@@ -329,14 +361,14 @@ def judge_entry(ctx: DecisionContext) -> list[dict[str, Any]]:
         else:
             status = "blocked"
             basis_extra = [f"量能仅 {vol_ratio:.2f} 倍,未达 {ENTRY_MIN_VOLUME_RATIO} 倍确认标准"]
-        actions.append({
+        actions.append(_guard({
             "kind": "entry",
             "label": "放量突破追进",
             "condition": f"放量站上 {pressure:.2f} 元压力位时追进",
             "price": round(pressure, 3),
             "basis": [f"压力位 {pressure:.2f} 元"] + basis_extra,
             "status": status,
-        })
+        }))
     return actions
 
 
