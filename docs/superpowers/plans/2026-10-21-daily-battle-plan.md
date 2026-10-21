@@ -490,7 +490,8 @@ def test_ma_missing_when_klines_lt_11():
 
 # ---------------- 板块资金维度 ----------------
 
-def test_flow_bull_when_any_positive_sector():
+def test_flow_bull_when_net_total_positive():
+    """净流入总额为正(+3.2 - 1.0 = +2.2)→ 偏多"""
     flows = [{"name": "电子元件", "netamount_yi": 3.2}, {"name": "煤炭", "netamount_yi": -1.0}]
     out = build_outlook(_klines([10.0] * 30), None, flows)
     assert _dim(out, "flow")["score"] == 1
@@ -503,6 +504,7 @@ def test_flow_bear_when_all_negative():
 
 
 def test_flow_neutral_when_mixed():
+    """净流入与净流出抵消(+1.0 - 1.0 = 0)→ 中性"""
     flows = [{"name": "电子元件", "netamount_yi": 1.0}, {"name": "煤炭", "netamount_yi": -1.0}]
     out = build_outlook(_klines([10.0] * 30), None, flows)
     assert _dim(out, "flow")["score"] == 0
@@ -533,8 +535,9 @@ def test_bullish_requires_at_least_2_effective_dims():
 
 
 def test_bullish_when_2_dims_and_score_ge_1():
-    closes = [10.0] * 30
-    volumes = [100.0] * 29 + [110.0]
+    # 10 根 K:均线维度因不足 11 根而 missing,有效维度恰为 2(量能 + 涨跌家数)
+    closes = [10.0] * 10
+    volumes = [100.0] * 9 + [110.0]
     out = build_outlook(_klines(closes, volumes), {"up_total": 60, "down_total": 40}, None)
     assert out["dims_effective"] == 2
     assert out["score"] == 2
@@ -726,25 +729,39 @@ def _ma_dim(closes: list[float]) -> dict[str, Any]:
 
 
 def _flow_dim(sector_flows: list[dict] | None) -> dict[str, Any]:
-    """板块资金(真实板块资金流,非估算)"""
+    """板块资金(真实板块资金流,非估算)
+
+    判定按**净流入总额符号**,不是「有无正流入」——
+    「有正有负」蕴含「存在正流入」,按有无判定会让偏多与中性两档互相排斥。
+    总额: >0 偏多 / <0 偏空 / ==0 中性。
+    """
     if not sector_flows:
         return _dim("flow", "板块资金", 0, "missing", "板块资金流数据不可用")
-    positives: list[tuple[float, str]] = []
+    total = 0.0
+    top: tuple[float, str] | None = None
     for f in sector_flows:
         if not isinstance(f, dict):
             continue
         net = _f(f.get("netamount_yi"))
-        if net is not None and net > 0:
-            positives.append((net, str(f.get("name") or "")))
-    if positives:
-        positives.sort(key=lambda x: x[0], reverse=True)
-        top = positives[0]
+        if net is None:
+            continue
+        total += net
+        if net > 0 and (top is None or net > top[0]):
+            top = (net, str(f.get("name") or ""))
+    if total > 0:
         score = 1
-        detail = f"资金主攻 {top[1]} 净流入 {top[0]:.2f} 亿"
-    else:
+        detail = (
+            f"板块资金净流入合计 {total:.2f} 亿,主攻 {top[1]} {top[0]:.2f} 亿"
+            if top else f"板块资金净流入合计 {total:.2f} 亿"
+        )
+    elif total < 0:
         score = -1
-        detail = "板块资金全线净流出,无主攻方向"
-    return _dim("flow", "板块资金", score, "bull" if score > 0 else "bear", detail)
+        detail = f"板块资金净流出合计 {total:.2f} 亿,无主攻方向"
+    else:
+        score = 0
+        detail = "板块资金多空抵消,无明确主攻方向"
+    state = "bull" if score > 0 else ("bear" if score < 0 else "flat")
+    return _dim("flow", "板块资金", score, state, detail)
 
 
 # ============================ 关键位 ============================
@@ -857,7 +874,7 @@ $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_outlook_service.py -q --no-header -p no:cacheprovider
 ```
 
-Expected: 全部 PASS（26 passed）。
+Expected: 全部 PASS（本任务共 25 个用例，以你实际跑出来的为准）。
 
 - [ ] **Step 5: 静态检查 + Commit**
 
