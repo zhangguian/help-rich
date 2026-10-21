@@ -133,6 +133,34 @@ def test_flow_missing_when_empty_list():
     assert _dim(out, "flow")["state"] == "missing"
 
 
+def test_flow_neutral_when_float_sum_is_zero():
+    """浮点零和:[38.6, -12.4, -26.2] 的和是 3.55e-15 而非精确 0,必须归一到 0 → 中性"""
+    flows = [{"name": "A", "netamount_yi": 38.6}, {"name": "B", "netamount_yi": -12.4},
+             {"name": "C", "netamount_yi": -26.2}]
+    out = build_outlook(_klines([10.0] * 30), None, flows)
+    d = _dim(out, "flow")
+    assert d["score"] == 0
+    assert d["state"] == "flat"
+
+
+def test_flow_missing_when_all_netamount_are_none():
+    """全部板块净额为 None = 根本没有板块资金数据 → missing(不能算 flat)"""
+    flows = [{"name": "A", "netamount_yi": None}, {"name": "B", "netamount_yi": None}]
+    out = build_outlook(_klines([10.0] * 30), None, flows)
+    d = _dim(out, "flow")
+    assert d["state"] == "missing"
+    assert d["score"] == 0
+
+
+def test_flow_bear_detail_has_no_double_negative():
+    """净流出文案用绝对值,不出现「净流出合计 -3.00 亿」这种双重否定"""
+    flows = [{"name": "煤炭", "netamount_yi": -1.0}, {"name": "钢铁", "netamount_yi": -2.0}]
+    out = build_outlook(_klines([10.0] * 30), None, flows)
+    detail = _dim(out, "flow")["detail"]
+    assert "-3.00" not in detail
+    assert "3.00" in detail
+
+
 # ---------------- 结论合成 ----------------
 
 def test_unknown_when_all_dims_missing():

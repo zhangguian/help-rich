@@ -26,6 +26,7 @@ MIN_KLINES_VOLUME = 6        # 今日 + 前 5 日
 MIN_KLINES_MA10 = 11         # 算 MA10 至少 11 根
 MIN_KLINES_MA20 = 21         # 算 MA20 至少 21 根
 BULLISH_MIN_EFFECTIVE_DIMS = 2  # 判「偏多」所需的最少有效维度数
+FLOW_TOTAL_EPS = 1e-9           # 板块资金净额归零阈值(浮点零和保护)
 
 
 def _f(v: Any) -> float | None:
@@ -124,10 +125,18 @@ def _flow_dim(sector_flows: list[dict] | None) -> dict[str, Any]:
     判定按**净流入总额符号**,不是「有无正流入」——
     「有正有负」蕴含「存在正流入」,按有无判定会让偏多与中性两档互相排斥。
     总额: >0 偏多 / <0 偏空 / ==0 中性。
+
+    ⚠️ 两个诚实性要点(2026-10-21 复审发现,必须保留):
+    1. **浮点零和**: [38.6, -12.4, -26.2] 的和是 3.55e-15 而非精确 0,
+       直接用 `total > 0` 判会误判成偏多,并渲染出「净流入合计 0.00 亿」这种
+       自相矛盾的文案。故用 FLOW_TOTAL_EPS 把 |total| < 1e-9 归一为 0。
+    2. **全部板块净额都是 None** 时 = 根本没有板块资金数据,必须判 **missing**
+       而不是 flat。否则会在完全没有该维度数据时对外宣称「4/4 维度规则推断」。
     """
     if not sector_flows:
         return _dim("flow", "板块资金", 0, "missing", "板块资金流数据不可用")
     total = 0.0
+    valid = 0
     top: tuple[float, str] | None = None
     for f in sector_flows:
         if not isinstance(f, dict):
@@ -135,18 +144,21 @@ def _flow_dim(sector_flows: list[dict] | None) -> dict[str, Any]:
         net = _f(f.get("netamount_yi"))
         if net is None:
             continue
+        valid += 1
         total += net
         if net > 0 and (top is None or net > top[0]):
             top = (net, str(f.get("name") or ""))
+    if valid == 0:
+        return _dim("flow", "板块资金", 0, "missing", "板块资金流无有效净额数据")
+    if abs(total) < FLOW_TOTAL_EPS:
+        total = 0.0
     if total > 0:
+        # total > 0 必然蕴含至少一个 net > 0,故此处 top 一定非 None(无需 None 兜底分支)
         score = 1
-        detail = (
-            f"板块资金净流入合计 {total:.2f} 亿,主攻 {top[1]} {top[0]:.2f} 亿"
-            if top else f"板块资金净流入合计 {total:.2f} 亿"
-        )
+        detail = f"板块资金净流入合计 {total:.2f} 亿,主攻 {top[1]} {top[0]:.2f} 亿"
     elif total < 0:
         score = -1
-        detail = f"板块资金净流出合计 {total:.2f} 亿,无主攻方向"
+        detail = f"板块资金净流出合计 {abs(total):.2f} 亿,无主攻方向"
     else:
         score = 0
         detail = "板块资金多空抵消,无明确主攻方向"
