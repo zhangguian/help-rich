@@ -117,6 +117,9 @@ def check_fulfillment(
         if kind in DISCIPLINE_KINDS:
             # 别动 / 未解锁类:买卖任一方向都算"动了手"(spec §4.5 第四步)
             executed = _has_txn(transactions, code, "buy") or _has_txn(transactions, code, "sell")
+        elif price is None:
+            # ⚠️ 必须先判无触发价:T 子项下面要算 `price × 容差`,price 为 None 会抛 TypeError
+            executed = False
         elif kind == "t_sell":
             executed = _executed_at_price(
                 transactions, code, "sell", price * T_SELL_TOLERANCE, at_least=True

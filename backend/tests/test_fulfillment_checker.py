@@ -76,6 +76,8 @@ def test_executed_when_sell_transaction_present():
 
 
 def test_transaction_for_other_stock_ignored():
+    # ⚠️ 脚手架数字必须是 low=9.5(<= 触发价 9.62 → 触及):写 9.7 会与
+    # test_buy_missed_when_low_above_trigger(同 9.70 → missed)构成同输入两期望的互斥断言
     out = check_fulfillment([_item(direction="buy", price=9.62)],
                             {"001896.SZ": [_kline(low=9.5)]},
                             [_txn(code="000807.SZ", action="buy")])
@@ -165,3 +167,10 @@ def test_transaction_without_price_still_counts_as_executed():
                             [{"stock_code": "001896.SZ", "action": "buy", "shares": 100,
                               "price": None, "trade_date": "2026-10-22"}])
     assert out[0]["fulfillment"] == "executed"
+
+
+def test_t_item_without_trigger_price_does_not_raise():
+    """T 子项没有触发价时不能炸:price×容差 会 TypeError,必须先判 price is None"""
+    items = [_item(kind="t_sell", direction="sell", price=None, label="做T减仓")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline()]}, [])
+    assert out[0]["fulfillment"] == "n_a"
