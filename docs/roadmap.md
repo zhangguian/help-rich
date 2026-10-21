@@ -190,7 +190,7 @@ API client 统一在 `frontend/src/lib/api/advanced.ts`,类型逐项对齐后端
 
 | 项 | 状态 |
 | --- | --- |
-| 后端全量 | **1115 passed / 0 failed** |
+| 后端全量 | **1119 passed / 0 failed** |
 | 回测闸门单测 | `tests/test_decision_backtest.py` 16 条 + `tests/test_decision_backtest_invariants.py` 4 条（口径不变量）全绿 |
 | 前端类型 / 构建 | `tsc --noEmit` 零错误；`next build` **27 路由全部生成** |
 | 浏览器实测 | 1510px / 1024px 三栏保持；深浅主题跟随 token；控制台零 error；空仓票显示建仓参考、持仓票显示止盈/解套参考、做T 区块有内容 |
