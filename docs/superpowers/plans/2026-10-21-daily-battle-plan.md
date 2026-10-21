@@ -2111,9 +2111,10 @@ def upgrade() -> None:
             sa.Column("meta_json", sa.Text, nullable=True),
             sa.Column("created_at", sa.DateTime, nullable=True),
             sa.Column("updated_at", sa.DateTime, nullable=True),
-            sa.UniqueConstraint("plan_date", name="uq_battle_plans_plan_date"),
         )
-        op.create_index("ix_battle_plans_plan_date", "battle_plans", ["plan_date"])
+        # 与 ORM 的 `unique=True, index=True` 对齐:同名**唯一索引**
+        # (不是「唯一约束 + 同名普通索引」——同名不同义会让 alembic autogenerate 误报差异)
+        op.create_index("ix_battle_plans_plan_date", "battle_plans", ["plan_date"], unique=True)
 
     if not inspector.has_table("battle_plan_items"):
         op.create_table(
@@ -2156,7 +2157,7 @@ def downgrade() -> None:
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import delete, select, update
 
@@ -2164,13 +2165,13 @@ from app.db import async_session
 from app.models.orm import BattlePlan, BattlePlanItem
 
 
-def _dumps(v: Any) -> Optional[str]:
+def _dumps(v: Any) -> str | None:
     if v is None:
         return None
     return json.dumps(v, ensure_ascii=False)
 
 
-def _loads(raw: Optional[str]) -> Any:
+def _loads(raw: str | None) -> Any:
     if not raw:
         return None
     try:
@@ -2203,8 +2204,8 @@ class BattlePlanRepo:
     """日报仓储。所有方法都是幂等的。"""
 
     async def upsert_plan(
-        self, plan_date: str, outlook_json: Optional[str],
-        review_json: Optional[str], meta_json: Optional[str],
+        self, plan_date: str, outlook_json: str | None,
+        review_json: str | None, meta_json: str | None,
     ) -> int:
         async with async_session() as session:
             row = (await session.execute(
@@ -2219,7 +2220,7 @@ class BattlePlanRepo:
             await session.commit()
             return row.id
 
-    async def get_plan(self, plan_date: str) -> Optional[dict[str, Any]]:
+    async def get_plan(self, plan_date: str) -> dict[str, Any] | None:
         async with async_session() as session:
             row = (await session.execute(
                 select(BattlePlan).where(BattlePlan.plan_date == plan_date)
