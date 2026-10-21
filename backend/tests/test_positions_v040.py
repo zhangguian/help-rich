@@ -226,6 +226,88 @@ class TestManualPosition:
         p = r.json()["items"][0]
         assert p["shares"] == 1500
 
+    def test_upsert_survives_leading_sell_flow(self, client):
+        """截图导入时流水第一条就是「卖出」→ upsert 不能 500,且已实现盈亏不能被抹掉
+
+        复现 002185.SZ 真实形态:导入底仓(不在流水里)+ 流水 sell→buy→sell→buy,
+        流水聚合在 strict=True 下第一步就抛「卖出 100 股超过持仓 0 股」。
+        upsert_position 曾漏改 strict —— 与 capture_delta / recalc_position 同一口径修掉。
+        """
+        from app.db import async_session
+        from app.models.orm import Transaction
+
+        async def _seed_flow():
+            async with async_session() as session:
+                for action, shares, price, day in (
+                    ("sell", 100, "17.530", 7),
+                    ("buy", 100, "17.400", 7),
+                    ("sell", 100, "16.930", 7),
+                    ("buy", 200, "17.050", 7),
+                ):
+                    session.add(
+                        Transaction(
+                            stock_code="002185.SZ",
+                            stock_name="华天科技",
+                            action=action,
+                            shares=shares,
+                            price=price,
+                            trade_date=date(2026, 8, day),
+                        )
+                    )
+                await session.commit()
+
+        asyncio.run(_seed_flow())
+
+        # 截图导入:800 股 @ 17.371 —— 之前这里直接 500
+        r = client.post(
+            "/api/positions",
+            json={
+                "stock_code": "002185",
+                "stock_name": "华天科技",
+                "shares": 800,
+                "cost_price": "17.371",
+            },
+        )
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["shares"] == 800
+        assert body["total_cost"] == "13896.80"
+        # 已实现盈亏 = 流水里的两次卖出(17.530 + 16.930)× 100,不能被当成 0 抹掉
+        assert body["realized_pnl"] == "3446.00"
+
+    def test_upsert_keeps_realized_pnl_when_flow_has_leading_sell(self, client):
+        """只有一笔 sell 流水(导入底仓场景)→ 已实现盈亏仍按流水算,不是 0"""
+        from app.db import async_session
+        from app.models.orm import Transaction
+
+        async def _seed_sell():
+            async with async_session() as session:
+                session.add(
+                    Transaction(
+                        stock_code="000066.SZ",
+                        stock_name="中国长城",
+                        action="sell",
+                        shares=100,
+                        price="14.220",
+                        trade_date=date(2026, 8, 4),
+                    )
+                )
+                await session.commit()
+
+        asyncio.run(_seed_sell())
+
+        r = client.post(
+            "/api/positions",
+            json={
+                "stock_code": "000066",
+                "stock_name": "中国长城",
+                "shares": 200,
+                "cost_price": "18.616",
+            },
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["realized_pnl"] == "1422.00"
+
     def test_delete_position_cascades_transactions(self, client):
         _buy(client, "000001", "平安银行", 1000, "10.500")
         r = client.delete("/api/positions/000001")

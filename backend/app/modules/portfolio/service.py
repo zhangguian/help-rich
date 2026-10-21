@@ -314,8 +314,14 @@ async def upsert_position(
         total_cost = (Decimal(str(cost_price)) * int(shares)).quantize(Decimal("0.01"))
 
         # 当前流水聚合值(用于计算 delta 基准)
+        #
+        # strict=False / keep_zero=False:与 capture_delta / recalc_position 同一口径。
+        # 导入基准场景下,流水的**第一条可能就是「卖出」**(底仓不在流水里),
+        # strict=True 会抛「卖出 N 股超过持仓 0 股」→ POST /api/positions 直接 500。
+        # keep_zero=False:卖出后 flow.shares 会变成 0 或负数,keep_zero=True 会把它
+        # 过滤掉,导致已实现盈亏被当成 0 写回(把历史已实现盈亏抹掉)。
         flow_tx = await _load_flow(session, stock_code, acct)
-        flow_pos = aggregate_positions(flow_tx)
+        flow_pos = aggregate_positions(flow_tx, strict=False, keep_zero=False)
         flow = next((p for p in flow_pos if p.stock_code == stock_code), None)
         flow_pnl = flow.realized_pnl if flow else Decimal("0")
 
@@ -326,7 +332,9 @@ async def upsert_position(
                 stock_name=stock_name,
                 shares=int(shares),
                 total_cost=str(total_cost),
-                realized_pnl="0.00",
+                # 已实现盈亏与覆盖分支同一口径:流水部分保留(导入不覆盖历史已实现)。
+                # 两个分支必须一致,否则「先有卖出流水、后导入持仓」会把这笔历史盈亏抹成 0。
+                realized_pnl=str(flow_pnl.quantize(Decimal("0.01"))),
             )
             session.add(row)
         else:
