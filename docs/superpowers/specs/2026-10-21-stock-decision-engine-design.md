@@ -477,6 +477,28 @@ position_pct = f'首仓 {base}%,站稳 MA20 {ma20:.2f} 元后加至 {add_to}%'
 
 **止损 `stop_loss`**：`indicators.position.stop_loss_price`，`basis = f'参考支撑 {support_price:.2f} 元 × 0.97'`
 
+> **支撑窗口口径修订（2026-10-21，父代理实跑评审）**：
+> 参考支撑原本取 `min(closes[-20:])`，**含当前这根 K 线**。于是
+> `support_price ≤ 当前收盘 × 0.98` → `stop_loss_price ≤ 当前收盘 × 0.9506`，
+> 而止损触发条件是 `effective_price < stop_loss_price` ——
+> 在**收盘价口径**下该不等式**数学上永不可能成立**。
+>
+> 实测证据：**15900 个信号日里 `close < stop` 命中 0 次**。
+> 后果：止损规则是**死代码**；实盘里它只在「盘中比 20 日收盘最低点还低 5%」的崩盘级行情
+> 才可能触发，与「跌破参考支撑就止损」的意图严重不符；
+> 且回测里「stop 后 5 日回撤改善」那条闸门**永远无法被评估**。
+>
+> 现改为取**当前根之前**的 20 根：`min(closes[:-1][-20:]) × 0.98`。
+> 语义 = 「跌破**已经确立的**支撑位就止损」，并让实盘与回测口径完全一致：
+>
+> | 场景 | 支撑取自 | 现价取自 |
+> | --- | --- | --- |
+> | 实盘 | 前 20 根**已收盘** K 线 | 盘中实时价 |
+> | 回测 | 信号日**之前**的 20 根 | 信号日收盘 |
+>
+> 实测（5 只票 600 个信号日）：命中 **0 次 → 3 次**。
+> 实现见 `backend/app/services/ta_service.py` 的 `_position`（注释已写明原因）。
+
 ### 6.4 `judge_exit` → 什么时候该卖（`position_status == 'profit'`）
 
 ```
@@ -932,7 +954,7 @@ GET /api/stock/{stock_code}/decision
 | 位置 | `indicators.position.risk_band` | `high` / `mid` / `low`（近 120 日 P20/P80 分位） |
 | 位置 | `indicators.position.band` | `high` / `mid` / `low`（近 60 日涨幅） |
 | 位置 | `indicators.position.p20` / `.p80` | float \| None |
-| 位置 | `indicators.position.support_price` | float \| None（近 20 日最低收盘 × 0.98） |
+| 位置 | `indicators.position.support_price` | float \| None（**当前根之前** 20 日最低收盘 × 0.98，见下方口径修订） |
 | 位置 | `indicators.position.stop_loss_price` | float \| None（参考支撑 × 0.97） |
 | 信号融合 | `indicators.signal.view` / `.score` / `.confidence` / `.reasons` / `.summary` | `view` ∈ `bullish` / `bearish` / `neutral` |
 | 历史信号 | `indicators.signal_series` | list |
