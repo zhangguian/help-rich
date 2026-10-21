@@ -263,4 +263,44 @@ def build_outlook(
     }
 
 
-__all__ = ["build_outlook"]
+def build_market_snapshot(klines: list[dict] | None, target_date: str) -> dict[str, Any] | None:
+    """目标日的指数实况快照(纯函数、零 IO)→ {index_close, change_pct, volume_note}
+
+    只做**事实转述**,不做任何指标推断:
+    - index_close = 目标日收盘价
+    - change_pct  = (收盘 - 前收) / 前收 × 100
+    - volume_note = 目标日成交额(亿元)的文字描述
+
+    **为什么必须放在决策层**:编排层只该做 IO 与编排;
+    涨跌幅与成交额换算属于「把行情数字翻译成人话」,和 build_outlook 同域。
+
+    目标日没有数据(盘前 / 停牌 / 节假日)→ 返回 None(调用方如实留空,不编造)。
+    """
+    bars = [k for k in (klines or []) if isinstance(k, dict)]
+    idx = None
+    for i, k in enumerate(bars):
+        if str(k.get("date") or "")[:10] == target_date:
+            idx = i
+    if idx is None:
+        return None
+    close = _f(bars[idx].get("close"))
+    if close is None:
+        return None
+    prev_close = None
+    if idx > 0:
+        prev_close = _f(bars[idx - 1].get("close"))
+    change_pct = None
+    if prev_close is not None and prev_close > 0:
+        change_pct = (close - prev_close) / prev_close * 100.0
+    volume_note = None
+    amount = _f(bars[idx].get("amount"))
+    if amount is not None and amount > 0:
+        volume_note = f"成交额 {amount / 1e8:.0f} 亿"
+    return {
+        "index_close": round(close, 2),
+        "change_pct": round(change_pct, 2) if change_pct is not None else None,
+        "volume_note": volume_note,
+    }
+
+
+__all__ = ["build_outlook", "build_market_snapshot"]

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.outlook_service import build_outlook
+from app.services.outlook_service import build_market_snapshot, build_outlook
 
 
 def _klines(closes: list[float], volumes: list[float] | None = None,
@@ -235,3 +235,46 @@ def test_dims_always_four_items():
     out = build_outlook(_klines([10.0] * 30), None, None)
     assert len(out["dims"]) == 4
     assert {d["key"] for d in out["dims"]} == {"volume", "sentiment", "ma", "flow"}
+
+
+# ---------------- 指数实况快照(spec §4.7 review.market) ----------------
+
+def _snap_klines(rows: list[dict]) -> list[dict]:
+    """按日期造最小日K;rows = [{date, close, amount?}]"""
+    return [{"date": r["date"], "close": r["close"], "amount": r.get("amount")} for r in rows]
+
+
+def test_market_snapshot_returns_target_day_close():
+    """取目标日收盘,并用**前一根**收盘算涨跌幅"""
+    ks = _snap_klines([
+        {"date": "2026-10-20", "close": 3000.0},
+        {"date": "2026-10-21", "close": 3030.0, "amount": 4.2e9},
+    ])
+    snap = build_market_snapshot(ks, "2026-10-21")
+    assert snap["index_close"] == 3030.0
+    assert snap["change_pct"] == 1.0          # (3030-3000)/3000
+    assert snap["volume_note"] == "成交额 42 亿"
+
+
+def test_market_snapshot_returns_none_when_target_day_missing():
+    """目标日无 K 线(盘前/停牌/节假日)→ None,不编造"""
+    ks = _snap_klines([{"date": "2026-10-20", "close": 3000.0}])
+    assert build_market_snapshot(ks, "2026-10-21") is None
+    assert build_market_snapshot([], "2026-10-21") is None
+    assert build_market_snapshot(None, "2026-10-21") is None
+
+
+def test_market_snapshot_volume_note_none_when_amount_missing():
+    """没有成交额字段 → volume_note 如实留空(不许写「成交额 0 亿」)"""
+    ks = _snap_klines([{"date": "2026-10-21", "close": 3030.0}])
+    snap = build_market_snapshot(ks, "2026-10-21")
+    assert snap["volume_note"] is None
+    assert snap["index_close"] == 3030.0
+
+
+def test_market_snapshot_handles_string_amount():
+    """amount 是**字符串**(见 K 线数据契约)→ 正确转 float,别炸也别当 0"""
+    ks = [{"date": "2026-10-21", "close": "3030.0", "amount": "35550000000"}]
+    snap = build_market_snapshot(ks, "2026-10-21")
+    assert snap["volume_note"] == "成交额 356 亿"
+    assert snap["change_pct"] is None         # 没有前收 → 不编造涨跌幅

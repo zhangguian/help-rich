@@ -7,10 +7,11 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from app.repositories.battle_plan_repo import battle_plan_repo
@@ -18,7 +19,7 @@ from app.services.fulfillment_checker import check_fulfillment, summarize_fulfil
 from app.services.kline_service import fetch_klines
 from app.services.market_context_service import get_market_context
 from app.services.market_overview_service import fetch_market_sentiment
-from app.services.outlook_service import build_outlook
+from app.services.outlook_service import build_market_snapshot, build_outlook
 from app.services.plan_item_builder import build_items, build_todos
 from app.services.position_status import (
     kline_fallback_price,
@@ -79,15 +80,20 @@ async def _load_quotes(codes: list[str]):
         return []
 
 
-async def _load_transactions(plan_date: str) -> list[dict[str, Any]]:
-    """目标日交易流水"""
+async def _load_transactions(plan_date: str) -> tuple[list[dict[str, Any]], bool]:
+    """目标日交易流水 → (流水列表, 是否读取成功)
+
+    第二个返回值是 `ok`:读失败时为 False,调用方**必须**据此降级披露
+    (spec §六:「流水读取失败 → 只判触及不判执行,note 标注『流水不可用，未核对执行』」)。
+    静默返回空列表等于把「没读到数据」说成「今天没操作」——用户无从分辨。
+    """
     from app.modules.portfolio.repository import transaction_repo
 
     try:
         rows, _total = await transaction_repo.list_all(limit=500)
     except Exception as e:  # noqa: BLE001
         logger.warning("作战计划读取流水失败: %s", e)
-        return []
+        return [], False
     out: list[dict[str, Any]] = []
     for r in rows or []:
         trade_date = getattr(r, "trade_date", None)
@@ -112,7 +118,7 @@ async def _load_transactions(plan_date: str) -> list[dict[str, Any]]:
             "price": price,
             "trade_date": iso,
         })
-    return out
+    return out, True
 
 
 # ============================ 股票池 ============================
@@ -145,7 +151,9 @@ async def resolve_target_stocks() -> list[dict[str, Any]]:
                 "shares": 0, "avg_cost": 0.0,
             }
     scope = list(merged.values())
-    scope.sort(key=lambda s: (not s["in_position"], s["stock_code"]))
+    # ⚠️ **不要按 stock_code 重排** —— 关注票的顺序来自 watchlist_repo.list_all()
+    # (按 added_at 倒序),重排会把「最近加入的关注票」排到最后,
+    # 截断上限时先砍掉最该保留的票。持仓在前、关注在后,组内保持源顺序。
     # ⚠️ 这里**不做上限截断** —— 截断与「是否真的截断」这个标志必须由同一处产出。
     # 若这里先切一刀,build_plan 再切一次就永远切不动(len 恰好 == MAX_SCOPE),
     # meta["truncated"] 会恒为 False —— 等于向用户谎称「一只票都没砍掉」。
@@ -162,6 +170,26 @@ def _truncate_scope(scope: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], 
     if len(scope) > MAX_SCOPE:
         return scope[:MAX_SCOPE], True
     return scope, False
+
+
+# ============================ 上一份日报 ============================
+
+async def _find_prev_plan_date(plan_date: date) -> str | None:
+    """找最近一份**早于** plan_date 的日报日期(数据驱动)。
+
+    为什么不能用「plan_date 减一天」:周一的减一是周日 → 必然找不到;
+    每个长假后的第一个交易日同理。而「上一份日报」天然就是「上一个交易日的那份」——
+    不需要交易日历,也不需要节假日表。
+    """
+    try:
+        dates = await battle_plan_repo.list_plan_dates(limit=60)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("作战计划查找上一份日报失败: %s", e)
+        return None
+    for d in dates or []:
+        if str(d) < plan_date.isoformat():
+            return str(d)
+    return None
 
 
 # ============================ 单票决策 ============================
@@ -223,8 +251,12 @@ async def _build_one_decision(
         position_status=position_status,
         env=env,
     )
-    decision = build_decision(ctx)
-    todos = build_todos(decision)
+    try:
+        decision = build_decision(ctx)
+        todos = build_todos(decision)
+    except Exception as e:  # noqa: BLE001
+        # 单票失败不影响其余票(spec §4.6.2 降级原则)
+        return None, None, [f"{code} 决策计算失败: {e}"]
     return decision, todos, errors
 
 
@@ -244,30 +276,35 @@ class PositionView:
 
 # ============================ 目标交易日 ============================
 
-def _next_trading_day(index_klines: list[dict], plan_date: date) -> tuple[str, bool]:
-    """下一个交易日;返回 (日期字符串, 是否为推算值)"""
-    last_date = None
-    for k in reversed(index_klines or []):
-        d = (k or {}).get("date")
-        if d:
-            last_date = str(d)[:10]
-            break
-    base = date.fromisoformat(last_date) if last_date else plan_date
-    nxt = base + timedelta(days=1)
+def _next_trading_day(plan_date: date) -> tuple[str, bool]:
+    """下一个交易日 = plan_date(D) 之后的第一个工作日。
+
+    ⚠️ 基准必须是 **plan_date**,不能是「指数最后一根 K 线的日期」——
+    盘中生成时最后一根 K 线还是昨天,用它当基准会算出「明天 = 今天」,
+    把 D/D+1 契约(明日)塌成今日,整份日报的语义就错了。
+    工作日推算无法覆盖法定节假日 → 恒为推算值,标注 target_date_estimated。
+    """
+    nxt = plan_date + timedelta(days=1)
     while nxt.weekday() >= 5:  # 跳过周末
         nxt += timedelta(days=1)
-    return nxt.isoformat(), True   # 未能从真实日历确认,标记为推算
+    return nxt.isoformat(), True
 
 
 # ============================ 主入口 ============================
 
+# 只有基于完整数据得出的判定才可信,才允许冻结 items。
+# `pending`(还没判)与 `no_data`(没数据,判不了)都**不可信** ——
+# 冻结它们等于把「还没判定」永久定成「没兑现」(spec §4.6.3)。
+TRUSTED_FULFILLMENTS = {"executed", "touched", "missed"}
+
+
 async def _persist(plan: dict[str, Any]) -> int:
     """落库(可被测试替换)
 
-    **幂等覆盖的例外**(spec §4.6.3):D 日报的 items 若已有非 pending 的 fulfillment,
-    说明那批兑现状态已被判定过(生成 D+1 日报时回填的)。重新生成 D 日报时
-    **保留原 items 不动**,只更新 outlook / review / meta —— 否则会把已判定的
-    兑现状态冲回 pending,把复盘历史抹掉。
+    **幂等覆盖的例外**(spec §4.6.3):D 日报的 items 若已有**可信判定**(见
+    `TRUSTED_FULFILLMENTS`)的 fulfillment,说明那批兑现状态已被判定过(生成 D+1 日报时
+    回填的)。重新生成 D 日报时**保留原 items 不动**,只更新 outlook / review / meta ——
+    否则会把已判定的兑现状态冲回 pending,把复盘历史抹掉。
     """
     plan_date = plan["plan_date"]
     meta = plan.setdefault("meta", {})
@@ -276,7 +313,9 @@ async def _persist(plan: dict[str, Any]) -> int:
     row = await battle_plan_repo.get_plan(plan_date)
     if row:
         existing = await battle_plan_repo.get_items(row["id"])
-        judged = any((i.get("fulfillment") or "pending") != "pending" for i in existing)
+        judged = any(
+            (i.get("fulfillment") or "pending") in TRUSTED_FULFILLMENTS for i in existing
+        )
     meta["items_preserved"] = judged
 
     plan_id = await battle_plan_repo.upsert_plan(
@@ -322,12 +361,29 @@ async def build_plan(plan_date: date) -> dict[str, Any]:
         degraded.append(f"板块资金流不可用: {e}")
 
     outlook = build_outlook(index_klines, sentiment, sector_flows)
+    # 今日实况快照(D 当天,不是 D+1)—— 决策层纯函数算,编排层只传参
+    market_snapshot = build_market_snapshot(index_klines, ds)
 
-    # ---- 逐票预案 ----
+    # ---- 逐票预案(并发,限流) ----
+    # ⚠️ 必须并发:逐票串行 20 轮 × (K线 + 市场环境) 上游往返,
+    # 会打爆前端 60s 的超时预算(spec §4.7)。单票异常已在 _build_one_decision 内隔离。
+    sem = asyncio.Semaphore(6)
+
+    async def _one(stock: dict[str, Any]):
+        async with sem:
+            return await _build_one_decision(stock, quotes_by_code)
+
+    results = await asyncio.gather(
+        *[_one(stock) for stock in scope], return_exceptions=True
+    )
+
     items: list[dict[str, Any]] = []
     todos: list[dict[str, Any]] = []
-    for stock in scope:
-        decision, stock_todos, errors = await _build_one_decision(stock, quotes_by_code)
+    for stock, res in zip(scope, results, strict=False):
+        if isinstance(res, BaseException):
+            degraded.append(f"{stock.get('stock_code')} 决策失败: {res}")
+            continue
+        decision, stock_todos, errors = res
         degraded.extend(errors)
         if decision is None:
             continue
@@ -336,20 +392,33 @@ async def build_plan(plan_date: date) -> dict[str, Any]:
             shares=int(stock.get("shares") or 0),
             avg_cost=float(stock.get("avg_cost") or 0.0),
         )
-        items.extend(build_items(decision, pos if stock.get("in_position") else None))
+        try:
+            items.extend(build_items(decision, pos if stock.get("in_position") else None))
+        except Exception as e:  # noqa: BLE001
+            degraded.append(f"{stock.get('stock_code')} 预案转换失败: {e}")
 
     # ---- 昨日兑现(闭环) ----
-    prev_date = (plan_date - timedelta(days=1)).isoformat()
-    review = await _build_review(prev_date, plan_date, degraded, todos)
+    prev_date = await _find_prev_plan_date(plan_date)
+    review = await _build_review(prev_date, plan_date, degraded, todos, market_snapshot)
 
-    target_date, estimated = _next_trading_day(index_klines, plan_date)
+    target_date, estimated = _next_trading_day(plan_date)
     meta = {
         "scope_count": len(scope),
-        "scope": scope,
+        # ⚠️ 只留 4 个字段:shares / avg_cost 是真实持仓成本,不该扩散到落库与出参
+        # (`scope` 变量本身仍带它们,供决策层用;这里只是**出参**裁掉)。
+        "scope": [
+            {
+                "stock_code": s.get("stock_code"),
+                "stock_name": s.get("stock_name"),
+                "in_position": bool(s.get("in_position")),
+                "is_favorite": bool(s.get("is_favorite")),
+            }
+            for s in scope
+        ],
         "truncated": truncated,
         "degraded": bool(degraded),
         "degraded_reason": degraded,
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).astimezone().isoformat(timespec="seconds"),
         "target_date": target_date,
         "target_date_estimated": estimated,
     }
@@ -360,7 +429,8 @@ async def build_plan(plan_date: date) -> dict[str, Any]:
         "outlook": outlook,
         "review": review,
         "items": items,
-        "todos": todos,
+        # ⚠️ 无顶层 `todos` —— 待办统一在 review.pending_todos(spec §4.7 契约)。
+        # 首版实现里这里多了一个 `todos`,已由「Task 6 · fix round 1 / F11」删掉。
         "meta": meta,
     }
     await _persist(plan)
@@ -368,10 +438,11 @@ async def build_plan(plan_date: date) -> dict[str, Any]:
 
 
 async def _build_review(
-    prev_date: str,
+    prev_date: str | None,
     plan_date: str,
     degraded: list[str],
     pending_todos: list[dict[str, Any]] | None = None,
+    market: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """今日复盘 = 昨日预案兑现比对 + 今日待办
 
@@ -380,10 +451,17 @@ async def _build_review(
     才能逼用户面对(见 spec §4.4.2 三路分流)。
     """
     todos = list(pending_todos or [])
+    if not prev_date:
+        return {
+            "market": market,
+            "fulfillment": None,
+            "pending_todos": todos,
+            "note": "没有找到上一份作战计划,今日暂无兑现比对",
+        }
     prev = await battle_plan_repo.get_plan(prev_date)
     if not prev:
         return {
-            "market": None,
+            "market": market,
             "fulfillment": None,
             "pending_todos": todos,
             "note": "没有找到昨日作战计划,今日暂无兑现比对",
@@ -410,12 +488,25 @@ async def _build_review(
             degraded.append(f"{code} 兑现比对取K线失败: {e}")
             target_klines[code] = []
 
-    transactions = await _load_transactions(target_day)
+    transactions, tx_ok = await _load_transactions(target_day)
+    if not tx_ok:
+        degraded.append("流水不可用,今日只判触及不判执行")
     checked = check_fulfillment(prev_items, target_klines, transactions)
+    if not tx_ok:
+        # 没读到流水 → 不能说「当日无对应操作」(那是我们没看到,不是没有)
+        for it in checked:
+            if it.get("fulfillment") == "missed":
+                it["fulfillment_note"] = "流水不可用,未核对执行"
+            elif it.get("fulfillment") == "touched":
+                it["fulfillment_note"] = "价格已触及触发位,但当日无对应操作(流水不可用,未核对执行)"
     summary = summarize_fulfillment(checked)
 
     # 回填昨日日报的兑现状态
+    # ⚠️ `no_data` **不回填** —— 那是「没判定」,不是判定结果。
+    # 写回去会让「数据不足」变成「未兑现」,还会被 items_preserved 冻结成永久结论。
     for it in checked:
+        if it.get("fulfillment") == "no_data":
+            continue
         try:
             await battle_plan_repo.update_item_fulfillment(
                 it["id"], it["fulfillment"], it.get("fulfillment_note") or ""
@@ -424,7 +515,7 @@ async def _build_review(
             logger.warning("回填兑现状态失败 item=%s: %s", it.get("id"), e)
 
     return {
-        "market": None,
+        "market": market,
         "fulfillment": {**summary, "items": [
             {
                 "stock_code": i["stock_code"], "stock_name": i.get("stock_name"),

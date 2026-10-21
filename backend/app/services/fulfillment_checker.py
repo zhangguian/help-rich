@@ -22,6 +22,11 @@ R+1 = 兑现判定日。
 **输入范围约束**:传入的 target_klines 与 transactions **必须只含目标日(R+1)的数据**。
 本模块是纯函数、零 IO,不做日期过滤(那是编排层的职责);若上游喂进多日 K 线,
 多日极值会被当成单日极值 —— 这正是「假触及」的来源。
+
+**第三态 `no_data`(2026-10-21 T6 fix round 1)**:目标日**根本没有该票的行情数据**时,
+既不能说「触及」也不能说「未触及」—— 那不是判定结果,是「没判定」。判 missed
+等于用无知冒充事实,会把结论永久写进复盘档案。纪律类与「有流水」两条分支在更前面,
+不受本态影响(有流水时仍按 executed 判)。
 """
 from __future__ import annotations
 
@@ -204,21 +209,28 @@ def check_fulfillment(
             fulfillment = "executed"
             note = f"已按计划执行({hint})" if hint else "已按计划执行"
             tp = txn.get("price")
-            if tp is not None and abs(tp - price) > price * DEVIATION_TOLERANCE:
+            if tp is not None and abs(tp - price) > price * DEVIATION_TOLERANCE + _EPS:
                 note += f"(成交价 {tp:.2f} 与触发价 {price:.2f} 不符)"
         else:
             # 第二步:价格是否触及
-            touched = False
-            if direction == "sell" and high is not None and high >= price:
-                touched = True
-            if direction == "buy" and low is not None and low <= price:
-                touched = True
-            if touched:
-                fulfillment = "touched"
-                note = "价格已触及触发位,但当日无对应操作"
+            if high is None and low is None:
+                # ⚠️ 目标日**没有该票的行情数据**(停牌 / 数据源未出 / 节假日)——
+                # 我们根本无从判定触没触发。判 missed 等于「用无知冒充事实」:
+                # 会把「没拿到数据」永久写进复盘档案(spec §4.5.3 第三步之二)。
+                fulfillment = "no_data"
+                note = "目标日无行情数据,未判定"
             else:
-                fulfillment = "missed"
-                note = "当日未触及触发位(不评价对错)"
+                touched = False
+                if direction == "sell" and high is not None and high >= price:
+                    touched = True
+                if direction == "buy" and low is not None and low <= price:
+                    touched = True
+                if touched:
+                    fulfillment = "touched"
+                    note = "价格已触及触发位,但当日无对应操作"
+                else:
+                    fulfillment = "missed"
+                    note = "当日未触及触发位(不评价对错)"
 
         item["fulfillment"] = fulfillment
         item["fulfillment_note"] = note
@@ -227,9 +239,13 @@ def check_fulfillment(
 
 
 def summarize_fulfillment(items: list[dict]) -> dict[str, Any]:
-    """复盘段统计口径(spec §4.5.4)"""
+    """复盘段统计口径(spec §4.5.4)
+
+    `no_data` = 目标日无行情数据,**不计入统计**(与 n_a 同性质),
+    且 verdict 不允许因为它而说成「按计划执行」——「没判定」不是「做对了」。
+    """
     total = len(items or [])
-    executed = touched = missed = na = 0
+    executed = touched = missed = na = no_data = 0
     discipline = 0
     for i in items or []:
         if not isinstance(i, dict):
@@ -245,17 +261,21 @@ def summarize_fulfillment(items: list[dict]) -> dict[str, Any]:
             missed += 1
         elif f == "n_a":
             na += 1
+        elif f == "no_data":
+            no_data += 1
     if discipline > 0:
         verdict_label, verdict_level = "存在纪律问题", "danger"
     elif touched > 0:
         verdict_label, verdict_level = "有执行缺口", "warn"
+    elif no_data > 0:
+        verdict_label, verdict_level = "数据不足", "warn"
     elif executed > 0:
         verdict_label, verdict_level = "按计划执行", "ok"
     else:
         verdict_label, verdict_level = "无操作记录", "flat"
     return {
         "total": total, "executed": executed, "touched": touched,
-        "missed": missed, "na": na, "discipline": discipline,
+        "missed": missed, "na": na, "no_data": no_data, "discipline": discipline,
         "verdict_label": verdict_label, "verdict_level": verdict_level,
     }
 

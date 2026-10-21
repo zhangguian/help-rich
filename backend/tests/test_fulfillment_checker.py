@@ -54,9 +54,38 @@ def test_none_direction_is_na():
     assert out[0]["fulfillment"] == "n_a"
 
 
-def test_no_kline_data_treated_as_missed_not_touched():
+def test_no_data_when_target_day_has_no_kline():
+    """目标日**没有该票的行情数据** → `no_data`,不是 `missed`。
+
+    为什么这条最要紧:盘前/盘中 `fetch_klines` 缓存里往往还没有当天日 K,
+    拿不到 K 线时判 `missed` 等于把「没拿到数据」永久写进复盘档案 —— 用无知冒充事实。
+    """
     out = check_fulfillment([_item(direction="buy", price=9.62)], {}, [])
-    assert out[0]["fulfillment"] == "missed"
+    assert out[0]["fulfillment"] == "no_data"
+    assert "未判定" in out[0]["fulfillment_note"]
+
+
+def test_no_data_not_counted_in_statistics():
+    """`no_data` 不落进任何统计桶;且 verdict 不允许因为它说成「按计划执行」"""
+    checked = check_fulfillment([_item(direction="buy", price=9.62)], {}, [])
+    s = summarize_fulfillment(checked)
+    assert s["no_data"] == 1
+    # 「没判定」既不是触及也不是未触及,更不是不计入的 n_a
+    assert (s["executed"], s["touched"], s["missed"], s["na"]) == (0, 0, 0, 0)
+    assert s["verdict_label"] == "数据不足"
+    assert s["verdict_level"] == "warn"
+    # 有一笔真实执行也不能被 no_data 盖成「按计划执行」—— 没判定不是做对了
+    with_exec = checked + [{**_item(direction="buy", price=9.62), "fulfillment": "executed"}]
+    s2 = summarize_fulfillment(with_exec)
+    assert s2["executed"] == 1
+    assert s2["verdict_label"] == "数据不足"
+
+
+def test_transaction_proves_execution_even_without_kline():
+    """当日**有流水** → `executed`,不受日 K 缺失影响(流水自证执行)"""
+    out = check_fulfillment([_item(direction="buy", price=9.62)], {},
+                            [_txn(action="buy", price=9.62)])
+    assert out[0]["fulfillment"] == "executed"
 
 
 # ---------------- 执行判定(优先于触及) ----------------
@@ -226,17 +255,29 @@ def test_transaction_without_price_fallback_disclosed():
 
 
 def test_discipline_item_does_not_consume_transaction():
-    """纪律类不参与流水归属 —— 同一笔操作可同时构成纪律违规与别的预案的执行"""
+    """纪律类不参与流水归属 —— 同一笔操作可同时构成纪律违规与别的预案的执行。
+
+    ⚠️ 必须用 **unlock**(direction=buy + 有触发价)而不是 do_not(direction=none):
+    do_not 本来就会被方向过滤排除,删掉纪律守卫它照样绿 —— 那是假锁。
+    """
     items = [
-        _item(kind="do_not", direction="none", price=None, label="别动"),
+        _item(kind="unlock", direction="buy", price=12.50, label="解锁后建仓"),
         _item(kind="entry", direction="buy", price=9.62, label="建仓"),
     ]
     out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.2, low=9.3)]},
                             [_txn(action="buy", price=9.62)])
     by_kind = {i["item_kind"]: i for i in out}
-    assert by_kind["do_not"]["fulfillment"] == "executed"
-    assert "纪律问题" in by_kind["do_not"]["fulfillment_note"]
+    assert by_kind["unlock"]["fulfillment"] == "executed"
+    assert "纪律问题" in by_kind["unlock"]["fulfillment_note"]
     assert by_kind["entry"]["fulfillment"] == "executed"
+
+
+def test_t_buyback_ignores_other_stock_transaction():
+    """T 回补的同票过滤:别的票的买入不能算本票的回补"""
+    items = [_item(kind="t_buyback", direction="buy", price=9.20, label="做T回补")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.2, low=9.4)]},
+                            [_txn(code="000807.SZ", action="buy", price=9.10)])
+    assert out[0]["fulfillment"] == "missed"
 
 
 def test_deviation_beyond_3pct_disclosed_in_note():
