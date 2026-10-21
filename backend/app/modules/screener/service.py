@@ -32,7 +32,7 @@ from app.core.config import (
 from app.data.ifind_events import IfindUnavailable
 from app.data.ifind_fundamentals import is_hit_fundamental_filter
 from app.data.unified import UnifiedQuote
-from app.models.orm import IndexConstituent, ScreenerRun
+from app.models.orm import IndexConstituent, ScreenerPick, ScreenerRun
 from app.modules.screener import repository as screener_repo
 from app.services import kline_service, quote_service, sector_fund_flow_service
 from app.services.event_factor_service import (
@@ -247,6 +247,25 @@ async def _fetch_sectors_safe(num: int = 20) -> list[dict]:
     except Exception as e:  # noqa: BLE001
         logger.warning("板块资金榜拉取失败,板块强度分将全 0: %s", e)
         return []
+
+
+# ============================================================
+# 只读查询(供其它域调用)
+# ============================================================
+
+
+async def get_latest_run() -> ScreenerRun | None:
+    """最近一批选股批次(无则返回 None)
+
+    纯转发:跨域只允许 import 本域的 service(见 tests/test_architecture_boundaries.py),
+    故 repository 的两个读接口在 service 层各留一个出口。
+    """
+    return await screener_repo.get_latest_run()
+
+
+async def get_picks_by_run(run_id: int) -> list[ScreenerPick]:
+    """某批次的全部候选(按 rank 升序)"""
+    return await screener_repo.get_picks_by_run(run_id)
 
 
 # ============================================================

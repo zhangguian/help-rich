@@ -147,3 +147,84 @@ class TestDispatchDegradation:
         monkeypatch.setattr(svc_mod.notify_service, "send_to_enabled", boom)
         out = await svc.dispatch(result)
         assert out == []
+
+
+class TestScreenerRepoImport:
+    """回归:`screener_repo` 必须来自 screener 模块的 repository。
+
+    历史缺陷(2026-10-22 修复):workflow 里写的是 `from app.repositories import
+    screener_repo` —— 那取到的是 `app.repositories` 这个**包**(其下从来没有
+    screener_repo.py,只有真正的来源 app/modules/screener/repository.py),
+    于是:
+      - run_premarket 的 import 在 try 内 → 被同函数 except 吞掉,「今日关注清单」
+        静默消失,不报错;
+      - run_intraday 的 import 在 try 外 → 调用即 ImportError,盘中扫描整条链路
+        直接不可用。
+
+    项目其余 11 处都用 `from app.modules.screener import repository as screener_repo`。
+    """
+
+    @staticmethod
+    async def _seed_run():
+        """播一批选股记录,让「今日关注清单」有内容可断言。"""
+        from datetime import date
+
+        from app.modules.screener import repository as screener_repo
+
+        run = await screener_repo.upsert_run(
+            run_date=date.today(),
+            scoring_version="test",
+            pool_size=800,
+            total_picks=2,
+            elapsed_sec=1.0,
+            note="workflow 回归测试",
+        )
+        await screener_repo.replace_picks(
+            run.id,
+            [
+                {"rank": 1, "stock_code": "600519.SH", "stock_name": "贵州茅台", "score": 88.5},
+                {"rank": 2, "stock_code": "000001.SZ", "stock_name": "平安银行", "score": 77.0},
+            ],
+        )
+        return run
+
+    @staticmethod
+    def _no_llm(monkeypatch):
+        """关掉 LLM 润色,避免测试联网。"""
+
+        async def no_llm():
+            return None
+
+        monkeypatch.setattr("app.modules.analysis.service._get_llm", no_llm)
+
+    @pytest.mark.asyncio
+    async def test_premarket_keeps_watchlist_section(self, monkeypatch):
+        """用例 A:run_premarket 不抛异常,且「· 关注 」段落不能被静默吞掉。"""
+        from app.modules.analysis import workflow as svc_mod
+
+        self._no_llm(monkeypatch)
+        await self._seed_run()
+
+        svc = svc_mod.WorkflowAgentService()
+        result = await svc.run_premarket()  # 修前:不抛异常,但关注清单整段丢失
+
+        assert result.kind == "premarket"
+        watch_lines = [ln for ln in result.lines if ln.startswith("· 关注 ")]
+        assert watch_lines, f"「今日关注清单」被静默吞掉了,lines={result.lines!r}"
+        assert any("600519.SH" in ln for ln in watch_lines)
+        assert "600519.SH" in result.stock_codes
+
+    @pytest.mark.asyncio
+    async def test_intraday_does_not_raise_import_error(self, monkeypatch):
+        """用例 B:run_intraday 不抛 ImportError(修前在函数开头就炸)。"""
+        from app.modules.analysis import workflow as svc_mod
+
+        self._no_llm(monkeypatch)
+
+        svc = svc_mod.WorkflowAgentService()
+        # 空库(无选股记录)→ 不取行情、不联网,只验证 import 与降级路径
+        result = await svc.run_intraday("11:30")
+
+        assert result.kind == "intraday"
+        assert "11:30" in result.title
+        assert result.lines  # 至少给出「暂无明显异动」等占位,不会空

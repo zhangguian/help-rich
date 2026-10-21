@@ -73,11 +73,11 @@ class WorkflowAgentService:
 
         # 2) 今日关注清单(来自最近一次选股)
         try:
-            from app.repositories import screener_repo
+            from app.modules.screener.service import get_latest_run, get_picks_by_run
 
-            run = await screener_repo.get_latest_run()
+            run = await get_latest_run()
             if run is not None:
-                picks = await screener_repo.get_picks_by_run(run.id)
+                picks = await get_picks_by_run(run.id)
                 for pk in picks[:5]:
                     codes.append(pk.stock_code)
                     lines.append(f"· 关注 {pk.stock_code}(昨日评分 {pk.score})")
@@ -102,14 +102,14 @@ class WorkflowAgentService:
 
     async def run_intraday(self, slot: str = "11:30") -> WorkflowResult:
         """盘中扫描:异动 + 机会。slot: "11:30" / "14:50"。"""
-        from app.repositories import screener_repo
+        from app.modules.screener.service import get_latest_run, get_picks_by_run
 
         lines: list[str] = []
         codes: list[str] = []
 
         try:
-            run = await screener_repo.get_latest_run()
-            picks = await screener_repo.get_picks_by_run(run.id) if run else []
+            run = await get_latest_run()
+            picks = await get_picks_by_run(run.id) if run else []
             if picks:
                 from app.services.quote_service import QuoteService
 
