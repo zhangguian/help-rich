@@ -218,6 +218,10 @@ def build_outlook(
 > **板块资金的特殊说明**：项目 `fetch_main_fund_flow()` 是**估算值**（IR-6），但 `get_sector_fund_flow()` 是**真实板块资金流**（新浪口径）。本设计用**真实**的 `get_sector_fund_flow()`，因此该维度**不带估算标签**。若未来改用个股估算流，则必须加标签。
 >
 > **为什么按「净流入总额」而不是「有无正流入」判定**（2026-10-21 实现阶段裁决）：「有正有负」在逻辑上**蕴含**「存在正流入」，若按"有无"判定，偏多与中性两档会互相排斥、无法同时成立——本设计的规则表与测试因此一度自相矛盾。改按**总额符号**判定后三档互斥且完备：总额 > 0 = 钱整体在流入（偏多）、< 0 = 整体在流出（偏空）、= 0 = 多空抵消（中性）。这与另外三个维度「看整体量级而非看有没有」的判据保持一致。
+>
+> **该维度的两条诚实性规则**（2026-10-21 复审发现，必须遵守）：
+> 1. **浮点零和必须归一**：`[38.6, -12.4, -26.2]` 的和是 `3.55e-15` 而非精确 0。直接用 `total > 0` 判会误判成偏多，并渲染出「净流入合计 0.00 亿」这种自相矛盾的文案。故 `|total| < 1e-9` 归一为 0。
+> 2. **全部板块净额都是 `None` 时判 `missing`，不是 `flat`**：那等于根本没有板块资金数据，若算成"有效"，会对外宣称「基于 4/4 维度规则推断」而实际缺一个维度——这是**谎报数据完整性**。
 
 #### 4.3.3 结论合成
 
@@ -279,8 +283,8 @@ else:                   → stance = "neutral"   # 震荡
 
 ```python
 def build_items(
-    decision: dict,          # decision_service.build_decision() 的输出
-    position: dict | None,   # {shares, avg_cost, ...}，无持仓则 None
+    decision: dict,              # decision_service.build_decision() 的输出
+    position: PositionView | None,  # 含 .shares / .avg_cost **属性**的对象；无持仓则 None
 ) -> list[dict]             # 明日预案项列表
 
 def build_todos(decision: dict) -> list[dict]
@@ -301,6 +305,8 @@ def build_todos(decision: dict) -> list[dict]
 | `do_not[]` | 明日预案·别动 | 「明日别动：…」 |
 
 **为什么 `now` 不进明日预案**：`now` 的语义是「此刻条件已满足，此刻就该做」。它若写进明日预案，就是一条**已经过期的建议**——这正是股民复盘里最常见的自欺（"我有个计划"但其实条件早就到了你没做）。所以它必须被**显式推到复盘段的待办清单**，逼用户面对。
+
+**持仓视图契约（全项目统一为「属性形状」，2026-10-21 跨任务裁决）**：`build_items` 的 `position` 与 `position_status.resolve_position_status` 的 `position` **统一要求含 `.shares` / `.avg_cost` 属性的对象**，不用 dict。理由：`resolve_position_status` 的契约已写进 docstring 并通过评审，且被既有代码（`api/diagnose.py`）使用，改它成本高；而 `plan_item_builder` 是新代码，改它零成本。接线层（`battle_plan_service`）造一个 `PositionView` 对象同时传给两者——**避免出现 dict/对象两套契约**。
 
 **`armed` 是明日预案的主体**，因为它的语义天然是「条件还差一步，明日大概率会到」。
 

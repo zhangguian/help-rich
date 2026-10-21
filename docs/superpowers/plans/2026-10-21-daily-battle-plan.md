@@ -515,6 +515,34 @@ def test_flow_missing_when_empty_list():
     assert _dim(out, "flow")["state"] == "missing"
 
 
+def test_flow_neutral_when_float_sum_is_zero():
+    """浮点零和:[38.6, -12.4, -26.2] 的和是 3.55e-15 而非精确 0,必须归一到 0 → 中性"""
+    flows = [{"name": "A", "netamount_yi": 38.6}, {"name": "B", "netamount_yi": -12.4},
+             {"name": "C", "netamount_yi": -26.2}]
+    out = build_outlook(_klines([10.0] * 30), None, flows)
+    d = _dim(out, "flow")
+    assert d["score"] == 0
+    assert d["state"] == "flat"
+
+
+def test_flow_missing_when_all_netamount_are_none():
+    """全部板块净额为 None = 根本没有板块资金数据 → missing(不能算 flat)"""
+    flows = [{"name": "A", "netamount_yi": None}, {"name": "B", "netamount_yi": None}]
+    out = build_outlook(_klines([10.0] * 30), None, flows)
+    d = _dim(out, "flow")
+    assert d["state"] == "missing"
+    assert d["score"] == 0
+
+
+def test_flow_bear_detail_has_no_double_negative():
+    """净流出文案用绝对值,不出现「净流出合计 -3.00 亿」这种双重否定"""
+    flows = [{"name": "煤炭", "netamount_yi": -1.0}, {"name": "钢铁", "netamount_yi": -2.0}]
+    out = build_outlook(_klines([10.0] * 30), None, flows)
+    detail = _dim(out, "flow")["detail"]
+    assert "-3.00" not in detail
+    assert "3.00" in detail
+
+
 # ---------------- 结论合成 ----------------
 
 def test_unknown_when_all_dims_missing():
@@ -636,6 +664,7 @@ MIN_KLINES_VOLUME = 6        # 今日 + 前 5 日
 MIN_KLINES_MA10 = 11         # 算 MA10 至少 11 根
 MIN_KLINES_MA20 = 21         # 算 MA20 至少 21 根
 BULLISH_MIN_EFFECTIVE_DIMS = 2  # 判「偏多」所需的最少有效维度数
+FLOW_TOTAL_EPS = 1e-9           # 板块资金净额归零阈值(浮点零和保护)
 
 
 def _f(v: Any) -> Optional[float]:
@@ -734,10 +763,18 @@ def _flow_dim(sector_flows: list[dict] | None) -> dict[str, Any]:
     判定按**净流入总额符号**,不是「有无正流入」——
     「有正有负」蕴含「存在正流入」,按有无判定会让偏多与中性两档互相排斥。
     总额: >0 偏多 / <0 偏空 / ==0 中性。
+
+    ⚠️ 两个诚实性要点(2026-10-21 复审发现,必须保留):
+    1. **浮点零和**: [38.6, -12.4, -26.2] 的和是 3.55e-15 而非精确 0,
+       直接用 `total > 0` 判会误判成偏多,并渲染出「净流入合计 0.00 亿」这种
+       自相矛盾的文案。故用 FLOW_TOTAL_EPS 把 |total| < 1e-9 归一为 0。
+    2. **全部板块净额都是 None** 时 = 根本没有板块资金数据,必须判 **missing**
+       而不是 flat。否则会在完全没有该维度数据时对外宣称「4/4 维度规则推断」。
     """
     if not sector_flows:
         return _dim("flow", "板块资金", 0, "missing", "板块资金流数据不可用")
     total = 0.0
+    valid = 0
     top: tuple[float, str] | None = None
     for f in sector_flows:
         if not isinstance(f, dict):
@@ -745,9 +782,14 @@ def _flow_dim(sector_flows: list[dict] | None) -> dict[str, Any]:
         net = _f(f.get("netamount_yi"))
         if net is None:
             continue
+        valid += 1
         total += net
         if net > 0 and (top is None or net > top[0]):
             top = (net, str(f.get("name") or ""))
+    if valid == 0:
+        return _dim("flow", "板块资金", 0, "missing", "板块资金流无有效净额数据")
+    if abs(total) < FLOW_TOTAL_EPS:
+        total = 0.0
     if total > 0:
         score = 1
         detail = (
@@ -756,7 +798,7 @@ def _flow_dim(sector_flows: list[dict] | None) -> dict[str, Any]:
         )
     elif total < 0:
         score = -1
-        detail = f"板块资金净流出合计 {total:.2f} 亿,无主攻方向"
+        detail = f"板块资金净流出合计 {abs(total):.2f} 亿,无主攻方向"
     else:
         score = 0
         detail = "板块资金多空抵消,无明确主攻方向"
@@ -927,6 +969,14 @@ def _action(kind="entry", status="armed", price=10.0, label="支撑企稳建仓"
     }
 
 
+class _Pos:
+    """持仓视图(属性形状,与 services/position_status.resolve_position_status 同契约)"""
+
+    def __init__(self, shares=0, avg_cost=0.0):
+        self.shares = shares
+        self.avg_cost = avg_cost
+
+
 def _decision(actions=None, **kw):
     d = {
         "stock_code": "001896.SZ", "stock_name": "豫能控股",
@@ -948,7 +998,7 @@ def _decision(actions=None, **kw):
 
 def test_armed_action_becomes_plan_item():
     d = _decision([_action(status="armed", price=9.62)])
-    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    items = build_items(d, _Pos(600, 15.578))
     assert len(items) == 1
     it = items[0]
     assert it["item_kind"] == "entry"
@@ -995,14 +1045,14 @@ def test_blocked_action_becomes_unlock_item():
 def test_direction_mapping_buy_kinds():
     for kind in ("entry", "add", "t_buyback"):
         d = _decision([_action(kind=kind, status="armed")])
-        items = build_items(d, {"shares": 100, "avg_cost": 10.0})
+        items = build_items(d, _Pos(100, 10.0))
         assert items and items[0]["direction"] == "buy", kind
 
 
 def test_direction_mapping_sell_kinds():
     for kind in ("exit", "stop", "t_sell"):
         d = _decision([_action(kind=kind, status="armed")])
-        items = build_items(d, {"shares": 100, "avg_cost": 10.0})
+        items = build_items(d, _Pos(100, 10.0))
         assert items and items[0]["direction"] == "sell", kind
 
 
@@ -1017,14 +1067,14 @@ def test_watch_action_direction_none():
 def test_stop_loss_item_only_when_has_position():
     d = _decision(stop_loss={"price": 9.62, "basis": "参考支撑 9.92 元 × 0.97"})
     assert build_items(d, None) == []
-    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    items = build_items(d, _Pos(600, 15.578))
     kinds = [i["item_kind"] for i in items]
     assert "stop" in kinds
 
 
 def test_stop_loss_item_invalid_if():
     d = _decision(stop_loss={"price": 9.62, "basis": "参考支撑 9.92 元 × 0.97"})
-    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    items = build_items(d, _Pos(600, 15.578))
     stop = next(i for i in items if i["item_kind"] == "stop")
     assert stop["direction"] == "sell"
     assert stop["trigger_price"] == 9.62
@@ -1037,7 +1087,7 @@ def test_t_plan_splits_into_two_items():
         "sell_trigger": "冲高至 10.50 元附近卖出 T 仓", "buyback_trigger": "回落至 9.20 元附近买回",
         "base_position_pct": "≥50%", "unsuitable_signals": "", "needs_position": False,
     })
-    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    items = build_items(d, _Pos(600, 15.578))
     tp = [i for i in items if i["item_kind"] in ("t_sell", "t_buyback")]
     assert len(tp) == 2
     sell = next(i for i in tp if i["item_kind"] == "t_sell")
@@ -1048,7 +1098,7 @@ def test_t_plan_splits_into_two_items():
 
 def test_t_plan_skipped_when_not_suitable():
     d = _decision()   # suitable=False
-    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    items = build_items(d, _Pos(600, 15.578))
     assert [i for i in items if i["item_kind"].startswith("t_")] == []
 
 
@@ -1064,7 +1114,7 @@ def test_t_plan_skipped_when_no_position():
 
 def test_do_not_items():
     d = _decision(do_not=["下跌通道中不要抄底", "距上次卖出仅 1 天,勿频繁操作"])
-    items = build_items(d, {"shares": 600, "avg_cost": 15.578})
+    items = build_items(d, _Pos(600, 15.578))
     dn = [i for i in items if i["item_kind"] == "do_not"]
     assert len(dn) == 2
     assert all(i["direction"] == "none" for i in dn)
@@ -1081,7 +1131,7 @@ def test_entry_invalid_if_uses_097():
 
 def test_exit_invalid_if_uses_103():
     d = _decision([_action(kind="exit", status="armed", price=12.03)])
-    items = build_items(d, {"shares": 100, "avg_cost": 10.0})
+    items = build_items(d, _Pos(100, 10.0))
     assert "12.39" in items[0]["invalid_if"]
 
 
@@ -1091,7 +1141,7 @@ def test_invalid_if_present_on_every_item():
         stop_loss={"price": 9.62, "basis": "b"},
         do_not=["别动"],
     )
-    items = build_items(d, {"shares": 100, "avg_cost": 10.0})
+    items = build_items(d, _Pos(100, 10.0))
     for it in items:
         assert it["invalid_if"], it
 
@@ -1099,7 +1149,7 @@ def test_invalid_if_present_on_every_item():
 # ---------------- 边界 ----------------
 
 def test_empty_actions_returns_empty_list():
-    assert build_items(_decision([]), {"shares": 100, "avg_cost": 10.0}) == []
+    assert build_items(_decision([]), _Pos(100, 10.0)) == []
 
 
 def test_action_with_none_price_yields_none_trigger():
@@ -1155,6 +1205,8 @@ from __future__ import annotations
 from typing import Any, Optional
 
 # 决策引擎 kind → 预案方向
+# ⚠️ 只列**会被查询**的 kind。unlock / do_not 不在此表:
+# unlock 项的 direction 继承被它派生的原动作 kind;do_not 项恒为 none(直接写死)。
 KIND_DIRECTION: dict[str, str] = {
     "entry": "buy",
     "add": "buy",
@@ -1163,8 +1215,6 @@ KIND_DIRECTION: dict[str, str] = {
     "stop": "sell",
     "t_sell": "sell",
     "watch": "none",
-    "unlock": "none",   # 由 blocked 派生,方向在转换时覆盖
-    "do_not": "none",
 }
 
 # 失效条件系数(显式四则运算,不是拍脑袋的魔法数)
@@ -1182,17 +1232,25 @@ def _f(v: Any) -> Optional[float]:
         return None
 
 
-def _has_position(position: dict | None) -> bool:
-    if not position:
+def _has_position(position) -> bool:
+    """持仓判定:`position` 须为含 `.shares` **属性**的对象。
+
+    ⚠️ 契约统一(2026-10-21 跨任务裁决):本模块与
+    `services/position_status.resolve_position_status` **统一用属性形状**,
+    不用 dict —— 后者的契约已写进 docstring 并通过 Task 1 复审,
+    改它要动既有代码(且 `api/diagnose.py` 在用);而本模块是新代码,改它零成本。
+    接线层(Task 6)造一个 PositionView 同时传给两者。
+    """
+    if position is None:
         return False
     try:
-        return int(position.get("shares") or 0) > 0
+        return int(getattr(position, "shares", 0) or 0) > 0
     except (TypeError, ValueError):
         return False
 
 
 def _invalid_if(item_kind: str, direction: str, price: Optional[float],
-                basis: list[str], label: str) -> str:
+                label: str) -> str:
     """算失效条件(不得为空,除非是恒成立的别动项)"""
     if item_kind == "do_not":
         return "该别动项恒成立,明日仍然有效"
@@ -1271,8 +1329,12 @@ def build_todos(decision: dict) -> list[dict]:
     return out
 
 
-def build_items(decision: dict, position: dict | None) -> list[dict]:
-    """明日操作预案项(纯函数)"""
+def build_items(decision: dict, position) -> list[dict]:
+    """明日操作预案项(纯函数)
+
+    `position` 须为含 `.shares` **属性**的对象(或 None)——与
+    `services/position_status.resolve_position_status` 同契约(属性形状,不是 dict)。
+    """
     code = decision.get("stock_code") or ""
     name = decision.get("stock_name")
     _, armed, blocked = _split_actions(decision)
@@ -1288,7 +1350,7 @@ def build_items(decision: dict, position: dict | None) -> list[dict]:
             code, name, kind, direction,
             a.get("label") or "", price,
             a.get("condition") or "", basis,
-            _invalid_if(kind, direction, price, basis, a.get("label") or ""),
+            _invalid_if(kind, direction, price, a.get("label") or ""),
             "armed",
         ))
 
@@ -2350,6 +2412,63 @@ async def test_build_plan_returns_three_sections(monkeypatch):
     assert plan["outlook"]["stance"] in ("bullish", "bearish", "neutral", "unknown")
     assert len(plan["outlook"]["dims"]) == 4
     assert plan["meta"]["scope_count"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_build_plan_puts_now_actions_into_review_pending_todos(monkeypatch):
+    """status=="now" 的动作必须进 review.pending_todos(今日未执行待办)
+
+    这是 spec §4.4.2 三路分流的核心:now 不进明日预案,只进复盘待办。
+    mock 让止损位(9.95)高于现价(9.9)→ 决策引擎产出 status=="now" 的 stop 动作。
+    """
+    async def _pos():
+        return [_stock()]
+    async def _fav():
+        return []
+    monkeypatch.setattr(svc, "_load_positions", _pos)
+    monkeypatch.setattr(svc, "_load_favorites", _fav)
+
+    async def _k(code, *a, **kw):
+        return [{"date": "2026-10-21", "open": 9.0, "high": 10.0, "low": 8.8,
+                 "close": 9.9, "volume": 100}]
+    monkeypatch.setattr(svc, "fetch_klines", _k)
+
+    async def _ind(klines):
+        return {"latest_close": 9.9, "ma": {"ma5": 9.8, "ma10": 9.5},
+                "position": {"p20": 8.5, "p80": 11.0, "stop_loss_price": 9.95,
+                             "support_price": 8.5, "risk_band": "mid"},
+                "volume": {"ratio": 1.0}, "kdj": {"zone": "neutral", "cross": None},
+                "channel": {"state": "flat"}, "support_pressure": {"pressure": [11.0]},
+                "stabilize": {"state": False, "price": None}, "signal": {"score": 50}}
+    monkeypatch.setattr(svc, "compute_indicators", _ind)
+
+    async def _quote(codes):
+        return []
+    monkeypatch.setattr(svc, "_load_quotes", _quote)
+    async def _ctx(code, *a, **kw):
+        from app.services.decision_service import MarketContext
+        return MarketContext(degraded=[])
+    monkeypatch.setattr(svc, "get_market_context", _ctx)
+    async def _sent():
+        return {"up_total": 50, "down_total": 50}
+    monkeypatch.setattr(svc, "fetch_market_sentiment", _sent)
+    async def _flows(*a, **kw):
+        return [{"name": "电子", "netamount_yi": 1.0}]
+    monkeypatch.setattr(svc, "get_sector_fund_flow", _flows)
+    async def _txns(*a, **kw):
+        return []
+    monkeypatch.setattr(svc, "_load_transactions", _txns)
+    async def _save(*a, **kw):
+        return 1
+    monkeypatch.setattr(svc, "_persist", _save)
+
+    plan = await svc.build_plan(date(2026, 10, 21))
+    todos = plan["review"]["pending_todos"]
+    assert len(todos) >= 1
+    assert todos[0]["stock_code"] == "001896.SZ"
+    assert todos[0]["label"]
+    # now 动作不得出现在明日预案里
+    assert all(i["status_now"] != "now" for i in plan["items"])
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -2381,6 +2500,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
@@ -2550,7 +2670,8 @@ async def _build_one_decision(
     shares = int(stock.get("shares") or 0)
     avg_cost = float(stock.get("avg_cost") or 0.0)
     position_status, _pct = resolve_position_status(
-        _FakePos(shares, avg_cost) if shares > 0 else None, price_for_status, fallback
+        PositionView(shares=shares, avg_cost=avg_cost) if shares > 0 else None,
+        price_for_status, fallback
     )
 
     prev_close = None
@@ -2586,12 +2707,18 @@ async def _build_one_decision(
     return decision, todos, errors
 
 
-class _FakePos:
-    """给 resolve_position_status 用的最小持仓视图"""
+@dataclass(frozen=True)
+class PositionView:
+    """持仓视图 —— 同时满足两个下游契约(**属性形状,不是 dict**):
 
-    def __init__(self, shares: int, avg_cost: float):
-        self.shares = shares
-        self.avg_cost = avg_cost
+    - `services/position_status.resolve_position_status`:须含 `.shares` / `.avg_cost` 属性
+    - `services/plan_item_builder.build_items`:须含 `.shares` 属性
+
+    两边统一成属性形状(2026-10-21 跨任务裁决),避免接线层出现 dict/对象两套契约。
+    """
+
+    shares: int
+    avg_cost: float
 
 
 # ============================ 目标交易日 ============================
@@ -2667,12 +2794,15 @@ async def build_plan(plan_date: date) -> dict[str, Any]:
         if decision is None:
             continue
         todos.extend(stock_todos or [])
-        pos = {"shares": stock.get("shares", 0), "avg_cost": stock.get("avg_cost", 0.0)}
+        pos = PositionView(
+            shares=int(stock.get("shares") or 0),
+            avg_cost=float(stock.get("avg_cost") or 0.0),
+        )
         items.extend(build_items(decision, pos if stock.get("in_position") else None))
 
     # ---- 昨日兑现(闭环) ----
     prev_date = (plan_date - timedelta(days=1)).isoformat()
-    review = await _build_review(prev_date, plan_date, degraded)
+    review = await _build_review(prev_date, plan_date, degraded, todos)
 
     target_date, estimated = _next_trading_day(index_klines, plan_date)
     meta = {
@@ -2699,14 +2829,25 @@ async def build_plan(plan_date: date) -> dict[str, Any]:
     return plan
 
 
-async def _build_review(prev_date: str, plan_date: str, degraded: list[str]) -> dict[str, Any]:
-    """今日复盘 = 昨日预案兑现比对 + 今日待办"""
+async def _build_review(
+    prev_date: str,
+    plan_date: str,
+    degraded: list[str],
+    pending_todos: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """今日复盘 = 昨日预案兑现比对 + 今日待办
+
+    `pending_todos` = 本次各票决策里 status=="now" 的动作(条件已满足但用户还没做)。
+    它们**必须进复盘段**:写进明日预案是「已经过期的建议」,只有推到今日待办
+    才能逼用户面对(见 spec §4.4.2 三路分流)。
+    """
+    todos = list(pending_todos or [])
     prev = await battle_plan_repo.get_plan(prev_date)
     if not prev:
         return {
             "market": None,
             "fulfillment": None,
-            "pending_todos": [],
+            "pending_todos": todos,
             "note": "没有找到昨日作战计划,今日暂无兑现比对",
         }
     prev_items = await battle_plan_repo.get_items(prev["id"])
@@ -2745,7 +2886,7 @@ async def _build_review(prev_date: str, plan_date: str, degraded: list[str]) -> 
             }
             for i in checked
         ]},
-        "pending_todos": [],
+        "pending_todos": todos,
         "note": None,
     }
 
