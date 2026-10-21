@@ -991,3 +991,55 @@ class PaperEquitySnapshot(Base):
 
     def __repr__(self) -> str:
         return f"<PaperEquitySnapshot {self.snapshot_date} equity={self.total_equity}>"
+
+
+# ============================================================
+# === 阶段9:每日作战计划(日报 + 逐票预案) ===
+# ============================================================
+
+
+class BattlePlan(Base):
+    """每日作战日报(阶段9)
+
+    一行 = 一个生成日 D 的日报。三段内容:
+    - outlook_json: 明日市场预期(对 D+1 的规则推断)
+    - review_json : 今日复盘(D 当天实际 + 昨日预案兑现比对)
+    - items       : 明日操作预案(目标日 = D+1,落在 battle_plan_items)
+    """
+    __tablename__ = "battle_plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    plan_date: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
+    outlook_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meta_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+
+class BattlePlanItem(Base):
+    """日报内的一条逐票预案(目标日 = plan_date 的次日)"""
+    __tablename__ = "battle_plan_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    plan_id: Mapped[int] = mapped_column(
+        ForeignKey("battle_plans.id"), nullable=False, index=True
+    )
+    plan_date: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
+    stock_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    item_kind: Mapped[str] = mapped_column(String, nullable=False)
+    direction: Mapped[str] = mapped_column(String, nullable=False)   # buy/sell/none
+    label: Mapped[str] = mapped_column(String, nullable=False)
+    trigger_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trigger_condition: Mapped[str] = mapped_column(Text, nullable=False)
+    basis_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    invalid_if: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status_now: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str | None] = mapped_column(String, nullable=True)  # 溯源用(spec §4.4.4)
+    fulfillment: Mapped[str] = mapped_column(
+        String, default="pending", nullable=False
+    )  # pending/touched/executed/missed/n_a
+    fulfillment_note: Mapped[str | None] = mapped_column(Text, nullable=True)
