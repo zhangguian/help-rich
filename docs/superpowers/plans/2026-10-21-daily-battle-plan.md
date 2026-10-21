@@ -201,6 +201,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_decision_api.py tests/test_stock_advice.py -q --no-header -p no:cacheprovider
 ```
 
@@ -335,6 +338,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_decision_api.py tests/test_stock_advice.py -q --no-header -p no:cacheprovider
 ```
 
@@ -626,6 +632,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_outlook_service.py -q --no-header -p no:cacheprovider
 ```
 
@@ -911,6 +920,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_outlook_service.py -q --no-header -p no:cacheprovider
 ```
 
@@ -1313,6 +1325,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_plan_item_builder.py -q --no-header -p no:cacheprovider
 ```
 
@@ -1683,6 +1698,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_plan_item_builder.py -q --no-header -p no:cacheprovider
 ```
 
@@ -2044,6 +2062,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_fulfillment_checker.py -q --no-header -p no:cacheprovider
 ```
 
@@ -2326,6 +2347,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_fulfillment_checker.py -q --no-header -p no:cacheprovider
 ```
 
@@ -2458,6 +2482,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_battle_plan_repo.py -q --no-header -p no:cacheprovider
 ```
 
@@ -2742,6 +2769,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_battle_plan_repo.py -q --no-header -p no:cacheprovider
 ```
 
@@ -3125,6 +3155,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_battle_plan_service.py -q --no-header -p no:cacheprovider
 ```
 
@@ -3602,6 +3635,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_battle_plan_service.py -q --no-header -p no:cacheprovider
 ```
 
@@ -4263,6 +4299,9 @@ def test_t_buyback_ignores_other_stock_transaction():
 Set-Location 'D:\zga-study\rich\backend'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_fulfillment_checker.py tests/test_outlook_service.py tests/test_battle_plan_service.py -q --no-header -p no:cacheprovider
 & '.\.venv\Scripts\python.exe' -m pytest -q --no-header -p no:cacheprovider
 & '.\.venv\Scripts\python.exe' -m ruff check app/services/fulfillment_checker.py app/services/outlook_service.py app/services/battle_plan_service.py tests/test_fulfillment_checker.py tests/test_outlook_service.py tests/test_battle_plan_service.py
@@ -4340,6 +4379,9 @@ def test_deviation_exactly_3pct_not_disclosed():
 Set-Location 'D:\zga-study\rich\backend'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_fulfillment_checker.py tests/test_outlook_service.py tests/test_battle_plan_service.py -q --no-header -p no:cacheprovider
 & '.\.venv\Scripts\python.exe' -m pytest -q --no-header -p no:cacheprovider
 & '.\.venv\Scripts\python.exe' -m ruff check app/services/fulfillment_checker.py app/services/outlook_service.py app/services/battle_plan_service.py tests/test_fulfillment_checker.py tests/test_outlook_service.py tests/test_battle_plan_service.py
@@ -4462,6 +4504,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_battle_plan_api.py -q --no-header -p no:cacheprovider
 ```
 
@@ -4611,6 +4656,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest tests/test_battle_plan_api.py -q --no-header -p no:cacheprovider
 ```
 
@@ -5469,6 +5517,9 @@ Set-Location 'D:\zga-study\rich\backend'
 $env:DATABASE_URL='sqlite+aiosqlite:///./.pytest_tmp/pytest_run.db'
 $env:PYTHONIOENCODING='utf-8'
 $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+# 本机未设 TMP/TEMP → tempfile 会落成 backend/tmpXXXXXXXX 的 0 字节垃圾文件
+$env:TEMP='D:\zga-study\rich\backend\.pytest_tmp'
+$env:TMP='D:\zga-study\rich\backend\.pytest_tmp'
 & '.\.venv\Scripts\python.exe' -m pytest -q --no-header -p no:cacheprovider
 ```
 

@@ -26,6 +26,8 @@ backend/.pytest_tmp/
 # pytest 自带的 tmp_path scratch 基目录(默认 <tmp>/pytest-of-<user>,
 # 某些环境下 TMP 指向工程目录,于是落到 backend/pytest-of-<user>/)
 pytest-of-*/
+# tempfile 落到工程目录时会生成 0 字节的 backend/tmpXXXXXXXX(本机未设 TMP/TEMP)
+backend/tmp*
 
 # 对标参考源码(临时解压,不入库)
 .tmp_panwatch/
