@@ -8,8 +8,15 @@
 对着已深套的持仓说「首仓 30%,可以建仓」(2026-10-21 评审发现的真实事故)。
 
 本模块**纯函数、零 IO**,只接受已取好的数据。
-`api/stock.py` 保留同名私有名做薄封装,既有 13 处测试 import 不破。
+`api/stock.py` 保留同名私有名,做法是**别名 re-export**(`import ... as _xxx`,
+不是 wrapper 薄封装),既有 **15 处**引用不破:
+- `backend/tests/` 下 9 处:`test_decision_api.py` 4 处调用、
+  `test_stock_advice.py` 1 处 from-import + 4 处调用
+- `backend/app/api/diagnose.py` 6 处:3 个 import 名 + 3 处调用引用
+
+(计数口径 = 代码里的名字引用数,不含测试函数名与文档里的文字提及)
 """
+
 from __future__ import annotations
 
 import logging
@@ -43,6 +50,13 @@ def resolve_position_status(
     连兜底价都没有(极少见的 K 线也失败)时,保守取 'loss' ——
     宁可给「解套参考 + 止损/减仓」,也绝不能给「可以建仓」。
 
+    **参数契约(调用方必须满足,不满足则直接抛异常)**:
+    `position` 须为含 `.shares` 与 `.avg_cost` **属性**的对象(不接 dict);
+    传 dict 需先转换 —— 否则 `AttributeError: 'dict' object has no attribute 'shares'`。
+    `shares` 须为 int —— 传字符串会抛 `TypeError: '<=' not supported between
+    instances of 'str' and 'int'`。(这两处判定都在 try 之外,不会被兜底分支吞掉)
+    `avg_cost` 则允许数字字符串(会被 `float()` 正常转换,故不抛异常)。
+
     Returns:
         (status, cost_basis_pct)
         status: empty / profit / loss
@@ -59,8 +73,8 @@ def resolve_position_status(
         cost = float(position.avg_cost)
         if cost <= 0 or cur <= 0:
             return "loss", None
-        pct = (cur / cost - 1.0)
-        # 持平也归 'profit'(规则是 >= )—— 绝不能归 'empty':
+        pct = cur / cost - 1.0
+        # 持平也归 'profit'(§5 的规则是 >= )—— 绝不能归 'empty':
         # 'empty' 会让决策卡给出「建仓参考 / 首仓 X%」,对已持仓者是误导。
         if cur >= cost:
             return "profit", pct
@@ -80,9 +94,7 @@ def kline_fallback_price(klines: list[dict] | None) -> str | None:
         return None
 
 
-def sanitize_current_price(
-    quote, klines: list[dict] | None
-) -> tuple[str | None, str | None]:
+def sanitize_current_price(quote, klines: list[dict] | None) -> tuple[str | None, str | None]:
     """校验 current_price 与 K 线最新 close 的偏离度;偏差 > 10% 视为数据源异常,降级 None。
 
     Returns:
@@ -95,6 +107,7 @@ def sanitize_current_price(
         return None, None
     current_price = str(price)
     current_price_date = quote.timestamp.date().isoformat() if quote.timestamp else None
+    # 与 K 线最新收盘价比对,偏差过大则降级
     if klines:
         try:
             latest_close = float(klines[-1]["close"])
@@ -104,7 +117,9 @@ def sanitize_current_price(
                 if deviation > 0.10:
                     logger.warning(
                         "current_price 与 K 线 close 偏差过大: quote=%s kline=%s 偏差 %.2f%%, 降级",
-                        current_price, latest_close, deviation * 100,
+                        current_price,
+                        latest_close,
+                        deviation * 100,
                     )
                     return None, None
         except (ValueError, TypeError):
