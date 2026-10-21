@@ -62,7 +62,18 @@ class TestSectorFundFlow:
         result = asyncio.run(get_sector_fund_flow(fenlei=1, num=10))
         assert len(result) == 1
         assert result[0]["name"] == "电子信息"
-        assert result[0]["inamount_yi"] == 117267159156.0
+        # ⚠️ 单位(2026-10-21 修正):新浪板块资金流的 inamount/outamount/netamount
+        # 原始单位是【元】,turnover 原始是【亿】。后端统一在源头换算成【亿】,
+        # 所以这里的 *_yi 才是真的「亿」。此前直接透传元值却叫 _yi,
+        # 让「净流入 ≥ 1 亿」这类阈值恒成立、UI 显示成 1172.67 亿 → 117267159156 亿。
+        assert result[0]["inamount_yi"] == pytest.approx(117267159156 / 1e8)
+        assert result[0]["outamount_yi"] == pytest.approx(99938173033 / 1e8)
+        assert result[0]["netamount_yi"] == pytest.approx(17328986122 / 1e8)
+        assert result[0]["turnover_yi"] == 537.0        # turnover 原始就是亿,原样透传
+        # 自洽:流入 - 流出 = 净额
+        assert result[0]["inamount_yi"] - result[0]["outamount_yi"] == pytest.approx(
+            result[0]["netamount_yi"]
+        )
         assert result[0]["top_stock"]["code"] == "sz300418"
 
     def test_invalid_response_raises(self, monkeypatch):

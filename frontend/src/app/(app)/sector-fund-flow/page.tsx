@@ -69,7 +69,10 @@ const SORT_OPTIONS: Array<{ value: string; label: string }> = [
 ];
 
 const pct = (v: number) => `${(v * 100).toFixed(2)}%`;
-const fmtYi = (v: number) => `${(v / 1e8).toFixed(2)}亿`;
+// 后端已把新浪的 netamount/inamount/outamount(原始单位:元)换算成【亿】,
+// turnover 原始就是【亿】,所以这里直接格式化,不要再除 1e8
+// (2026-10-21 修正:此前统一除 1e8,导致净流入显示成 51.46 亿 / 成交额显示成 0.00 亿)
+const fmtYi = (v: number) => `${v.toFixed(2)}亿`;
 
 export default function SectorFundFlowPage() {
   const [fenlei, setFenlei] = useState(0);

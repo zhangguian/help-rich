@@ -21,6 +21,9 @@ FENLEI_MAP = {
 # 异动阈值:净额变化绝对值 ≥ 此值视为异动(亿元)
 SECTOR_ALERT_THRESHOLD_YI = 1.0
 
+# 元 → 亿 的换算系数(新浪板块资金流的 inamount/outamount/netamount 原始单位是元)
+_YUAN_PER_YI = 1e8
+
 # 调度器上一次拉取的快照 {fenlei: [(name, netamount_yi, top_stock_code), ...]}
 _prev_snapshots: dict[int, list[tuple[str, float, str | None]]] = {}
 
@@ -28,7 +31,23 @@ _prev_snapshots: dict[int, list[tuple[str, float, str | None]]] = {}
 async def get_sector_fund_flow(
     fenlei: int = 0, num: int = 20, sort: str = "netamount"
 ) -> list[dict[str, Any]]:
-    """拉板块资金流排行(guide §7 新浪)"""
+    """拉板块资金流排行(guide §7 新浪)
+
+    ⚠️ **单位(2026-10-21 实测新浪原始返回,已按此换算)**:
+
+    | 新浪字段 | 原始值示例 | 真实单位 |
+    | --- | --- | --- |
+    | `turnover`   | `315.971`            | **亿** |
+    | `inamount`  | `48047498610.7100`   | **元** |
+    | `outamount` | `42901278334.8300`   | **元** |
+    | `netamount` | `5146220275.8800`    | **元** |
+
+    自洽校验:`inamount - outamount == netamount`(480.47亿 − 429.01亿 = 51.46亿)。
+
+    此前三个 `*_yi` 字段直接透传了**元**却叫 `_yi`,导致下游把 51.46 亿显示成
+    「5146220275.88 亿」,并且让「净流入 ≥ 1 亿」这类阈值**恒成立**。
+    现统一在**源头**换算成**亿**,下游(选股评分 / LLM 提示词 / 板块异动阈值 / 决策卡)随之全部修正。
+    """
     raw = await fetch_sector_fund_flow_rank(fenlei=fenlei, num=num, sort=sort)
     out: list[dict[str, Any]] = []
     for r in raw:
@@ -39,10 +58,10 @@ async def get_sector_fund_flow(
             "name": r.get("name", ""),
             "avg_price": float(r.get("avg_price", 0) or 0),
             "change_pct": float(r.get("avg_changeratio", 0) or 0),
-            "turnover_yi": float(r.get("turnover", 0) or 0),
-            "inamount_yi": float(r.get("inamount", 0) or 0),
-            "outamount_yi": float(r.get("outamount", 0) or 0),
-            "netamount_yi": float(r.get("netamount", 0) or 0),
+            "turnover_yi": float(r.get("turnover", 0) or 0),          # 原始就是亿
+            "inamount_yi": float(r.get("inamount", 0) or 0) / _YUAN_PER_YI,
+            "outamount_yi": float(r.get("outamount", 0) or 0) / _YUAN_PER_YI,
+            "netamount_yi": float(r.get("netamount", 0) or 0) / _YUAN_PER_YI,
             "ratioamount": float(r.get("ratioamount", 0) or 0),
             "top_stock": {
                 "code": r.get("ts_symbol", ""),
