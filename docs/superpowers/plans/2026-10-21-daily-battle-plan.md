@@ -4448,7 +4448,13 @@ async def read_plan(plan_date: str | None = Query(default=None, alias="date")) -
             raise HTTPException(status_code=422, detail="日期格式应为 YYYY-MM-DD") from None
     else:
         target = date.today()
-    plan = await get_plan(target)
+    try:
+        plan = await get_plan(target)
+    except Exception as e:  # noqa: BLE001
+        # 迁移未执行时会是 `no such table: battle_plans` —— 必须转成可读的 500,
+        # 不能把裸栈/原始驱动错误抛给前端
+        logger.exception("读取作战计划失败")
+        raise HTTPException(status_code=500, detail=f"读取作战计划失败: {e}") from e
     if plan is None:
         raise HTTPException(
             status_code=404,
@@ -4612,8 +4618,15 @@ export interface BattlePlanFulfillment {
   }>;
 }
 
+/** 今日大盘实况(D 当天)—— 事实转述,不含任何指标推断 */
+export interface BattlePlanMarket {
+  indexClose: number | null;
+  changePct: number | null;
+  volumeNote: string | null;
+}
+
 export interface BattlePlanReview {
-  market: unknown;
+  market: BattlePlanMarket | null;
   fulfillment: BattlePlanFulfillment | null;
   /** 今日待办(now 动作)—— 早于该字段落库的日报可能没有它,故可选 */
   pendingTodos?: BattlePlanTodo[];
@@ -4999,51 +5012,71 @@ const LEVEL_STYLE: Record<string, string> = {
 };
 
 export function ReviewCard({ review }: { review: BattlePlanReview | null }) {
-  if (!review || !review.fulfillment) {
-    return (
-      <Card>
-        <h3 className="text-sm font-semibold">今日复盘</h3>
-        <p className="mt-2 text-xs text-text-sec">
-          {review?.note ?? '还没有可比的昨日预案 —— 生成一次作战计划后,明天这里会显示兑现情况。'}
-        </p>
-      </Card>
-    );
-  }
-
-  const f = review.fulfillment;
-  const todos = review.pendingTodos ?? [];
+  const todos = review?.pendingTodos ?? [];
   return (
     <Card>
       <h3 className="text-sm font-semibold">今日复盘</h3>
 
-      <div className="mt-2 text-xs text-text-sec">
-        昨日预案 {f.total} 条
-      </div>
-      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs">
-        <span className="text-text-pri">执行 {f.executed}</span>
-        <span className="text-warn">触及未做 {f.touched}</span>
-        <span className="text-text-sec">未触发 {f.missed}</span>
-        {f.noData > 0 && <span className="text-warn">数据不足 {f.noData}</span>}
-      </div>
-      <div className={`mt-1.5 text-xs font-semibold ${LEVEL_STYLE[f.verdictLevel] ?? ''}`}>
-        {f.verdictLabel}
-      </div>
-
-      {todos.length > 0 && (
-        <div className="mt-3 border-t border-border-def pt-2">
-          <div className="text-[11px] text-text-ter">今日待办（条件已满足但未处理）</div>
-          <ul className="mt-1 space-y-1">
-            {todos.map((t, i) => (
-              <li key={i} className="text-xs text-text-pri">
-                <span className="font-semibold">{t.stockName ?? t.stockCode}</span>
-                {' · '}
-                {t.label}
-                {t.price !== null && <span className="font-mono"> {t.price.toFixed(2)}</span>}
-                <span className="block text-[11px] text-text-sec">{t.condition}</span>
-              </li>
-            ))}
-          </ul>
+      {/* 今日大盘实况 —— 与兑现比对是两个独立来源:
+          market 是「今天大盘怎么走」(事实),fulfillment 是「昨天预案兑现没」(判定)。
+          两者可能一个有值另一个没有,所以 market 单独渲染,不受下面那个分支影响。 */}
+      {review?.market && (
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs">
+          <span className="text-text-sec">
+            上证 {review.market.indexClose?.toFixed(2) ?? '—'}
+          </span>
+          {review.market.changePct !== null && (
+            <span className={review.market.changePct >= 0 ? 'text-up' : 'text-down'}>
+              {review.market.changePct >= 0 ? '+' : ''}
+              {review.market.changePct.toFixed(2)}%
+            </span>
+          )}
+          {review.market.volumeNote && (
+            <span className="text-text-ter">{review.market.volumeNote}</span>
+          )}
         </div>
+      )}
+
+      {!review || !review.fulfillment ? (
+        <p className="mt-2 text-xs text-text-sec">
+          {review?.note ?? '还没有可比的昨日预案 —— 生成一次作战计划后,明天这里会显示兑现情况。'}
+        </p>
+      ) : (
+        <>
+          <div className="mt-2 text-xs text-text-sec">
+            昨日预案 {review.fulfillment.total} 条
+          </div>
+          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs">
+            <span className="text-text-pri">执行 {review.fulfillment.executed}</span>
+            <span className="text-warn">触及未做 {review.fulfillment.touched}</span>
+            <span className="text-text-sec">未触发 {review.fulfillment.missed}</span>
+            {review.fulfillment.noData > 0 && (
+              <span className="text-warn">数据不足 {review.fulfillment.noData}</span>
+            )}
+          </div>
+          <div
+            className={`mt-1.5 text-xs font-semibold ${LEVEL_STYLE[review.fulfillment.verdictLevel] ?? ''}`}
+          >
+            {review.fulfillment.verdictLabel}
+          </div>
+
+          {todos.length > 0 && (
+            <div className="mt-3 border-t border-border-def pt-2">
+              <div className="text-[11px] text-text-ter">今日待办（条件已满足但未处理）</div>
+              <ul className="mt-1 space-y-1">
+                {todos.map((t, i) => (
+                  <li key={i} className="text-xs text-text-pri">
+                    <span className="font-semibold">{t.stockName ?? t.stockCode}</span>
+                    {' · '}
+                    {t.label}
+                    {t.price !== null && <span className="font-mono"> {t.price.toFixed(2)}</span>}
+                    <span className="block text-[11px] text-text-sec">{t.condition}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
       )}
     </Card>
   );
