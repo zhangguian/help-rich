@@ -10,6 +10,9 @@ backups/
 backend/data*.db
 backend/data/*.db
 backend/data.db
+# 在**项目根目录**跑 alembic/脚本时,相对路径 `sqlite:///./data.db` 会把库建在根上
+# (backend/data.db 是 44MB 真实开发库,绝不入库)
+/data.db
 # SQLite 运行时伴生文件(WAL 模式下必然生成,可达数百 MB,绝不入库)
 backend/data.db-wal
 backend/data.db-shm
