@@ -3256,7 +3256,11 @@ export interface BattlePlan {
   outlook: BattlePlanOutlook;
   review: BattlePlanReview | null;
   items: BattlePlanItem[];
-  todos: BattlePlanTodo[];
+  /**
+   * 仅 `POST /battle-plan/generate` 的响应含 todos;
+   * `GET /battle-plan` 读的是已落库的日报,不含该字段 —— 故为可选。
+   */
+  todos?: BattlePlanTodo[];
   meta: BattlePlanMeta;
 }
 ```
@@ -3346,16 +3350,24 @@ git commit -m "feat(plan): 作战计划 API + 前端类型与客户端
 import { PageShell } from '@/components/shell/PageShell';
 import { PlanPanel } from '@/components/plan/PlanPanel';
 
+/** /plan · 每日作战计划(今日复盘 + 明日市场预期 + 明日逐票操作预案) */
 export default function PlanPage() {
   return (
-    <PageShell>
+    <PageShell
+      title="作战计划"
+      subtitle="今日复盘 + 明日市场预期 + 明日逐票操作预案:明天什么价位做什么,写在这里"
+      icon="🗓"
+    >
       <PlanPanel />
     </PageShell>
   );
 }
 ```
 
-> ⚠️ 先确认 `PageShell` 的 props 契约——看 `frontend/src/app/(app)/brief/page.tsx` 的实际用法（它就是 `<PageShell><BriefPanel /></PageShell>`），照抄。
+> ⚠️ `PageShell` 的 `title: string` 是**必填**（`components/shell/PageShell.tsx` 的 props 类型里没有 `?`）——只传 children 会直接 TS 报错。
+> 参照实现：`frontend/src/app/(app)/brief/page.tsx`（它传了 title / subtitle / icon）。
+> ⚠️ `PageShell` 内部已带 `max-w-6xl mx-auto` 宽度上限（约 1152px），**不要再自己加 max-width**；
+> 两栏布局（`xl:grid-cols-[minmax(0,1fr)_360px]`）在这个内容宽度内成立。
 
 - [ ] **Step 2: 创建明日市场预期卡**
 
