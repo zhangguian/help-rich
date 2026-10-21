@@ -1983,6 +1983,20 @@ def test_deviation_within_3pct_not_disclosed():
     assert "不符" not in out[0]["fulfillment_note"]
 
 
+def test_deviation_exactly_3pct_not_disclosed():
+    """恰好 3% 偏离 → 不披露(**浮点边界**,正是 `_EPS` 存在的原因)
+
+    触发价 10.00 / 成交 10.30:数学上正好 3%,但浮点表示下
+    `abs(10.30 - 10.00) = 0.30000000000000071` > `10.00 * 0.03 = 0.29999999999999999`。
+    没有 `_EPS` 就会把它误判成「超过 3%」而披露 —— 恰好 3% 不该披露。
+    """
+    items = [_item(kind="entry", direction="buy", price=10.00, label="建仓")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.5, low=9.9)]},
+                            [_txn(action="buy", price=10.30)])
+    assert out[0]["fulfillment"] == "executed"
+    assert "不符" not in out[0]["fulfillment_note"]
+
+
 def test_t_buyback_boundary_price_within_epsilon_counts_as_executed():
     """浮点容差:买价 9.384 与下沿 9.2×1.02(=9.383999999999999) 差 1e-15 → 算按计划回补"""
     items = [_item(kind="t_buyback", direction="buy", price=9.20, label="做T回补")]
@@ -3908,7 +3922,10 @@ async def _load_transactions(plan_date: str) -> tuple[list[dict[str, Any]], bool
             if it.get("fulfillment") == "missed":
                 it["fulfillment_note"] = "流水不可用,未核对执行"
             elif it.get("fulfillment") == "touched":
-                it["fulfillment_note"] = "价格已触及触发位,但当日无对应操作(流水不可用,未核对执行)"
+                # ⚠️ 文案里**不能**出现「当日无对应操作」——
+                # 没读到流水 ≠ 当天没操作。触及是真的(有K线),
+                # 但「没做」这句是我们**没核对**出来的,不是事实。
+                it["fulfillment_note"] = "价格已触及触发位,但流水不可用,未核对执行"
 ```
 
 ---
@@ -4197,7 +4214,7 @@ def test_t_buyback_ignores_other_stock_transaction():
 
 ### 本轮必须新增的测试清单
 
-`backend/tests/test_fulfillment_checker.py`（现 30 条 → **33 条**）：
+`backend/tests/test_fulfillment_checker.py`（首轮后 33 条 → **34 条**）：
 
 | 用例 | 锁住的规则 |
 |---|---|
@@ -4206,6 +4223,7 @@ def test_t_buyback_ignores_other_stock_transaction():
 | `test_transaction_proves_execution_even_without_kline` | 当日有流水 → `executed`（不受日K缺失影响） |
 | `test_discipline_item_does_not_consume_transaction`（改写为 unlock 版） | T4-1 |
 | `test_t_buyback_ignores_other_stock_transaction` | T4-3 |
+| `test_deviation_exactly_3pct_not_disclosed` | T4-2 的 `_EPS`（浮点边界锁定） |
 
 `backend/tests/test_outlook_service.py`（新增 **4 条**）：
 
@@ -4254,6 +4272,85 @@ $env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
 - **全量回归 0 failed**。
 - 六个文件 ruff `All checks passed!`。
   （全仓 `ruff check app tests` 有 **224 条历史存量**，不在本轮范围 —— 见 T9 Step 2。）
+
+---
+
+## Task 6 · fix round 2（两条裁决落地）
+
+> **背景**：fix round 1 已落（commit `814adde`，6 文件 / +768 / −67；三文件 90 passed；全量 1255 passed；
+> 19 项判别力破坏实验全部转红 + 复原）。实现者上报两条**待裁决项**，父会话裁决如下。
+
+### R1 · F4 的 `touched` note 文案自相矛盾 → 改文案
+
+**问题**：简报给的文案是「价格已触及触发位，但**当日无对应操作**(流水不可用，未核对执行)」，
+但 F4 的整改目的恰恰是「**不得**说『当日无对应操作』——那是我们没看到，不是没有」。
+前半句说「当日无对应操作」，等于把「没核对」写成了事实，与 F4 的整改目标直接冲突。
+（实现者按简报原文落地，并如实上报了矛盾 —— 判断正确。）
+
+**裁决**：**改文案**，触及分支不再声称「当日无对应操作」。
+
+`backend/app/services/battle_plan_service.py` 的 `_build_review` 里，把
+
+```python
+            elif it.get("fulfillment") == "touched":
+                it["fulfillment_note"] = "价格已触及触发位,但当日无对应操作(流水不可用,未核对执行)"
+```
+
+改成
+
+```python
+            elif it.get("fulfillment") == "touched":
+                # ⚠️ 文案里**不能**出现「当日无对应操作」——
+                # 没读到流水 ≠ 当天没操作。触及是真的(有K线),
+                # 但「没做」这句是我们**没核对**出来的,不是事实。
+                it["fulfillment_note"] = "价格已触及触发位,但流水不可用,未核对执行"
+```
+
+同步更新 `backend/tests/test_battle_plan_service.py` 里断言该文案的用例
+（若它断言的是旧文案字符串 → 改成新字符串；若它断言「不含『当日无对应操作』」→ 不动）。
+
+### R2 · 偏离比较的 `_EPS` 没有用例锁定 → 补 1 条
+
+**问题**：T4-2 改了 `abs(tp - price) > price * DEVIATION_TOLERANCE + _EPS`，
+但既有的两条偏离用例（10.00/10.20 与 10.00/10.40）**破坏 `_EPS` 后依然全绿** → 这次改动等于无锁改动。
+
+**修法**：在 `backend/tests/test_fulfillment_checker.py` 补一条**恰好卡在 3% 边界**的用例
+（代码见 fix round 1 章节的测试清单，完整代码块已写进 Task 4 段的测试代码块）：
+
+```python
+def test_deviation_exactly_3pct_not_disclosed():
+    """恰好 3% 偏离 → 不披露(**浮点边界**,正是 `_EPS` 存在的原因)
+
+    触发价 10.00 / 成交 10.30:数学上正好 3%,但浮点表示下
+    `abs(10.30 - 10.00) = 0.30000000000000071` > `10.00 * 0.03 = 0.29999999999999999`。
+    没有 `_EPS` 就会把它误判成「超过 3%」而披露 —— 恰好 3% 不该披露。
+    """
+    items = [_item(kind="entry", direction="buy", price=10.00, label="建仓")]
+    out = check_fulfillment(items, {"001896.SZ": [_kline(high=10.5, low=9.9)]},
+                            [_txn(action="buy", price=10.30)])
+    assert out[0]["fulfillment"] == "executed"
+    assert "不符" not in out[0]["fulfillment_note"]
+```
+
+**必须验证判别力**：把实现里的 `+ _EPS` 去掉，这条用例**必须转红**；复原后转绿。
+
+### 本轮验收
+
+```powershell
+Set-Location 'D:\zga-study\rich\backend'
+$env:PYTHONIOENCODING='utf-8'
+$env:RICH_TEST_TMP='D:\zga-study\rich\backend\.pytest_tmp\rich'
+& '.\.venv\Scripts\python.exe' -m pytest tests/test_fulfillment_checker.py tests/test_outlook_service.py tests/test_battle_plan_service.py -q --no-header -p no:cacheprovider
+& '.\.venv\Scripts\python.exe' -m pytest -q --no-header -p no:cacheprovider
+& '.\.venv\Scripts\python.exe' -m ruff check app/services/fulfillment_checker.py app/services/outlook_service.py app/services/battle_plan_service.py tests/test_fulfillment_checker.py tests/test_outlook_service.py tests/test_battle_plan_service.py
+```
+
+- 三文件 **91 passed**（34 / 32 / 25）。
+- 全量 **1256 passed, 0 failed**。
+- 6 个文件 ruff `All checks passed!`。
+
+> ⚠️ **行尾陷阱（实现者已踩过一次）**：在 Windows 上用 `Path.write_text()` 复原文件会把 LF 写成 CRLF，
+> 造成整文件级 diff（1700 行）。改文件再复原的脚本**必须用 `newline=""` 或直接读写 bytes**。
 
 ---
 
