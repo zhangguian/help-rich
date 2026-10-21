@@ -405,6 +405,116 @@ def _patch_plan_env(monkeypatch, stocks=None, index_last_date="2026-10-21"):
     return bars
 
 
+@pytest.mark.asyncio
+async def test_resolve_target_stocks_against_real_loaders(monkeypatch):
+    """真实取数路径(不 mock `resolve_target_stocks` 本身)—— 集成缺陷必须在这里被抓住。
+
+    ⚠️ 上一轮把 `resolve_target_stocks` 整个 monkeypatch 掉,于是它内部的
+    `_load_favorites` 导入缺陷(`from app.repositories import watchlist_repo`
+    拿到的是**子模块**而不是单例 → `.list_all()` AttributeError)完全逃逸,
+    真实调用 `/scope` 与 `/generate` 必 500。
+    本用例只打桩**最底层的两个数据源**,让真实合并逻辑整条跑一遍。
+    """
+    from types import SimpleNamespace
+
+    from app.modules.portfolio import service as portfolio_service
+    from app.repositories.watchlist_repo import watchlist_repo as watchlist_singleton
+
+    async def _positions(account_id=None):
+        return [
+            SimpleNamespace(stock_code="600519.SH", stock_name="贵州茅台",
+                            shares=100, avg_cost=1600.0),
+            SimpleNamespace(stock_code="000807.SZ", stock_name="云铝股份",
+                            shares=200, avg_cost=20.0),
+        ]
+
+    async def _list_all():
+        # is_favorite=False 的行必须被过滤掉(★关注票才是关注票)
+        return [
+            SimpleNamespace(stock_code="000807.SZ", stock_name="云铝股份", is_favorite=True),
+            SimpleNamespace(stock_code="300394.SZ", stock_name="天孚通信", is_favorite=True),
+            SimpleNamespace(stock_code="002049.SZ", stock_name="紫光国微", is_favorite=False),
+        ]
+
+    # ⚠️ patch 单例**对象**上的方法,不是 patch 模块上的 `watchlist_repo` 名字 ——
+    # 后者会把被导入的名字整个换掉,等于又 mock 掉了被测单元。
+    monkeypatch.setattr(portfolio_service, "get_all_positions", _positions)
+    monkeypatch.setattr(watchlist_singleton, "list_all", _list_all)
+
+    scope = await svc.resolve_target_stocks()
+
+    assert isinstance(scope, list)
+    codes = [s["stock_code"] for s in scope]
+    assert set(codes) == {"600519.SH", "000807.SZ", "300394.SZ"}
+    assert codes.count("000807.SZ") == 1              # 持仓 ∪ 关注合并成一条
+    by_code = {s["stock_code"]: s for s in scope}
+    assert by_code["600519.SH"]["in_position"] is True
+    assert by_code["600519.SH"]["is_favorite"] is False
+    assert by_code["300394.SZ"]["in_position"] is False
+    assert by_code["300394.SZ"]["is_favorite"] is True
+    assert by_code["000807.SZ"]["in_position"] is True  # 既持仓又关注
+    assert by_code["000807.SZ"]["is_favorite"] is True
+    # 持仓在前,关注票保持 list_all 的 added_at desc(F7)
+    assert codes == ["600519.SH", "000807.SZ", "300394.SZ"]
+
+
+# ---------------- F4:流水读取失败的检测路径本身也要有锁 ----------------
+
+@pytest.mark.asyncio
+async def test_load_transactions_reports_failure(monkeypatch):
+    """流水读失败 → 返回 ([], False),调用方据此降级披露(spec §六)
+
+    ⚠️ 必须**真的让仓储抛异常**,不能 stub 掉 `_load_transactions` 本身 ——
+    复审 M17 变异(把 except 改成 `return [], True`)曾让全量用例全绿,
+    正是因为此前的 7 处引用**全是 stub**,真实读失败路径从未被执行到。
+    """
+    from app.modules.portfolio.repository import transaction_repo
+
+    async def _boom(*a, **kw):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(transaction_repo, "list_all", _boom)
+    rows, ok = await svc._load_transactions("2026-10-21")
+    assert rows == []
+    assert ok is False
+
+
+# ---------------- F5:并发取数后 `zip(scope, results)` 必须保持逐票配对 ----------------
+
+@pytest.mark.asyncio
+async def test_items_paired_with_their_own_stock(monkeypatch):
+    """并发取数的 `zip(scope, results)` 必须保持**逐票配对**(asyncio.gather 保序)。
+
+    ⚠️ 配对错位在断言层面本来**不可见**:`build_items` 用的是 decision 自带的
+    `stock_code`,不是循环里的 `stock` —— 错位后「票号」看着全对,
+    只有**该票的持仓上下文(股数/成本)**被安到了别的票身上,失败归因静默错位
+    (复审 M22 变异存活的原因)。故用 spy 记录 `(decision.stock_code, position.shares)`
+    配对,把错位钉死。
+    """
+    stocks = [
+        _stock("600001.SH", "票甲", 10.0, 100, 9.0),
+        _stock("600002.SH", "票乙", 10.0, 200, 9.5),
+        _stock("600003.SH", "票丙", 10.0, 300, 9.9),
+    ]
+    _patch_plan_env(monkeypatch, stocks=stocks)
+
+    real_build_items = svc.build_items
+    pairs: list[tuple[str, int | None]] = []
+
+    def _spy(decision, position):
+        pairs.append((decision.get("stock_code"), getattr(position, "shares", None)))
+        return real_build_items(decision, position)
+
+    monkeypatch.setattr(svc, "build_items", _spy)
+
+    plan = await svc.build_plan(PLAN_DATE)
+
+    assert sorted(pairs) == [("600001.SH", 100), ("600002.SH", 200), ("600003.SH", 300)]
+    assert len(pairs) == 3                      # 没有重复、没有丢失
+    assert len({c for c, _ in pairs}) == 3
+    assert {i["stock_code"] for i in plan["items"]} <= {"600001.SH", "600002.SH", "600003.SH"}
+
+
 # ---------------- F2:R(上一份日报)数据驱动 ----------------
 
 @pytest.mark.asyncio

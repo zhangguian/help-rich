@@ -23,10 +23,14 @@ R+1 = 兑现判定日。
 本模块是纯函数、零 IO,不做日期过滤(那是编排层的职责);若上游喂进多日 K 线,
 多日极值会被当成单日极值 —— 这正是「假触及」的来源。
 
-**第三态 `no_data`(2026-10-21 T6 fix round 1)**:目标日**根本没有该票的行情数据**时,
+**第三态 `no_data`(2026-10-21 T6 fix round 1 / round 3 收紧)**:目标日**没有该票的行情数据**时,
 既不能说「触及」也不能说「未触及」—— 那不是判定结果,是「没判定」。判 missed
 等于用无知冒充事实,会把结论永久写进复盘档案。纪律类与「有流水」两条分支在更前面,
 不受本态影响(有流水时仍按 executed 判)。
+
+⚠️ **判缺按「判定所需的那一半」**:buy 看 low、sell 看 high。
+半残 K 线(有 high 无 low)对 buy 项同样是无从判定,不能因为「另一半在」就放行
+(round 3 实测:high=10.5/low=None 曾把 buy 项判成 missed)。
 """
 from __future__ import annotations
 
@@ -213,10 +217,13 @@ def check_fulfillment(
                 note += f"(成交价 {tp:.2f} 与触发价 {price:.2f} 不符)"
         else:
             # 第二步:价格是否触及
-            if high is None and low is None:
-                # ⚠️ 目标日**没有该票的行情数据**(停牌 / 数据源未出 / 节假日)——
-                # 我们根本无从判定触没触发。判 missed 等于「用无知冒充事实」:
-                # 会把「没拿到数据」永久写进复盘档案(spec §4.5.3 第三步之二)。
+            # ⚠️ 按**判定所需的那一半**判缺:
+            #   buy  看 low  → 缺 low  = 无从判定
+            #   sell 看 high → 缺 high = 无从判定
+            # 缺了关键的那一半就说「未触及」= 拿无知冒充事实(与 F1 同一类错误)。
+            # 另一半缺不缺无所谓 —— 判定只用得到的那一半。
+            needed = high if direction == "sell" else low
+            if needed is None:
                 fulfillment = "no_data"
                 note = "目标日无行情数据,未判定"
             else:

@@ -61,7 +61,12 @@ async def _load_positions() -> list[dict[str, Any]]:
 
 async def _load_favorites() -> list[dict[str, Any]]:
     """★关注票"""
-    from app.repositories import watchlist_repo
+    # ⚠️ 必须导入**单例**,不能写 `from app.repositories import watchlist_repo` ——
+    # 那样拿到的是**子模块**(`app.repositories` 是包,成员名被子模块占位),
+    # 调 `.list_all()` 直接 AttributeError,`/scope` 与 `/generate` 必 500。
+    # 项目其它 5 处(reflection_context / api_transactions / diagnose_service /
+    # replay_service / screenshot_service)一律是下面这种写法。
+    from app.repositories.watchlist_repo import watchlist_repo
 
     rows = await watchlist_repo.list_all()
     return [

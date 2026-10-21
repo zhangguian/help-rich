@@ -65,6 +65,24 @@ def test_no_data_when_target_day_has_no_kline():
     assert "未判定" in out[0]["fulfillment_note"]
 
 
+def test_no_data_when_buy_side_low_missing():
+    """buy 项判定靠 low;low 缺失 → 无从判定 → no_data(不是 missed)"""
+    items = [_item(direction="buy", price=9.62)]
+    out = check_fulfillment(items, {"001896.SZ": [{"date": "2026-10-22",
+                                                     "open": 9.7, "high": 10.5,
+                                                     "low": None, "close": 10.0}]}, [])
+    assert out[0]["fulfillment"] == "no_data"
+
+
+def test_sell_side_only_needs_high():
+    """sell 项判定靠 high;low 缺失但 high 在 → 正常判定(不因另一半缺而 no_data)"""
+    items = [_item(kind="exit", direction="sell", price=12.03)]
+    out = check_fulfillment(items, {"001896.SZ": [{"date": "2026-10-22",
+                                                     "open": 11.0, "high": 12.5,
+                                                     "low": None, "close": 12.2}]}, [])
+    assert out[0]["fulfillment"] == "touched"
+
+
 def test_no_data_not_counted_in_statistics():
     """`no_data` 不落进任何统计桶;且 verdict 不允许因为它说成「按计划执行」"""
     checked = check_fulfillment([_item(direction="buy", price=9.62)], {}, [])
