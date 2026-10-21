@@ -424,13 +424,36 @@ class TestPosition:
         assert r["position"]["risk_band"] == "mid"
 
     def test_support_and_stop_loss(self):
-        """支撑=近20日最低收盘×0.98;止损=支撑×0.97"""
+        """支撑=**当前根之前**20 日最低收盘×0.98;止损=支撑×0.97
+
+        窗口必须排除当前根:否则 stop_loss_price ≤ 当前收盘×0.9506,
+        止损触发条件 `现价 < stop_loss_price` 在收盘价口径下永不可能成立
+        (实测 15900 个信号日命中 0 次 —— 止损规则曾是死代码)。
+        """
         closes = [100.0 + (i % 5) for i in range(40)]
         r = compute_indicators(_kline(closes))
         pos = r["position"]
-        min20 = min(closes[-20:])
+        min20 = min(closes[:-1][-20:])
         assert pos["support_price"] == round(min20 * 0.98, 3)
         assert pos["stop_loss_price"] == round(round(min20 * 0.98, 3) * 0.97, 3)
+
+    def test_stop_loss_can_actually_trigger(self):
+        """止损位必须**真的会被跌破** —— 否则「跌破止损就减仓」这条规则是死代码。
+
+        旧实现取 `closes[-20:]`(含当前根),止损位恒 ≤ 当前收盘×0.9506,
+        在收盘价口径下 `现价 < 止损位` 永不可能成立(实测命中 0 次)。
+        """
+        # 一路 100 → 80,再一根大跌到 70(前 20 日低点 80 → 支撑 78.4 → 止损 76.05)
+        closes = [100.0] * 20 + [80.0] + [70.0]
+        r = compute_indicators(_kline(closes))
+        pos = r["position"]
+        assert pos["stop_loss_price"] is not None
+        # 现价(70)已经跌破止损位 → 止损规则真的能触发
+        assert 70.0 < pos["stop_loss_price"], "大跌时止损位必须落在现价之上才谈得上触发"
+        # 正常行情下止损位应低于现价(否则等于永远不触发)
+        closes2 = [100.0 + (i % 5) for i in range(40)]
+        r2 = compute_indicators(_kline(closes2))
+        assert r2["position"]["stop_loss_price"] < closes2[-1]
 
 
 class TestSignalFusion:

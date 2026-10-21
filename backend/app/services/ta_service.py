@@ -987,9 +987,22 @@ def _position(
         else:
             band_risk = "mid"
     # 参考支撑 = 近 20 日最低收盘价 × 0.98(留 2% 缓冲)
+    #
+    # **窗口必须排除当前这根 K 线**(2026-10-21 父代理实跑评审修的真实缺陷)。
+    # 原来取 `closes[-20:]`(含当前根),于是:
+    #   support_price ≤ 当前收盘 × 0.98 → stop_loss_price ≤ 当前收盘 × 0.9506
+    #   而止损触发条件是 `effective_price < stop_loss_price`
+    #   → 在**收盘价口径**下(现价 = 当前根收盘)这个不等式**数学上永不可能成立**。
+    # 实测:15900 个信号日里 `close < stop` 命中 **0** 次 —— 止损规则是死代码,
+    # 「stop 后 5 日回撤改善」那条闸门因此**永远无法被评估**。
+    #
+    # 现在取「当前根之前的 20 根」,语义 = 「跌破**已经确立的**支撑位就止损」:
+    #   - 实盘:支撑来自前 20 根已收盘 K 线,现价是盘中实时价 —— 与回测口径完全一致;
+    #   - 回测:支撑来自信号日之前的 20 根,现价是信号日收盘 —— 同样一致。
     support_price = None
-    if len(closes) >= 10:
-        support_price = round(min(closes[-20:]) * 0.98, 3)
+    prior_closes = closes[:-1][-20:]
+    if len(prior_closes) >= 10:
+        support_price = round(min(prior_closes) * 0.98, 3)
     # 建议止损 = 参考支撑 × 0.97
     stop_loss_price = round(support_price * 0.97, 3) if support_price is not None else None
 
