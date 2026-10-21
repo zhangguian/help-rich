@@ -8,6 +8,36 @@ import type { AxiosRequestConfig } from 'axios';
 
 import { useUIStore } from '@/stores/useUIStore';
 
+/**
+ * axios 请求级「预期 404」开关(类型增强)
+ *
+ * **为什么要它**:有些 404 是**正常业务语义**而不是故障 ——
+ * 例如 `GET /api/battle-plan` 在「今天的作战计划还没生成」时按 API 契约返回 404,
+ * 前端据此渲染空态卡片。这种 404 再配一个红色「请求失败」toast,
+ * 等于把正常状态渲染成错误(与本功能「诚实披露、不制造恐慌」的基调冲突)。
+ *
+ * **语义边界**(三条都不能破):
+ *   1. 只对**本次请求**生效 —— 不传这个字段的请求行为完全不变。
+ *   2. **只静音 404** —— 400/409/422/500/网络错误照常弹 toast。
+ *   3. **错误照常 reject** —— 调用方(如 PlanPanel)仍要靠 `e.response.status === 404`
+ *      走空态分支;绝不能把 404 变成 resolved。
+ *
+ * **代价**:开关是「按状态码静音」而不是「按 URL 静音」——
+ * 所以只应加在**语义明确**的单点调用上(如 `fetchBattlePlan`),
+ * 不要加在会返回多种错误的通用请求上,否则真出 404 时会被一起吞掉。
+ */
+declare module 'axios' {
+  export interface AxiosRequestConfig<D = any, P = any> {
+    /**
+     * 本次请求的 404 是否为**预期业务结果**。
+     *
+     * true → 404 时**不弹**错误 toast(错误仍然 reject);
+     * 其它状态码(422/500/网络错误等)完全不受影响。
+     */
+    expectedNotFound?: boolean;
+  }
+}
+
 /** API 错误响应格式(与 backend-arch §7.3 / docs/api-contract §14.3 一致)*/
 export interface ApiError {
   code: string;
@@ -33,6 +63,13 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
+    // 「预期 404」短路:404 是正常业务语义(如今日作战计划还没生成)→ 不弹 toast。
+    // ⚠️ 仍然 reject —— 调用方(PlanPanel)靠 e.response.status === 404 走空态分支。
+    // ⚠️ 只认 404:422/500/网络错误照常弹 toast(见下)。
+    if (error.config?.expectedNotFound === true && error.response?.status === 404) {
+      return Promise.reject(error);
+    }
+
     let message = '请求失败';
     let type: 'error' | 'warning' = 'error';
 

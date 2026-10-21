@@ -502,7 +502,12 @@ const PLAN_TIMEOUT = { timeout: 60000 };
 
 export async function fetchBattlePlan(date?: string): Promise<BattlePlan> {
   const q = date ? `?date=${encodeURIComponent(date)}` : '';
-  return apiGet<BattlePlan>(`/battle-plan${q}`);
+  // ⚠️ expectedNotFound:本次请求的 404 = 「今天的作战计划还没生成」,是**正常业务语义**
+  // (后端 API 契约如此,见 backend/app/api/battle_plan.py),由 PlanPanel 走空态分支。
+  // 关掉 404 的错误 toast,避免把正常状态渲染成错误。
+  // 只影响 404:500/422/网络错误照常弹 toast;错误仍然 reject,PlanPanel 的
+  // `e.response.status === 404` 判定不受影响。
+  return apiGet<BattlePlan>(`/battle-plan${q}`, { expectedNotFound: true });
 }
 
 export async function generateBattlePlan(date?: string): Promise<BattlePlan> {
