@@ -1,3 +1,8 @@
+'use client';
+
+import AssistantBall from '@/components/assistant/AssistantBall';
+import AssistantDialog from '@/components/assistant/AssistantDialog';
+import { AssistantProvider } from '@/components/assistant/AssistantProvider';
 import { NavRail } from './NavRail';
 
 /**
@@ -9,12 +14,20 @@ import { NavRail } from './NavRail';
  * 交易台首页需要「内容铺满视口」的满屏工作台(见 docs/design/trading-desk-v2.md),
  * 若外层仍随内容无限增高,首页的 `h-full` 就没有确定高度、虚空问题会原样复现。
  * 其它页面行为不变 —— 它们的内容超过视口时由 main 容器内部滚动。
+ *
+ * **阶段 10 改动**:挂上**全局 AI 助手**(右下角悬浮球 + 展开对话框)。
+ * 放在 AppShell 是因为助手要**全站可见** —— 任何页面都能唤起它;
+ * Provider 也在这里,所以助手拿得到盯盘页报上来的「当前选中的票」。
  */
 export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex h-screen overflow-hidden bg-canvas">
-      <NavRail />
-      <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden">{children}</main>
-    </div>
+    <AssistantProvider>
+      <div className="flex h-screen overflow-hidden bg-canvas">
+        <NavRail />
+        <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden">{children}</main>
+        <AssistantBall />
+        <AssistantDialog />
+      </div>
+    </AssistantProvider>
   );
 }

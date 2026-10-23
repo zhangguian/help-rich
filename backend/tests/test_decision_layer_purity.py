@@ -23,6 +23,8 @@ DECISION_LAYER_FILES = [
     "app/services/outlook_service.py",
     "app/services/plan_item_builder.py",
     "app/services/fulfillment_checker.py",
+    # 阶段 T2:盘中复盘决策层(同样零 IO、零 LLM —— 只做「现价 vs 触发价」的比较)
+    "app/services/intraday_advice.py",
 ]
 
 # 明确禁止的 IO / LLM 依赖顶层包

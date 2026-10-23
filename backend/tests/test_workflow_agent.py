@@ -1,6 +1,10 @@
 """三段式 Agent 调度器测试(阶段4)。
 
 重点:时间窗判定的**幂等性**与**边界条件**(重复触发、周末、窗口外)。
+
+⚠️ 阶段 T2:`due_windows` 变成 **async**(要读交易日历 → 需要 IO),且新增
+**交易日判定**(非交易日不触发)。这里把交易日历**打桩成工作日口径**
+(不打桩真实网络);真实交易日历的行为由 `tests/test_workflow_scheduler.py` 覆盖。
 """
 from datetime import datetime
 
@@ -12,6 +16,28 @@ from app.modules.analysis.workflow_scheduler import (
     due_windows,
     reset_fired,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_trading_calendar(monkeypatch):
+    """把交易日历打桩成「工作日即交易日」,并阻断真实网络取数。"""
+    from app.core import trading_calendar as tc
+    from app.services import trading_calendar_service as tcs
+
+    async def _ensure(force: bool = False):
+        return tc.current_calendar()
+
+    monkeypatch.setattr(tcs, "ensure_trading_calendar", _ensure)
+    monkeypatch.setattr(tc, "is_trading_day", lambda d: d.weekday() < 5)
+    monkeypatch.setattr(
+        tc,
+        "trading_days_hint",
+        lambda: {
+            "source": "index_kline",
+            "estimated": False,
+            "trade_date": "2026-10-19",
+        },
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -34,48 +60,48 @@ class TestDueWindows:
         "kind,hour,minute",
         [(k, h, m) for k, h, m, _ in TIME_WINDOWS],
     )
-    def test_each_window_fires_at_its_time(self, kind, hour, minute):
+    async def test_each_window_fires_at_its_time(self, kind, hour, minute):
         now = _dt(2026, 10, 19, hour, minute)
-        assert kind in due_windows(now)
+        assert kind in await due_windows(now)
 
-    def test_no_window_outside_windows(self):
+    async def test_no_window_outside_windows(self):
         # 10:00 不在任何窗口内
-        assert due_windows(_dt(2026, 10, 19, 10, 0)) == []
+        assert await due_windows(_dt(2026, 10, 19, 10, 0)) == []
 
-    def test_weekend_skipped(self):
+    async def test_weekend_skipped(self):
         # 2026-10-25 是周日
-        assert due_windows(datetime(2026, 10, 25, 8, 30)) == []
-        assert due_windows(datetime(2026, 10, 24, 8, 30)) == []  # 周六
+        assert await due_windows(datetime(2026, 10, 25, 8, 30)) == []
+        assert await due_windows(datetime(2026, 10, 24, 8, 30)) == []  # 周六
 
-    def test_idempotent_same_minute(self):
+    async def test_idempotent_same_minute(self):
         """同一分钟内重复检查只触发一次。"""
         now = _dt(2026, 10, 19, 8, 30)
-        assert "premarket" in due_windows(now)
-        assert "premarket" not in due_windows(now)
-        assert "premarket" not in due_windows(now)
+        assert "premarket" in await due_windows(now)
+        assert "premarket" not in await due_windows(now)
+        assert "premarket" not in await due_windows(now)
 
-    def test_idempotent_across_minutes_in_window(self):
+    async def test_idempotent_across_minutes_in_window(self):
         """窗口内的后续分钟不应重复触发。"""
-        assert "premarket" in due_windows(_dt(2026, 10, 19, 8, 30))
-        assert "premarket" not in due_windows(_dt(2026, 10, 19, 8, 35))
-        assert "premarket" not in due_windows(_dt(2026, 10, 19, 8, 59))
+        assert "premarket" in await due_windows(_dt(2026, 10, 19, 8, 30))
+        assert "premarket" not in await due_windows(_dt(2026, 10, 19, 8, 35))
+        assert "premarket" not in await due_windows(_dt(2026, 10, 19, 8, 59))
 
-    def test_new_day_fires_again(self):
+    async def test_new_day_fires_again(self):
         """隔天应重新触发。"""
-        assert "premarket" in due_windows(_dt(2026, 10, 19, 8, 30))
-        assert "premarket" in due_windows(_dt(2026, 10, 20, 8, 30))
+        assert "premarket" in await due_windows(_dt(2026, 10, 19, 8, 30))
+        assert "premarket" in await due_windows(_dt(2026, 10, 20, 8, 30))
 
-    def test_boundary_minutes(self):
+    async def test_boundary_minutes(self):
         """窗口起止边界都应触发;窗口结束后不再触发。"""
         for kind, h, start, end in TIME_WINDOWS:
             reset_fired()
-            assert kind in due_windows(_dt(2026, 10, 19, h, start)), f"{kind} 起点应触发"
+            assert kind in await due_windows(_dt(2026, 10, 19, h, start)), f"{kind} 起点应触发"
             reset_fired()
-            assert kind in due_windows(_dt(2026, 10, 19, h, end)), f"{kind} 终点应触发"
+            assert kind in await due_windows(_dt(2026, 10, 19, h, end)), f"{kind} 终点应触发"
             reset_fired()
             # 窗口结束后的下一个小时(同一小时内的 +1 分钟)
             if end < 59:
-                assert kind not in due_windows(_dt(2026, 10, 19, h, end + 1)), (
+                assert kind not in await due_windows(_dt(2026, 10, 19, h, end + 1)), (
                     f"{kind} 窗口后不应触发"
                 )
 

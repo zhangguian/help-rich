@@ -86,6 +86,27 @@
     --fill: rgba(100, 116, 139, 0.5);
     --stroke: #ffffff;
   }
+
+  /* 阶段10 · 助手表情切换过渡
+     设计稿的动效(眨眼轮换/彩带自旋/呼吸起伏)属于原交互 demo 的 JS 行为,附件里没有脚本,
+     本轮只做「静态帧 + 切换过渡」:表情变了就换 DOM 节点(key 变化),
+     挂载动画自然重放一次 —— 淡入 + 轻微缩放,180ms。 */
+  @keyframes assistant-expression-in {
+    from {
+      opacity: 0;
+      transform: scale(0.92);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  .assistant-expression {
+    animation: assistant-expression-in 180ms ease-out;
+    transition: opacity 180ms ease-out, transform 180ms ease-out;
+    object-fit: contain;
+  }
 }
 
 /* 滚动条(终端:细、蓝灰半透明、圆角) */

@@ -1043,3 +1043,32 @@ class BattlePlanItem(Base):
         String, default="pending", nullable=False
     )  # pending/touched/executed/missed/n_a
     fulfillment_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+# ============================================================
+# === 阶段 T2:盘中复盘 ===
+# ============================================================
+
+
+class IntradayReview(Base):
+    """盘中复盘(阶段 T2)
+
+    一行 = 某个交易日某个档位(11:30 / 14:00)的一次盘中复盘。
+    唯一键 `(trade_date, slot)` → **同日同档重跑覆盖**(幂等),不产生第二行。
+    `payload_json` 装整份复盘(市场意见 / 动作清单 / 异动扫描补充段 / 降级说明)。
+    """
+    __tablename__ = "intraday_review"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    trade_date: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    slot: Mapped[str] = mapped_column(String, nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    # 幂等覆盖会刷新它 —— 语义是「最后一次写入时间」
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint("trade_date", "slot", name="uq_intraday_review_date_slot"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<IntradayReview {self.trade_date} {self.slot}>"

@@ -52,6 +52,26 @@ function isApiRequest(url) {
   );
 }
 
+/**
+ * Next.js App Router 的 **RSC 载荷请求**。
+ *
+ * ⚠️ 这类请求**绝不能走缓存**:
+ * 它带 `?_rsc=` 查询参数(以及 Next-Router-* 头),返回的是「这个路由对应哪些 chunk」的映射。
+ * 缓存优先会把它喂成**上次构建**的载荷 —— 与页面里实际引用的新 chunk 对不上,
+ * 客户端导航直接报 `Cannot read properties of undefined (reading 'call')`。
+ * 典型触发场景:发版后老用户还挂着旧 Service Worker,点任意站内链接就白屏。
+ *
+ * 代价:每次站内导航多一次网络往返。可接受 —— 换来的是发版后不炸。
+ */
+function isRscRequest(url, request) {
+  return (
+    url.searchParams.has('_rsc') ||
+    request.headers.has('Next-Router-Prefetch') ||
+    request.headers.has('Next-Router-State-Tree') ||
+    request.headers.has('RSC')
+  );
+}
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
 
@@ -73,7 +93,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 2) 导航请求:网络优先,断网时回退到缓存的外壳
+  // 2) RSC 载荷:必须走网络(见 isRscRequest 的注释)
+  if (isRscRequest(url, request)) {
+    event.respondWith(fetch(request));
+    return;
+  }
+
+  // 3) 导航请求:网络优先,断网时回退到缓存的外壳
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
@@ -90,7 +116,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3) 静态资源:缓存优先(带后台更新)
+  // 4) 静态资源:缓存优先(带后台更新)
   event.respondWith(
     caches.match(request).then((cached) => {
       const network = fetch(request)

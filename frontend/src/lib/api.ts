@@ -160,6 +160,10 @@ function camelToSnake(obj: unknown): unknown {
  *   limit_up → limitUp(走通用规则)
  */
 function camelKey(key: string): string {
+  // P3(阶段10):快路径 —— 没有下划线的键绝大多数本来就是 camelCase,
+  // 直接返回,省掉一次正则扫描。盯盘页每次轮询要对上千个键跑这个函数,
+  // 而正则扫描是这个函数里最贵的一步。
+  if (!key.includes('_')) return key;
   const range = /^([a-z]+)_(\d+)_(\d+)$/.exec(key);
   if (range) return `${range[1]}${range[2]}_${range[3]}`;
   return key.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
@@ -170,14 +174,29 @@ function camelKey(key: string): string {
  * 供 SSE 流式(fetch 直连,不走 axios 拦截器)等场景复用
  */
 export function snakeToCamel(obj: unknown): unknown {
-  if (Array.isArray(obj)) return obj.map(snakeToCamel);
+  if (Array.isArray(obj)) {
+    // P3(阶段10):内容没变就返回**原数组**,不新建。
+    // 意义在于保留引用 —— 下游的 memo/浅比较只有拿到同一个引用才判得出"没变",
+    // 否则每次转换都造一批新对象,浅比较永远为假。
+    let changed = false;
+    const out = obj.map((v) => {
+      const c = snakeToCamel(v);
+      if (c !== v) changed = true;
+      return c;
+    });
+    return changed ? out : obj;
+  }
   if (obj !== null && typeof obj === 'object' && !(obj instanceof Date)) {
-    return Object.fromEntries(
-      Object.entries(obj as Record<string, unknown>).map(([k, v]) => [
-        camelKey(k),
-        snakeToCamel(v),
-      ]),
-    );
+    const src = obj as Record<string, unknown>;
+    let changed = false;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(src)) {
+      const ck = camelKey(k);
+      const cv = snakeToCamel(v);
+      if (ck !== k || cv !== v) changed = true;
+      out[ck] = cv;
+    }
+    return changed ? out : src;
   }
   return obj;
 }

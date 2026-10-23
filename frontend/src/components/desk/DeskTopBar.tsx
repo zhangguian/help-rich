@@ -2,10 +2,13 @@
 
 import { useEffect, useState } from 'react';
 
+import { useRefreshStore } from '@/stores/useRefreshStore';
+
 import clsx from 'clsx';
 
 import type { MarketIndex } from '@/lib/types';
 import { getTheme, setTheme, type ThemeMode } from '@/lib/theme';
+import { useIntradayStore } from '@/stores/useIntradayStore';
 
 /**
  * 交易台顶栏(v0.8)
@@ -33,7 +36,6 @@ export function DeskTopBar({
   onTabChange,
   indexes,
   autoRefresh,
-  secondsLeft,
   onToggleRefresh,
   dateStr,
 }: {
@@ -41,12 +43,35 @@ export function DeskTopBar({
   onTabChange: (t: DeskTab) => void;
   indexes: MarketIndex[];
   autoRefresh: boolean;
-  secondsLeft: number;
   onToggleRefresh: () => void;
   dateStr: string;
 }) {
+  // P7(阶段10):倒计时放独立 store —— 它每秒变一次,住在盯盘页里会让整页重渲染
+  const secondsLeft = useRefreshStore((s) => s.secondsLeft);
   const [theme, setThemeState] = useState<ThemeMode>('dark');
   useEffect(() => setThemeState(getTheme()), []);
+
+  // 盘中复盘入口(阶段 10):调度本来只挂在 /brief 那个独立页,盯盘页一个入口都没有。
+  // 胶囊显示今日档位状态,点开是复盘抽屉。
+  const schedule = useIntradayStore((s) => s.schedule);
+  const openPanel = useIntradayStore((s) => s.openPanel);
+
+  const produced = schedule?.producedSlots ?? [];
+  const lastSlot = produced.length > 0 ? produced[produced.length - 1] : null;
+  const notTradingDay = schedule != null && !schedule.isTradingDay;
+  const nextHint = schedule?.nextSlot
+    ? `下一次 ${schedule.nextSlot}${
+        schedule.nextSlotMinutesLeft != null ? `,还有 ${schedule.nextSlotMinutesLeft} 分钟` : ''
+      }`
+    : '';
+
+  const reviewLabel = notTradingDay
+    ? '今天不是交易日'
+    : lastSlot
+      ? `盘中复盘 · ${lastSlot} 已出`
+      : schedule?.nextSlot
+        ? `盘中复盘 · ${schedule.nextSlot}`
+        : '盘中复盘';
 
   const toggleTheme = () => {
     const next: ThemeMode = theme === 'light' ? 'dark' : 'light';
@@ -116,8 +141,30 @@ export function DeskTopBar({
             ))}
       </div>
 
-      {/* 右侧:自动刷新 + 主题 */}
+      {/* 右侧:盘中复盘入口 + 自动刷新 + 主题 */}
       <div className="flex items-center gap-2 shrink-0 pl-3 border-l border-border-def">
+        <button
+          type="button"
+          onClick={openPanel}
+          data-testid="intraday-review-entry"
+          title={notTradingDay ? '今天不是交易日,盘中复盘不会跑' : nextHint || '查看今日盘中复盘'}
+          className={clsx(
+            'flex items-center gap-1.5 px-2 py-1 rounded-sm text-[11px] border transition-colors whitespace-nowrap',
+            lastSlot
+              ? 'bg-accent-subtle text-accent border-accent/40 font-semibold'
+              : 'bg-bg-elevated text-text-ter border-border-def hover:text-text-sec',
+          )}
+        >
+          <span
+            className={clsx(
+              'w-1.5 h-1.5 rounded-full',
+              lastSlot ? 'bg-accent' : 'bg-text-ter',
+            )}
+            aria-hidden
+          />
+          {reviewLabel}
+        </button>
+
         <button
           type="button"
           onClick={onToggleRefresh}

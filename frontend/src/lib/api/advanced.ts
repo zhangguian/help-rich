@@ -399,9 +399,13 @@ export async function dispatchPremarketBrief(): Promise<WorkflowDispatchResult> 
   return apiPost<WorkflowDispatchResult>('/workflow/premarket/dispatch');
 }
 
-/** 盘中速览。slot 只能是 '11:30' 或 '14:50'(后端据此取不同的对比基准)。 */
+/**
+ * 盘中速览。slot 取 '11:30' / '14:00' / '14:50'。
+ * ⚠️ 阶段10 起,盘中窗口的**主产出**是 `/api/intraday-review`(带市场意见与逐票动作),
+ * 这里保留的是原有的「异动扫描」速览通道(后端把它并进了复盘的 extra_lines 补充段)。
+ */
 export async function generateIntradayBrief(
-  slot: '11:30' | '14:50',
+  slot: '11:30' | '14:00' | '14:50',
   dispatch = false,
 ): Promise<WorkflowBrief & { delivered: WorkflowDelivery[] }> {
   return apiPost('/workflow/intraday', { slot, dispatch });
@@ -520,4 +524,144 @@ export async function fetchBattlePlanScope(): Promise<BattlePlanScopeRow[]> {
   // 写成 snake_case 的话 TS 不报错(泛型是断言),但页面读出来全是 undefined。
   // ⚠️ 必须写显式泛型,否则返回 any,ScopeRow 的字段拼错也没人拦。
   return apiGet<BattlePlanScopeRow[]>('/battle-plan/scope');
+}
+
+/* ============================================================
+ * 阶段10 · 盘中复盘
+ * ============================================================ */
+
+/**
+ * 盘中复盘档位。
+ * 后端 `VALID_SLOTS = ("11:30", "14:00")` —— 阶段10 把下午档从 14:50 挪到了 14:00。
+ */
+export type IntradaySlot = '11:30' | '14:00';
+
+/**
+ * 逐票动作状态。
+ *
+ * ⚠️ **这不是兑现五态**(executed / touched / missed / n_a / no_data)——
+ * 兑现是「昨天说的预案今天有没有做到」,由阶段9 的兑现模块负责;
+ * 这里判的是「**这条预案的动作条件现在成立吗**」:
+ *   - 已到价待执行 = 现价已越过触发价,可以按预案动手了
+ *   - 未到价       = 还没到触发价,继续等
+ *   - 不适用       = 纪律类(别动/解套路径),本就不产生价格动作
+ *   - 数据不足     = 缺报价或缺触发价,判不了
+ * 刻意**不判**「已执行」「已过价」—— 没有当日流水上下文,判了会与兑现模块双写冲突。
+ */
+export type IntradayActionState = '已到价待执行' | '未到价' | '不适用' | '数据不足';
+
+/** 单条逐票动作 */
+export interface IntradayAction {
+  stockCode: string;
+  stockName: string;
+  itemKind: string;
+  direction: string;
+  label: string;
+  triggerPrice: number | null;
+  currentPrice: number | null;
+  gapPct: number | null;
+  actionState: IntradayActionState;
+  actionHint: string;
+  basis: string[] | string | null;
+  invalidIf: string | null;
+}
+
+/** 市场意见(盘前四维度推断的结果,**不是盘中重算**) */
+export interface IntradayMarketOpinion {
+  stance: string | null;
+  stanceLabel: string | null;
+  basis: string | null;
+  summary: string | null;
+  dims: Array<{
+    key: string;
+    label: string;
+    score: number;
+    state: string;
+    detail: string;
+  }>;
+  keyLevels: {
+    close?: number | null;
+    ma5?: number | null;
+    ma10?: number | null;
+    ma20?: number | null;
+    support?: number[];
+    resistance?: number[];
+  } | null;
+  degraded: boolean;
+  degradedReason: string | null;
+}
+
+/** 一档盘中复盘 */
+export interface IntradayReview {
+  tradeDate: string;
+  slot: IntradaySlot;
+  marketOpinion: IntradayMarketOpinion;
+  actions: IntradayAction[];
+  extraLines: string[];
+  extraStockCodes: string[];
+  degraded: boolean;
+  degradedReason: string | null;
+  asOf: string | null;
+  scopeCount: number | null;
+  quoteCount: number | null;
+  generatedAt: string | null;
+  isTradingDay: boolean;
+  tradeDateSource: string | null;
+  tradingDayEstimated: boolean;
+}
+
+/** 今日状态:是否交易日 / 已产出哪几档 / 下一档倒计时 */
+export interface IntradayReviewSchedule {
+  date: string;
+  isTradingDay: boolean;
+  tradeDateSource: string | null;
+  tradingDayEstimated: boolean;
+  tradeDate: string | null;
+  slots: IntradaySlot[];
+  producedSlots: IntradaySlot[];
+  nextSlot: IntradaySlot | null;
+  nextSlotAt: IntradaySlot | null;
+  nextSlotMinutesLeft: number | null;
+  now: string;
+}
+
+/**
+ * 取某一档的盘中复盘。
+ * ⚠️ 404 = 「这一档还没生成」,是**正常业务语义**(后端 API 契约如此),
+ * 所以关掉 404 的错误 toast,由调用方走空态分支。
+ */
+export async function fetchIntradayReview(
+  slot: IntradaySlot,
+  date?: string,
+): Promise<IntradayReview> {
+  const q = new URLSearchParams({ slot });
+  if (date) q.set('date', date);
+  return apiGet<IntradayReview>(`/intraday-review?${q.toString()}`, {
+    expectedNotFound: true,
+  });
+}
+
+/** 今日状态(顶栏胶囊用) */
+export async function fetchIntradayReviewSchedule(): Promise<IntradayReviewSchedule> {
+  return apiGet<IntradayReviewSchedule>('/intraday-review/schedule');
+}
+
+/** 手动生成一次盘中复盘(**不推送**) */
+export async function generateIntradayReview(slot: IntradaySlot): Promise<IntradayReview> {
+  return apiPost<IntradayReview>('/intraday-review/generate', { slot });
+}
+
+/**
+ * 生成并推送盘中复盘。
+ *
+ * ⚠️ **推送不可撤回** —— 真发消息到已配置的渠道(钉钉/企微/Bark/Webhook)。
+ * 所以生成与推送必须是两个独立按钮,不给「一键全干」的路子。
+ */
+export async function dispatchIntradayReview(slot: IntradaySlot): Promise<{
+  tradeDate: string;
+  slot: IntradaySlot;
+  delivered: Array<{ channel: string; ok: boolean; detail: string | null }>;
+  review: IntradayReview;
+}> {
+  return apiPost('/intraday-review/dispatch', { slot });
 }

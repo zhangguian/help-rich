@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AnimatePresence, motion } from 'framer-motion';
 import clsx from 'clsx';
 
 import { apiGet, snakeToCamel } from '@/lib/api';
@@ -32,6 +31,9 @@ import { BreadthBar } from '@/components/desk/BreadthBar';
 import { DecisionColumn } from '@/components/desk/DecisionColumn';
 import { DeskTopBar, type DeskTab } from '@/components/desk/DeskTopBar';
 import { KeyLevels } from '@/components/desk/KeyLevels';
+import { useAssistantActions } from '@/components/assistant/AssistantProvider';
+import IntradayReviewPanel from '@/components/plan/IntradayReviewPanel';
+import { useIntradayStore } from '@/stores/useIntradayStore';
 import { HoldingsHealthPanel } from '@/components/holdings-health/HoldingsHealthPanel';
 import { IntradayChart } from '@/components/charts/IntradayChart';
 import { MarketOverviewPage } from '@/components/market/MarketOverviewPage';
@@ -49,6 +51,7 @@ import { SegmentedControl } from '@/components/ui/SegmentedControl';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { LiquidModal } from '@/components/ui/LiquidModal';
 import { WatchList, type WatchItem } from '@/components/watch/WatchList';
+import { useRefreshStore } from '@/stores/useRefreshStore';
 import type { HoldingsHealth } from '@/lib/types';
 
 /**
@@ -141,6 +144,26 @@ function decimal(v: number): string {
 }
 
 /**
+ * P1(阶段10):轮询数据的内容签名
+ *
+ * 为什么需要:轮询每次都会新建对象/数组,直接比引用**永远不相等**,
+ * 等于浅比较没做 —— 每轮轮询都把整页重渲染一遍。
+ * 实测(prod build):一轮 15s 轮询会在主线程落下 55~69ms 的长任务。
+ *
+ * 为什么用 JSON.stringify 求签名、而不是手写字段清单:
+ * 盯盘这份数据满打满算几 KB,序列化一次是几十微秒级,远小于一次全页重渲染;
+ * 而手写字段清单一旦漏掉一个字段,就会变成「该更新却没更新」的静默错误 ——
+ * 那比卡顿更难查。宁可多花几十微秒,也不要换一类更隐蔽的 bug。
+ */
+function contentSig(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
  * 决策端点的错误文案 —— 取出后端给的中文说明
  *
  * 后端抛的是 `HTTPException(detail={"code": ..., "message": "..."})`,
@@ -181,7 +204,9 @@ export default function Workbench() {
   // 否则首屏加载的那一瞬会误报「自选列表为空」
   const [baseLoaded, setBaseLoaded] = useState(false);
   const [positions, setPositions] = useState<Position[]>([]);
-  const [quotesMap, setQuotesMap] = useState<Record<string, Quote>>({});
+  // P1(阶段10):这里原本还有一个 quotesMap,全文件只有声明和赋值、**从来没有被读过**
+  // ——纯死状态,却让每轮轮询多触发一次全页重渲染。已删除(它承载的信息
+  // 本来就在 watchAll[].quote 里)。
   const [period, setPeriod] = useState<KlinePeriod>('daily');
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [analysisStarted, setAnalysisStarted] = useState(false);
@@ -203,8 +228,12 @@ export default function Workbench() {
   // 自动刷新开关(默认关):开启后 15s 周期 fetchBase;同步到 localStorage
   // 初始一律 false;挂载后 useEffect 读 localStorage 修正 — 避免 SSR/CSR className 不匹配
   const [autoRefresh, setAutoRefresh] = useState<boolean>(false);
-  // 倒计时显示(秒):开启时从 15 开始倒数,1s 一刷;关闭时为 0
-  const [secondsLeft, setSecondsLeft] = useState<number>(0);
+  // 倒计时显示(秒):开启时从 15 开始倒数,1s 一刷;关闭时为 0。
+  // P7(阶段10):这个数字只被顶栏一个小按钮用到,住在本组件的 state 里会让
+  // **每秒整页重渲染**(44 行自选 + 14 张图全走 React diff + 样式重算)。
+  // 挪进独立 store 后,每秒只有那个按钮重渲染。
+  const setSecondsLeft = useRefreshStore((s) => s.setSecondsLeft);
+  const tickSecondsLeft = useRefreshStore((s) => s.tick);
   useEffect(() => {
     setAutoRefresh(localStorage.getItem('auto-refresh-enabled') === '1');
   }, []);
@@ -241,40 +270,115 @@ export default function Workbench() {
   // 大盘速览(欢迎区右侧胶囊):三大指数 + 涨跌家数 + 两市成交额 + 量能趋势
   const [marketHeader, setMarketHeader] = useState<MarketHeader | null>(null);
   const [amountTrend, setAmountTrend] = useState<AmountTrendResponse['items']>([]);
-  const fetchMarketHeader = useCallback(async () => {
-    // 指数与情绪**分开**加载:
-    //   /market/overview 约 1s,/market/sentiment 首次约 5s(全市场 56 页分页)。
-    //   用 Promise.all 会让整个大盘速览卡一起等 5 秒;拆开后指数先出,
-    //   情绪卡稍后补齐(情绪卡自身有骨架占位)。
-    const [ov, st] = await Promise.all([
-      apiGet<MarketOverview>('/market/overview').catch(() => null),
-      apiGet<MarketSentiment>('/market/sentiment').catch(() => null),
-    ]);
-    setMarketHeader((prev) => ({
-      indexes: ov?.indexes.filter((x): x is MarketIndex => x != null) ?? prev?.indexes ?? [],
-      gainers: ov?.gainers ?? prev?.gainers ?? [],
-      losers: ov?.losers ?? prev?.losers ?? [],
-      upTotal: st?.upTotal ?? prev?.upTotal ?? null,
-      downTotal: st?.downTotal ?? prev?.downTotal ?? null,
-      flatTotal: st?.flatTotal ?? prev?.flatTotal ?? null,
-      amountYi: st?.amountYi ?? prev?.amountYi ?? null,
-      buckets: st?.buckets ?? prev?.buckets ?? null,
-      sampleSize: st?.sampleSize ?? prev?.sampleSize ?? null,
-      partial: st?.partial ?? prev?.partial ?? false,
-    }));
-    apiGet<AmountTrendResponse>('/market/amount-trend?days=5')
-      .then((r) => setAmountTrend(r.items ?? []))
-      .catch(() => {});
+  // P1(阶段10):轮询治理 —— 在途保护 + 内容没变不 setState
+  const overviewInFlightRef = useRef(false);
+  const sentimentInFlightRef = useRef(false);
+  const overviewSigRef = useRef('');
+  const sentimentSigRef = useRef('');
+  const trendSigRef = useRef('');
+
+  /**
+   * 指数速览(快档,15s)
+   *
+   * 为什么单独拆出来:原来 `/market/overview` 和 `/market/sentiment` 用
+   * `Promise.all` 捆在一起 —— 情绪接口服务端本身就要 ~2.5s(全市场分页),
+   * 捆在一起会让整个大盘速览干等它,指数也跟着晚 2.5s 才出现。
+   * 拆开后指数 ~1.4s 就到,情绪卡自己后补(它本身有骨架占位)。
+   */
+  const fetchMarketOverview = useCallback(async (): Promise<boolean> => {
+    // 在途保护:上一轮没回来就跳过本轮,避免慢接口堆成请求雪崩
+    if (overviewInFlightRef.current) return true;
+    overviewInFlightRef.current = true;
+    try {
+      const ov = await apiGet<MarketOverview>('/market/overview').catch(() => null);
+      if (!ov) return false;
+      const indexes = ov.indexes.filter((x): x is MarketIndex => x != null);
+      const gainers = ov.gainers ?? [];
+      const losers = ov.losers ?? [];
+      // 内容没变 → 保留旧引用,页面零重渲染
+      const sig = contentSig({ indexes, gainers, losers });
+      if (sig === overviewSigRef.current) return true;
+      overviewSigRef.current = sig;
+      setMarketHeader((prev) => ({
+        indexes,
+        gainers,
+        losers,
+        upTotal: prev?.upTotal ?? null,
+        downTotal: prev?.downTotal ?? null,
+        flatTotal: prev?.flatTotal ?? null,
+        amountYi: prev?.amountYi ?? null,
+        buckets: prev?.buckets ?? null,
+        sampleSize: prev?.sampleSize ?? null,
+        partial: prev?.partial ?? false,
+      }));
+      return true;
+    } finally {
+      overviewInFlightRef.current = false;
+    }
   }, []);
 
-  const fetchBase = useCallback(async () => {
+  /**
+   * 情绪 + 量能趋势(慢档,60s)
+   *
+   * 慢档的原因就是它慢:`/market/sentiment` 服务端要 ~2.5s。
+   * 盯盘时需要「新」的是报价(快档),情绪拉一次能看很久。
+   */
+  const fetchMarketSentiment = useCallback(async (): Promise<boolean> => {
+    if (sentimentInFlightRef.current) return true;
+    sentimentInFlightRef.current = true;
+    try {
+      const st = await apiGet<MarketSentiment>('/market/sentiment').catch(() => null);
+      if (st) {
+        const next = {
+          upTotal: st.upTotal ?? null,
+          downTotal: st.downTotal ?? null,
+          flatTotal: st.flatTotal ?? null,
+          amountYi: st.amountYi ?? null,
+          buckets: st.buckets ?? null,
+          sampleSize: st.sampleSize ?? null,
+          partial: st.partial ?? false,
+        };
+        const sig = contentSig(next);
+        if (sig !== sentimentSigRef.current) {
+          sentimentSigRef.current = sig;
+          setMarketHeader((prev) => ({
+            indexes: prev?.indexes ?? [],
+            gainers: prev?.gainers ?? [],
+            losers: prev?.losers ?? [],
+            ...next,
+          }));
+        }
+      }
+      const trend = await apiGet<AmountTrendResponse>('/market/amount-trend?days=5').catch(() => null);
+      if (trend) {
+        const items = trend.items ?? [];
+        const tsig = contentSig(items);
+        if (tsig !== trendSigRef.current) {
+          trendSigRef.current = tsig;
+          setAmountTrend(items);
+        }
+      }
+      return true;
+    } finally {
+      sentimentInFlightRef.current = false;
+    }
+  }, []);
+
+  // P1(阶段10):自选 + 持仓 + 报价(快档,15s)
+  const baseInFlightRef = useRef(false);
+  const baseSigRef = useRef('');
+
+  const fetchBase = useCallback(async (): Promise<boolean> => {
+    // 在途保护:上一轮没跑完就跳过本轮。
+    // 理由:慢接口堆积会形成请求雪崩,每条响应回来都触发一次全页重渲染。
+    if (baseInFlightRef.current) return true;
+    baseInFlightRef.current = true;
     try {
       const [w, p, hh] = await Promise.all([
         apiGet<{ items: WatchlistItem[] }>('/watchlist'),
         apiGet<{ items: Position[] }>('/positions'),
         apiGet<HoldingsHealth>('/holdings-health').catch(() => null),
       ]);
-      setPositions(p.items);
       const posName = new Map(p.items.map((x) => [x.stockCode, x.stockName]));
       // 持仓浮盈比例(%)—— 持仓视角下直接显示在行里,扫一眼就知道哪只亏
       const posPnlPct = new Map<string, number | null>();
@@ -319,54 +423,122 @@ export default function Workbench() {
           });
         }
       }
-      setWatchAll(Array.from(merged.values()));
+      // 报价一次性并进来。
+      // 原来分两次 setState(先没报价的一版、再有报价的一版)→ 每轮多一次全页重渲染;
+      // 合成一次后,列表带着报价一起出现,也不会闪一帧「—」。
       const codes = Array.from(merged.keys());
-      if (codes.length > 0) {
-        apiGet<Quote[]>(`/quotes?codes=${codes.join(',')}`)
-          .then((qs) => {
-            const map = Object.fromEntries(qs.map((q) => [q.code, q]));
-            setQuotesMap(map);
-            setWatchAll((prev) =>
-              prev.map((it) => ({ ...it, quote: map[it.code] ?? null })),
-            );
-          })
-          .catch(() => {});
+      const quotes = codes.length
+        ? await apiGet<Quote[]>(`/quotes?codes=${codes.join(',')}`).catch(() => [] as Quote[])
+        : [];
+      const qmap = new Map(quotes.map((q) => [q.code, q]));
+      const nextWatchAll = Array.from(merged.values()).map((it) => ({
+        ...it,
+        quote: qmap.get(it.code) ?? null,
+      }));
+
+      // 内容没变 → 保留旧引用,零重渲染
+      const sig = contentSig({ positions: p.items, watchAll: nextWatchAll });
+      if (sig !== baseSigRef.current) {
+        baseSigRef.current = sig;
+        setPositions(p.items);
+        setWatchAll(nextWatchAll);
       }
+      return true;
     } catch {
       /* toast 已由拦截器处理 */
+      return false;
     } finally {
+      baseInFlightRef.current = false;
       setBaseLoaded(true);
     }
   }, []);
 
+  // 首屏:三条链各自独立 —— 指数先到,情绪后补,互不等待
   useEffect(() => {
     fetchBase();
-    fetchMarketHeader();
-  }, [fetchBase, fetchMarketHeader]);
+    fetchMarketOverview();
+    fetchMarketSentiment();
+  }, [fetchBase, fetchMarketOverview, fetchMarketSentiment]);
+
+  // P1(阶段10):轮询节奏 —— 分档频率 + 可见性暂停 + 失败退避
+  //
+  // 分档理由:盯盘最需要「新」的是**报价**(15s),指数次之(15s);
+  // 而**情绪**(/market/sentiment)服务端本身就要 ~2.5s,拉一次能看很久 —— 60s 一档。
+  const FAST_MS = 15_000;
+  const SLOW_MS = 60_000;
+  const visibleRef = useRef(true);
+  const failStreakRef = useRef(0);
+
+  // 页面不可见(切到别的标签页)→ 暂停轮询。
+  // 理由:后台标签页的轮询既没人看,又会把请求堆起来。
+  useEffect(() => {
+    const onVis = () => {
+      visibleRef.current = !document.hidden;
+    };
+    document.addEventListener('visibilitychange', onVis);
+    visibleRef.current = !document.hidden;
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
 
   useEffect(() => {
     if (!autoRefresh) {
       setSecondsLeft(0);
       return;
     }
-    fetchBase();
-    fetchMarketHeader();
-    setSecondsLeft(15);
-    const refresh = setInterval(() => {
-      fetchBase().finally(() => {
-        fetchMarketHeader();
-        setSecondsLeft(15);
-      });
-    }, 15000);
-    const tick = setInterval(
-      () => setSecondsLeft((s) => Math.max(0, s - 1)),
-      1000,
-    );
-    return () => {
-      clearInterval(refresh);
-      clearInterval(tick);
+    failStreakRef.current = 0;
+
+    let fastTimer: ReturnType<typeof setTimeout> | null = null;
+    let slowTimer: ReturnType<typeof setTimeout> | null = null;
+    let tickTimer: ReturnType<typeof setInterval> | null = null;
+
+    // 快档:报价 + 指数(15s)。失败退避:连续失败时 15s → 22.5s → 30s(封顶)。
+    const scheduleFast = () => {
+      if (fastTimer) clearTimeout(fastTimer);
+      const delay = FAST_MS + Math.min(failStreakRef.current, 2) * (FAST_MS / 2);
+      fastTimer = setTimeout(async () => {
+        if (!visibleRef.current) {
+          // 页面不可见 → 这一轮不发请求,直接等下一轮
+          scheduleFast();
+          return;
+        }
+        const okBase = await fetchBase();
+        const okOverview = await fetchMarketOverview();
+        if (okBase && okOverview) failStreakRef.current = 0;
+        else failStreakRef.current = Math.min(failStreakRef.current + 1, 2);
+        setSecondsLeft(Math.round(delay / 1000));
+        scheduleFast();
+      }, delay);
     };
-  }, [autoRefresh, fetchBase, fetchMarketHeader]);
+
+    // 慢档:情绪 + 量能(60s)
+    const scheduleSlow = () => {
+      if (slowTimer) clearTimeout(slowTimer);
+      slowTimer = setTimeout(async () => {
+        if (visibleRef.current) await fetchMarketSentiment();
+        scheduleSlow();
+      }, SLOW_MS);
+    };
+
+    fetchBase();
+    fetchMarketOverview();
+    setSecondsLeft(Math.round(FAST_MS / 1000));
+    scheduleFast();
+    scheduleSlow();
+    tickTimer = setInterval(tickSecondsLeft, 1000);
+
+    return () => {
+      if (fastTimer) clearTimeout(fastTimer);
+      if (slowTimer) clearTimeout(slowTimer);
+      if (tickTimer) clearInterval(tickTimer);
+    };
+  }, [
+    autoRefresh,
+    fetchBase,
+    fetchMarketOverview,
+    fetchMarketSentiment,
+    setSecondsLeft,
+    tickSecondsLeft,
+  ]);
 
   /**
    * 决策卡:纯确定性、无 LLM —— 与 analysis 并行拉取,互不阻塞
@@ -419,6 +591,26 @@ export default function Workbench() {
     },
     [fetchDecision],
   );
+
+  /* ---------------- 阶段10:盘中复盘入口 + 全局助手上下文 ---------------- */
+
+  // 把「当前选中的票」报给全局助手 —— 助手会自动带进事实包,
+  // 所以在任何页面唤起它,都知道你现在盯的是哪只。
+  // ⚠️ 只消费**动作** context(引用稳定)—— 用完整 context 的话,
+  //    助手每吐一个 token 都会让盯盘页整页重渲染,把性能优化打回去。
+  const { setSelectedStock } = useAssistantActions();
+  const selectedName = selectedQuote?.name ?? null;
+  useEffect(() => {
+    setSelectedStock(activeCode, selectedName);
+  }, [activeCode, selectedName, setSelectedStock]);
+
+  // 顶栏「盘中复盘」胶囊的今日状态(是否交易日 / 已产出哪几档 / 下一档倒计时)
+  const loadSchedule = useIntradayStore((s) => s.loadSchedule);
+  const panelOpen = useIntradayStore((s) => s.panelOpen);
+  const closePanel = useIntradayStore((s) => s.closePanel);
+  useEffect(() => {
+    void loadSchedule();
+  }, [loadSchedule]);
 
   /** 流式:用户手动点「开始分析/重新分析」 — 每次实时拉 K + 实时 LLM,无节点缓存 */
   const refreshAnalysis = useCallback(() => {
@@ -551,7 +743,6 @@ export default function Workbench() {
         onTabChange={setTab}
         indexes={marketHeader?.indexes ?? []}
         autoRefresh={autoRefresh}
-        secondsLeft={secondsLeft}
         onToggleRefresh={() => setAutoRefresh((v) => !v)}
         dateStr={dateStr}
       />
@@ -809,6 +1000,9 @@ export default function Workbench() {
       >
         <HoldingsHealthPanel />
       </LiquidModal>
+
+      {/* 阶段10:盘中复盘抽屉(顶栏胶囊点开) */}
+      <IntradayReviewPanel open={panelOpen} onClose={closePanel} />
     </div>
   );
 }

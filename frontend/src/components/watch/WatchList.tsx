@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
@@ -56,6 +56,293 @@ const MODE_META: Record<WatchListMode, { title: string; empty: string }> = {
  * 两种形态共用同一份交互逻辑(增删 / 特别关注 / 持仓编辑 / 右键菜单),
  * 避免复制组件导致两边行为漂移。
  */
+type WatchRowProps = {
+  it: WatchItem;
+  isActive: boolean;
+  mode: WatchListMode;
+  variant: 'panel' | 'rail';
+  onSelect: (code: string) => void;
+  onContextMenu: (e: React.MouseEvent, item: WatchItem) => void;
+  /** rail 形态行尾「⋯」:父组件据此开右键菜单(坐标换算在父组件做) */
+  onOpenMenu: (item: WatchItem, rect: DOMRect) => void;
+  /** panel 形态:设持仓 */
+  onOpenSetPos: (item: WatchItem) => void;
+  /** panel 形态:特别关注开关 */
+  onToggleFavorite: (code: string, next: boolean) => void;
+  /** panel 形态:一键清仓 */
+  onClear: (item: WatchItem) => void;
+};
+
+/**
+ * 自选列表的**单行**(memo)
+ *
+ * P6(阶段10 续做):切票时这条路径原本产生 **710ms 主线程长任务**,而且发生在
+ * **任何请求发出之前** → 卡的是点击瞬间的同步 React 渲染,不是接口。
+ * 根因是 44 行都是**内联 `motion.li`**(带 `layout`)且没有 memo:
+ * `activeCode` 一变 → 44 行全部重渲染 + framer-motion 投影系统全量测量。
+ *
+ * 抽成 memo 组件后,切票只有「旧选中行 + 新选中行」两行重渲染。
+ *
+ * ⚠️ **memo 的前提是 props 引用稳定**:行用到的回调(`onSelect` / `onContextMenu` /
+ * `onOpenMenu` / `onOpenSetPos` / `onToggleFavorite` / `onClear`)在父组件里
+ * 全部是 useCallback 或 setState setter —— 任何一个每次渲染新建,浅比较就会失配,
+ * memo 立刻失效(性能优化「看着做了、其实没生效」最常见的坑)。
+ *
+ * `motion.li layout` **保留**:P5 实测去掉它对首屏无改善,而列表重排的动效是刻意保留的。
+ */
+const WatchRow = memo(function WatchRow({
+  it,
+  isActive,
+  mode,
+  variant,
+  onSelect,
+  onContextMenu,
+  onOpenMenu,
+  onOpenSetPos,
+  onToggleFavorite,
+  onClear,
+}: WatchRowProps) {
+  const halted = it.quote != null && Number(it.quote.currentPrice) === 0;
+  return (
+    <motion.li
+      layout
+      onContextMenu={(e) => onContextMenu(e, it)}
+      className="relative"
+    >
+      {variant === 'rail' ? (
+        /* rail 形态:两行文字(名称 / 代码)+ 右对齐现价与涨跌幅。
+           窄栏放不下大卡片,行高压到 ~34px,43 只自选也能一屏扫完。
+           交互入口(设持仓 / 特别关注 / 清仓)收进右侧「⋯」菜单。 */
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => onSelect(it.code)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onSelect(it.code);
+            }
+          }}
+          className={clsx(
+            'w-full flex items-center gap-1.5 px-2 py-1 text-left transition-colors border-b border-border-def/40 relative cursor-pointer',
+            isActive ? 'bg-accent-subtle' : 'hover:bg-bg-elevated',
+          )}
+        >
+          {isActive && (
+            <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-accent" aria-hidden />
+          )}
+          <span className="min-w-0 flex-1 flex flex-col min-w-0">
+            <span className="flex items-center gap-1 min-w-0">
+              <span className="text-[12.5px] text-text-pri truncate leading-tight">
+                {it.name ?? it.code}
+              </span>
+              {it.inPosition &&
+                (mode === 'position' ? (
+                  /* 持仓视角:每一行都是持仓,「持」徽标没有信息量 —— 换成浮盈比例。
+                     红涨绿跌(A股),与顶栏「浮盈」同色系(pctClass)。 */
+                  <span
+                    className={clsx(
+                      'text-[9.5px] font-mono font-semibold tabular-nums shrink-0',
+                      pctClass(it.positionPnlPct),
+                    )}
+                    title={
+                      it.positionPnlPct == null
+                        ? '浮动盈亏(行情未就绪)'
+                        : `浮动盈亏 ${it.positionPnlPct > 0 ? '+' : ''}${it.positionPnlPct.toFixed(2)}%`
+                    }
+                  >
+                    {it.positionPnlPct == null
+                      ? '--'
+                      : `${it.positionPnlPct > 0 ? '+' : ''}${it.positionPnlPct.toFixed(2)}%`}
+                  </span>
+                ) : (
+                  <span className="text-[9px] px-1 rounded-xs bg-accent-subtle text-accent font-semibold shrink-0">
+                    持
+                  </span>
+                ))}
+              {/* 浮亏红点:持仓视角里已由浮盈比例精确表达,不再重复 */}
+              {it.healthFlag === 'loss' && mode !== 'position' && (
+                <span
+                  className="w-1.5 h-1.5 rounded-full bg-down shrink-0"
+                  title="持仓浮亏"
+                  aria-label="浮亏预警"
+                />
+              )}
+              {it.healthFlag === 'concentration' && (
+                <span
+                  className="w-1.5 h-1.5 rounded-full bg-warn shrink-0"
+                  title="持仓集中度过高"
+                  aria-label="高集中度预警"
+                />
+              )}
+              {it.isFavorite && (
+                <Star size={11} weight="Filled" className="text-warn shrink-0" />
+              )}
+            </span>
+            <span className="text-[9.5px] font-mono text-text-ter leading-tight">
+              {it.code}
+            </span>
+          </span>
+          <span className="text-[12px] font-mono tabular-nums text-text-pri w-[44px] text-right shrink-0">
+            {!it.quote ? '--' : halted ? '停牌' : it.quote.currentPrice}
+          </span>
+          <span
+            className={clsx(
+              'text-[10.5px] font-mono tabular-nums w-[48px] text-right shrink-0',
+              !it.quote || halted
+                ? 'text-text-ter'
+                : it.quote.changePct > 0
+                  ? 'text-up'
+                  : it.quote.changePct < 0
+                    ? 'text-down'
+                    : 'text-text-ter',
+            )}
+          >
+            {!it.quote
+              ? '--'
+              : halted
+                ? '停牌'
+                : `${it.quote.changePct > 0 ? '+' : ''}${it.quote.changePct.toFixed(2)}%`}
+          </span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              onOpenMenu(it, r);
+            }}
+            className="w-4 h-5 shrink-0 text-text-ter hover:text-text-pri transition-colors text-[13px] leading-none flex items-center justify-center"
+            title="更多操作(设持仓 / 特别关注 / 删除)"
+            aria-label="更多操作"
+          >
+            ⋯
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => onSelect(it.code)}
+          className={clsx(
+            'w-full flex items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors border border-transparent',
+            isActive
+              ? 'bg-accent-subtle ring-1 ring-accent/25'
+              : 'hover:bg-bg-subtle',
+          )}
+        >
+        <span
+          className={clsx(
+            'w-9 h-9 rounded-xl bg-gradient-to-br text-white text-sm font-bold flex items-center justify-center shrink-0 shadow-sm',
+            chipColor(it.code),
+          )}
+        >
+          {(it.name ?? it.code).slice(0, 1)}
+        </span>
+        <div className="min-w-0 flex-1 flex items-center gap-2">
+          <span className="text-sm font-medium text-text-pri truncate">
+            {it.name ?? it.code}
+          </span>
+          {it.inPosition && (
+            <>
+              <span className="text-[10px] px-1.5 py-px rounded-full bg-accent-subtle text-accent border border-accent/25 shrink-0">
+                持仓
+              </span>
+              {/* M3.2 持仓行轻提示红点:浮亏=down / 集中度=warn / 浮盈=up */}
+              {it.healthFlag === 'loss' && (
+                <span
+                  className="w-2 h-2 rounded-full bg-down shrink-0 animate-pulse"
+                  title="持仓浮亏:点击右侧编辑查看明细"
+                  aria-label="浮亏预警"
+                />
+              )}
+              {it.healthFlag === 'concentration' && (
+                <span
+                  className="w-2 h-2 rounded-full bg-warn shrink-0"
+                  title="持仓集中度过高:点击右侧编辑查看明细"
+                  aria-label="高集中度预警"
+                />
+              )}
+            </>
+          )}
+          {it.isFavorite && (
+            <Star size={12} weight="Filled" className="text-yellow-400 shrink-0" />
+          )}
+          <span className="text-xs text-text-ter font-mono hidden sm:inline">{it.code}</span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenSetPos(it);
+            }}
+            className="inline-flex items-center shrink-0"
+            title={it.inPosition ? '调整持仓(股数/成本)' : '设为持仓(股数/成本)'}
+          >
+            <Edit
+              size={13}
+              className="text-text-ter/60 hover:text-accent"
+            />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              void onToggleFavorite(it.code, !it.isFavorite);
+            }}
+            className="inline-flex items-center shrink-0"
+            title={it.isFavorite ? '取消特别关注' : '加入特别关注'}
+          >
+            <Star
+              size={13}
+              weight={it.isFavorite ? 'Filled' : 'Outline'}
+              className={clsx(
+                'transition-colors',
+                it.isFavorite
+                  ? 'text-yellow-400'
+                  : 'text-text-ter/40 hover:text-yellow-400',
+              )}
+            />
+          </button>
+        </div>
+        <div className="text-sm font-mono font-medium text-text-pri w-24 text-right shrink-0">
+          {!it.quote ? '--' : halted ? '停牌' : it.quote.currentPrice}
+        </div>
+        <div className="w-20 flex justify-end shrink-0">
+          <span
+            className={clsx(
+              'px-2 py-1 rounded-lg text-xs font-mono font-semibold',
+              !it.quote || halted
+                ? 'bg-bg-subtle text-text-ter'
+                : it.quote.changePct > 0
+                  ? 'bg-up-bg text-up'
+                  : it.quote.changePct < 0
+                    ? 'bg-down-bg text-down'
+                    : 'bg-bg-subtle text-text-ter',
+            )}
+          >
+            {!it.quote
+              ? '--'
+              : halted
+                ? '停牌'
+                : `${it.quote.changePct > 0 ? '+' : ''}${it.quote.changePct.toFixed(2)}%`}
+          </span>
+        </div>
+        {it.inPosition && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClear(it);
+            }}
+            className="shrink-0 text-xs leading-none hover:scale-110 transition-transform"
+            title="一键清仓"
+          >
+            🛑
+          </button>
+        )}
+      </button>
+      )}
+    </motion.li>
+  );
+});
+
 export function WatchList({
   items,
   activeCode,
@@ -161,10 +448,22 @@ export function WatchList({
     }
   };
 
-  const onContextMenu = (e: React.MouseEvent, item: WatchItem) => {
+  // P6(阶段10 续做):以下回调必须**引用稳定** —— 否则 memo 行每次渲染都浅比较失配,
+  // memo 白做(切票又变回 44 行全量重渲染)。onChanged 用 ref 转一手,不去依赖它的稳定性。
+  const onChangedRef = useRef(onChanged);
+  useEffect(() => {
+    onChangedRef.current = onChanged;
+  }, [onChanged]);
+
+  const onContextMenu = useCallback((e: React.MouseEvent, item: WatchItem) => {
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY, item });
-  };
+  }, []);
+
+  // rail 形态行尾「⋯」:坐标换算(往左让出菜单宽度)在父组件做
+  const onOpenMenu = useCallback((item: WatchItem, rect: DOMRect) => {
+    setContextMenu({ x: Math.max(rect.left - 90, 8), y: rect.bottom, item });
+  }, []);
 
   const submitSetPosition = async () => {
     if (!setPosTarget) return;
@@ -194,19 +493,19 @@ export function WatchList({
     }
   };
 
-  const openSetPos = (item: WatchItem) => {
+  const openSetPos = useCallback((item: WatchItem) => {
     setSetPosTarget(item);
     setPosForm({ shares: '', costPrice: '' });
-  };
+  }, []);
 
-  const toggleFavorite = async (code: string, next: boolean) => {
+  const toggleFavorite = useCallback(async (code: string, next: boolean) => {
     try {
       await apiPatch(`/watchlist/${encodeURIComponent(code)}`, { isFavorite: next });
-      onChanged();
+      onChangedRef.current();
     } catch {
       /* toast 已由拦截器处理 */
     }
-  };
+  }, []);
 
   const submitRemove = async () => {
     if (!removeTarget) return;
@@ -320,249 +619,21 @@ export function WatchList({
         {items.length === 0 && (
           <li className="text-text-ter text-sm text-center py-10">{MODE_META[mode].empty}</li>
         )}
-        {sortedItems.map((it) => {
-          const isActive = it.code === activeCode;
-          const halted = it.quote != null && Number(it.quote.currentPrice) === 0;
-          return (
-            <motion.li
-              key={it.code}
-              layout
-              onContextMenu={(e) => onContextMenu(e, it)}
-              className="relative"
-            >
-              {variant === 'rail' ? (
-                /* rail 形态:两行文字(名称 / 代码)+ 右对齐现价与涨跌幅。
-                   窄栏放不下大卡片,行高压到 ~34px,43 只自选也能一屏扫完。
-                   交互入口(设持仓 / 特别关注 / 清仓)收进右侧「⋯」菜单。 */
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onSelect(it.code)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      onSelect(it.code);
-                    }
-                  }}
-                  className={clsx(
-                    'w-full flex items-center gap-1.5 px-2 py-1 text-left transition-colors border-b border-border-def/40 relative cursor-pointer',
-                    isActive ? 'bg-accent-subtle' : 'hover:bg-bg-elevated',
-                  )}
-                >
-                  {isActive && (
-                    <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-accent" aria-hidden />
-                  )}
-                  <span className="min-w-0 flex-1 flex flex-col min-w-0">
-                    <span className="flex items-center gap-1 min-w-0">
-                      <span className="text-[12.5px] text-text-pri truncate leading-tight">
-                        {it.name ?? it.code}
-                      </span>
-                      {it.inPosition &&
-                        (mode === 'position' ? (
-                          /* 持仓视角:每一行都是持仓,「持」徽标没有信息量 —— 换成浮盈比例。
-                             红涨绿跌(A股),与顶栏「浮盈」同色系(pctClass)。 */
-                          <span
-                            className={clsx(
-                              'text-[9.5px] font-mono font-semibold tabular-nums shrink-0',
-                              pctClass(it.positionPnlPct),
-                            )}
-                            title={
-                              it.positionPnlPct == null
-                                ? '浮动盈亏(行情未就绪)'
-                                : `浮动盈亏 ${it.positionPnlPct > 0 ? '+' : ''}${it.positionPnlPct.toFixed(2)}%`
-                            }
-                          >
-                            {it.positionPnlPct == null
-                              ? '--'
-                              : `${it.positionPnlPct > 0 ? '+' : ''}${it.positionPnlPct.toFixed(2)}%`}
-                          </span>
-                        ) : (
-                          <span className="text-[9px] px-1 rounded-xs bg-accent-subtle text-accent font-semibold shrink-0">
-                            持
-                          </span>
-                        ))}
-                      {/* 浮亏红点:持仓视角里已由浮盈比例精确表达,不再重复 */}
-                      {it.healthFlag === 'loss' && mode !== 'position' && (
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-down shrink-0"
-                          title="持仓浮亏"
-                          aria-label="浮亏预警"
-                        />
-                      )}
-                      {it.healthFlag === 'concentration' && (
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-warn shrink-0"
-                          title="持仓集中度过高"
-                          aria-label="高集中度预警"
-                        />
-                      )}
-                      {it.isFavorite && (
-                        <Star size={11} weight="Filled" className="text-warn shrink-0" />
-                      )}
-                    </span>
-                    <span className="text-[9.5px] font-mono text-text-ter leading-tight">
-                      {it.code}
-                    </span>
-                  </span>
-                  <span className="text-[12px] font-mono tabular-nums text-text-pri w-[44px] text-right shrink-0">
-                    {!it.quote ? '--' : halted ? '停牌' : it.quote.currentPrice}
-                  </span>
-                  <span
-                    className={clsx(
-                      'text-[10.5px] font-mono tabular-nums w-[48px] text-right shrink-0',
-                      !it.quote || halted
-                        ? 'text-text-ter'
-                        : it.quote.changePct > 0
-                          ? 'text-up'
-                          : it.quote.changePct < 0
-                            ? 'text-down'
-                            : 'text-text-ter',
-                    )}
-                  >
-                    {!it.quote
-                      ? '--'
-                      : halted
-                        ? '停牌'
-                        : `${it.quote.changePct > 0 ? '+' : ''}${it.quote.changePct.toFixed(2)}%`}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                      setContextMenu({ x: Math.max(r.left - 90, 8), y: r.bottom, item: it });
-                    }}
-                    className="w-4 h-5 shrink-0 text-text-ter hover:text-text-pri transition-colors text-[13px] leading-none flex items-center justify-center"
-                    title="更多操作(设持仓 / 特别关注 / 删除)"
-                    aria-label="更多操作"
-                  >
-                    ⋯
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => onSelect(it.code)}
-                  className={clsx(
-                    'w-full flex items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition-colors border border-transparent',
-                    isActive
-                      ? 'bg-accent-subtle ring-1 ring-accent/25'
-                      : 'hover:bg-bg-subtle',
-                  )}
-                >
-                <span
-                  className={clsx(
-                    'w-9 h-9 rounded-xl bg-gradient-to-br text-white text-sm font-bold flex items-center justify-center shrink-0 shadow-sm',
-                    chipColor(it.code),
-                  )}
-                >
-                  {(it.name ?? it.code).slice(0, 1)}
-                </span>
-                <div className="min-w-0 flex-1 flex items-center gap-2">
-                  <span className="text-sm font-medium text-text-pri truncate">
-                    {it.name ?? it.code}
-                  </span>
-                  {it.inPosition && (
-                    <>
-                      <span className="text-[10px] px-1.5 py-px rounded-full bg-accent-subtle text-accent border border-accent/25 shrink-0">
-                        持仓
-                      </span>
-                      {/* M3.2 持仓行轻提示红点:浮亏=down / 集中度=warn / 浮盈=up */}
-                      {it.healthFlag === 'loss' && (
-                        <span
-                          className="w-2 h-2 rounded-full bg-down shrink-0 animate-pulse"
-                          title="持仓浮亏:点击右侧编辑查看明细"
-                          aria-label="浮亏预警"
-                        />
-                      )}
-                      {it.healthFlag === 'concentration' && (
-                        <span
-                          className="w-2 h-2 rounded-full bg-warn shrink-0"
-                          title="持仓集中度过高:点击右侧编辑查看明细"
-                          aria-label="高集中度预警"
-                        />
-                      )}
-                    </>
-                  )}
-                  {it.isFavorite && (
-                    <Star size={12} weight="Filled" className="text-yellow-400 shrink-0" />
-                  )}
-                  <span className="text-xs text-text-ter font-mono hidden sm:inline">{it.code}</span>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openSetPos(it);
-                    }}
-                    className="inline-flex items-center shrink-0"
-                    title={it.inPosition ? '调整持仓(股数/成本)' : '设为持仓(股数/成本)'}
-                  >
-                    <Edit
-                      size={13}
-                      className="text-text-ter/60 hover:text-accent"
-                    />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void toggleFavorite(it.code, !it.isFavorite);
-                    }}
-                    className="inline-flex items-center shrink-0"
-                    title={it.isFavorite ? '取消特别关注' : '加入特别关注'}
-                  >
-                    <Star
-                      size={13}
-                      weight={it.isFavorite ? 'Filled' : 'Outline'}
-                      className={clsx(
-                        'transition-colors',
-                        it.isFavorite
-                          ? 'text-yellow-400'
-                          : 'text-text-ter/40 hover:text-yellow-400',
-                      )}
-                    />
-                  </button>
-                </div>
-                <div className="text-sm font-mono font-medium text-text-pri w-24 text-right shrink-0">
-                  {!it.quote ? '--' : halted ? '停牌' : it.quote.currentPrice}
-                </div>
-                <div className="w-20 flex justify-end shrink-0">
-                  <span
-                    className={clsx(
-                      'px-2 py-1 rounded-lg text-xs font-mono font-semibold',
-                      !it.quote || halted
-                        ? 'bg-bg-subtle text-text-ter'
-                        : it.quote.changePct > 0
-                          ? 'bg-up-bg text-up'
-                          : it.quote.changePct < 0
-                            ? 'bg-down-bg text-down'
-                            : 'bg-bg-subtle text-text-ter',
-                    )}
-                  >
-                    {!it.quote
-                      ? '--'
-                      : halted
-                        ? '停牌'
-                        : `${it.quote.changePct > 0 ? '+' : ''}${it.quote.changePct.toFixed(2)}%`}
-                  </span>
-                </div>
-                {it.inPosition && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setClearTarget(it);
-                    }}
-                    className="shrink-0 text-xs leading-none hover:scale-110 transition-transform"
-                    title="一键清仓"
-                  >
-                    🛑
-                  </button>
-                )}
-              </button>
-              )}
-            </motion.li>
-          );
-        })}
+        {sortedItems.map((it) => (
+          <WatchRow
+            key={it.code}
+            it={it}
+            isActive={it.code === activeCode}
+            mode={mode}
+            variant={variant}
+            onSelect={onSelect}
+            onContextMenu={onContextMenu}
+            onOpenMenu={onOpenMenu}
+            onOpenSetPos={openSetPos}
+            onToggleFavorite={toggleFavorite}
+            onClear={setClearTarget}
+          />
+        ))}
       </ul>
 
       {renderModal(

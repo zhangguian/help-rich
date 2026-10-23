@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import clsx from 'clsx';
 
@@ -186,6 +186,15 @@ export function KLineChart({
   const [indicators, setIndicators] = useState<KlineIndicatorsResponse['indicators'] | null>(null);
   // 图例:每条线在 hover 时间点的当前值(未 hover 时为 null)
   const [hoverValues, setHoverValues] = useState<Record<string, number | null>>({});
+  // P2(阶段10):十字光标读数的合并机制
+  // ── 为什么 ── 原来每次 mousemove 都直接 setHoverValues,图例整棵重建,
+  //   实测(prod build,盯盘页)连续移动一次光标就产生 56~57ms 的主线程长任务。
+  // ── 怎么做 ── mousemove 事件本身很密(一次拖动上百次),但人对读数的刷新率
+  //   感知不了 60ms 以外的差别。所以:读数先存进 pending,再用 rAF 合并到帧上,
+  //   并限制两次落盘至少间隔 60ms。既不掉帧,也不让眼睛看到"跳读数"。
+  const hoverRafRef = useRef<number | null>(null);
+  const hoverPendingRef = useRef<Record<string, number | null> | null>(null);
+  const hoverLastFlushRef = useRef(0);
   // 整组显隐(MA / BOLL / MACD / KDJ);volume 单独由 showVolume 控制
   const [visibleGroups, setVisibleGroups] = useState<Record<OverlayGroup, boolean>>(() => ({
     ...DEFAULT_VISIBLE,
@@ -503,9 +512,29 @@ export function KLineChart({
           { key: 'kdjJ', series: kdjJ },
         ].filter((x): x is { key: string; series: ISeriesApi<'Line'> } => x.series !== null);
 
+        // 光标读数落盘:节流 60ms(人眼看不出更细的刷新),并对齐到动画帧
+        const HOVER_THROTTLE_MS = 60;
+        const scheduleHoverFlush = () => {
+          if (hoverRafRef.current !== null) return;
+          hoverRafRef.current = requestAnimationFrame(() => {
+            hoverRafRef.current = null;
+            const elapsed = performance.now() - hoverLastFlushRef.current;
+            if (elapsed < HOVER_THROTTLE_MS && hoverPendingRef.current !== null) {
+              // 还没到节流窗口,下一帧再看(此时不 setState,主线程不被占)
+              scheduleHoverFlush();
+              return;
+            }
+            const next = hoverPendingRef.current;
+            hoverPendingRef.current = null;
+            hoverLastFlushRef.current = performance.now();
+            if (next) setHoverValues(next);
+          });
+        };
+
         const handleCrosshair = (param: MouseEventParams) => {
           if (!param.time) {
-            setHoverValues({});
+            hoverPendingRef.current = {};
+            scheduleHoverFlush();
             return;
           }
           const next: Record<string, number | null> = {};
@@ -513,7 +542,8 @@ export function KLineChart({
             const sd = param.seriesData.get(series) as { value?: number } | undefined;
             next[key] = sd?.value ?? null;
           });
-          setHoverValues(next);
+          hoverPendingRef.current = next;
+          scheduleHoverFlush();
         };
         chart.subscribeCrosshairMove(handleCrosshair);
 
@@ -537,6 +567,12 @@ export function KLineChart({
       disposed = true;
       window.removeEventListener('resize', onResize);
       ro?.disconnect();
+      // P2:光标读数的待落盘 rAF 要一并取消,否则卸载后仍可能触发一次 setState
+      if (hoverRafRef.current !== null) {
+        cancelAnimationFrame(hoverRafRef.current);
+        hoverRafRef.current = null;
+      }
+      hoverPendingRef.current = null;
       const cleanup = (chart as unknown as { __cleanupCrosshair?: () => void }).__cleanupCrosshair;
       if (cleanup) cleanup();
       chart.remove();
@@ -562,7 +598,10 @@ export function KLineChart({
   // v3:在原有 MA/BOLL/MACD/KDJ 基础上新增 RSI/CCI/STOCH/MOM/WMSR/SKT/FASK
   // 每个新指标组不画线,仅显示当前末值 + state chip + 知识点 tooltip
   const ind = indicators;
-  const legendRows: LegendRow[] = [
+  // P2(阶段10):图例行 memo —— 原来每次渲染都重建整棵 legendRows 数组,
+  // 而 legendRows 只依赖「指标末值快照」与「图表配色」,两者都是稳定引用。
+  // memo 之后,光标读数变化不再连带重建图例结构,只重渲染读数本身。
+  const legendRows = useMemo<LegendRow[]>(() => [
     {
       group: 'volume',
       label: '成交量',
@@ -680,7 +719,7 @@ export function KLineChart({
       state: stateOfIndicator(ind?.fask?.state ?? null),
       items: [],
     },
-  ];
+  ], [ind, COLOR]);
 
   return (
     <div className={clsx(fill && 'h-full flex flex-col min-h-0')}>

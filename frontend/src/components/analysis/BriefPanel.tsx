@@ -55,7 +55,9 @@ export function BriefPanel() {
   const [loading, setLoading] = useState<'' | 'gen' | 'push' | 'intraday'>('');
   const [error, setError] = useState('');
   const [confirmPush, setConfirmPush] = useState(false);
-  const [slot, setSlot] = useState<'11:30' | '14:50'>('11:30');
+  // 阶段10:下午档从 14:50 挪到了 14:00(与盘中复盘的档位一致)。
+  // 14:50 仍保留 —— 那是旧的异动扫描窗口,后端仍接受。
+  const [slot, setSlot] = useState<'11:30' | '14:00' | '14:50'>('11:30');
 
   useEffect(() => {
     void fetchWorkflowSchedule()
@@ -159,7 +161,7 @@ export function BriefPanel() {
           </button>
 
           <div className="flex items-center gap-1 rounded-md border border-border-base p-0.5">
-            {(['11:30', '14:50'] as const).map((s) => (
+            {(['11:30', '14:00', '14:50'] as const).map((s) => (
               <button
                 key={s}
                 type="button"

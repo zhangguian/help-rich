@@ -3,8 +3,12 @@
 | 时段 | 时间 | 产出 |
 | --- | --- | --- |
 | 盘前 | 08:30 | 隔夜消息汇总 + 持仓风险提示 + 今日关注清单 |
-| 盘中 | 11:30 / 14:50 | 异动扫描 + 机会提醒 |
+| 盘中 | 11:30 / 14:00 | 异动扫描 + 机会提醒 |
 | 盘后 | 16:00 | 当日选股 + 复盘要点(选股调度器已覆盖,这里只补复盘提示) |
+
+⚠️ 阶段 T2 起,盘中的**主产出**改由「盘中复盘」承担
+(`modules/analysis/intraday_review.py`:市场意见 + 逐票动作清单);
+本模块的 `run_intraday` 保留为异动扫描能力,并被复盘当作**补充段**并入。
 
 设计要点:
 - **独立于选股调度器**:关掉也不影响主流程
@@ -15,9 +19,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from dataclasses import dataclass, field
-from datetime import date, datetime
 
 from app.core.logging import logger
 from app.modules.notify.service import NotifyLevel, NotifyMessage, notify_service
@@ -100,8 +102,13 @@ class WorkflowAgentService:
 
     # ---------- 盘中 ----------
 
-    async def run_intraday(self, slot: str = "11:30") -> WorkflowResult:
-        """盘中扫描:异动 + 机会。slot: "11:30" / "14:50"。"""
+    async def scan_intraday_moves(self, limit: int = 10) -> tuple[list[str], list[str]]:
+        """异动扫描(关注标的里涨跌幅 >= 5% 的)。返回 (lines, codes)。
+
+        单独抽出来是为了让「盘中复盘」能把它当**补充段**并入 —— 不重写一遍
+        扫描逻辑,也不新增第二条 LLM 链路(这里只取客观数据,要不要润色由
+        调用方决定;复盘侧选择不润色)。
+        """
         from app.modules.screener.service import get_latest_run, get_picks_by_run
 
         lines: list[str] = []
@@ -113,9 +120,9 @@ class WorkflowAgentService:
             if picks:
                 from app.services.quote_service import QuoteService
 
-                quotes = await QuoteService().get_quotes([p.stock_code for p in picks[:10]])
+                quotes = await QuoteService().get_quotes([p.stock_code for p in picks[:limit]])
                 qmap = {q.code: q for q in quotes}
-                for pk in picks[:10]:
+                for pk in picks[:limit]:
                     q = qmap.get(pk.stock_code)
                     if not q:
                         continue
@@ -126,6 +133,12 @@ class WorkflowAgentService:
                         lines.append(f"{arrow} {pk.stock_code} {q.name} {chg:+.1f}%")
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[workflow] 盘中扫描失败: {e}")
+
+        return lines, list(dict.fromkeys(codes))
+
+    async def run_intraday(self, slot: str = "11:30") -> WorkflowResult:
+        """盘中扫描:异动 + 机会。slot: "11:30" / "14:00" / "14:50"。"""
+        lines, codes = await self.scan_intraday_moves()
 
         if not lines:
             lines.append("暂无明显异动。")
@@ -156,7 +169,7 @@ class WorkflowAgentService:
 
     async def _polish(self, result: WorkflowResult) -> str:
         """用 LLM 把客观数据润色成 2-3 句人话;失败返回空(保留原文)。"""
-        from app.modules.analysis.service import _ask, _get_llm
+        from app.modules.analysis.service import _get_llm
 
         llm = await _get_llm()
         if llm is None:

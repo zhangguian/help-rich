@@ -12,6 +12,8 @@ from app.api.backtest import router as backtest_router
 from app.api.battle_plan import router as battle_plan_router
 from app.api.calculator import router as calculator_router
 from app.api.accounts import router as accounts_router
+from app.api.assistant import router as assistant_router
+from app.api.intraday_review import router as intraday_review_router
 from app.modules.analysis.api import router as multi_agent_router
 from app.modules.notify.api import router as notify_router
 from app.api.onboarding import router as onboarding_router
@@ -234,6 +236,8 @@ app.include_router(notify_router, prefix="/api")
 app.include_router(price_alerts_router, prefix="/api")
 app.include_router(backtest_router, prefix="/api")
 app.include_router(battle_plan_router, prefix="/api")
+app.include_router(intraday_review_router, prefix="/api")
+app.include_router(assistant_router, prefix="/api")
 app.include_router(paper_trading_router, prefix="/api")
 app.include_router(multi_agent_router, prefix="/api")
 app.include_router(workflow_router, prefix="/api")
