@@ -1,12 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 
-import { apiPost } from '@/lib/api';
-import type { Transaction, TransactionCreate } from '@/lib/types';
+import { api, apiErrorCode, apiErrorMessage, apiPost } from '@/lib/api';
+import { decimalFormat, priceFormat } from '@/lib/decimalFormat';
+import { normalizeCode } from '@/lib/stockCode';
+import type { CalculatorResponse, Transaction, TransactionCreate } from '@/lib/types';
 
 import { Button } from '../ui/Button';
 
@@ -39,10 +41,16 @@ interface TransactionFormProps {
 export function TransactionForm({ onSuccess, onCancel, initialStockCode }: TransactionFormProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+  // 录入前实时试算(复用 POST /api/calculator —— 纯算术,不拉 K 线)
+  const [preview, setPreview] = useState<CalculatorResponse | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors },
     reset,
   } = useForm<FormData>({
@@ -57,9 +65,52 @@ export function TransactionForm({ onSuccess, onCancel, initialStockCode }: Trans
     },
   });
 
+  const watched = watch();
+
+  // 输入停 600ms 后试算一次「录入后持仓」
+  //
+  // 用 validateStatus 而不是抛错:边打字边看结论,422(卖出超额)不该每次都弹 toast,
+  // 业务文案就地展示即可。
+  useEffect(() => {
+    const code = normalizeCode(String(watched.stockCode ?? ''));
+    const price = String(watched.price ?? '').trim();
+    const shares = Number(watched.shares);
+    const action = watched.action;
+    if (!code || !/^\d+(\.\d{1,3})?$/.test(price) || !Number.isFinite(shares) || shares <= 0) {
+      setPreview(null);
+      setPreviewError(null);
+      return;
+    }
+    const handle = setTimeout(async () => {
+      setPreviewing(true);
+      try {
+        const r = await api.post<CalculatorResponse>(
+          '/calculator',
+          { stockCode: code, action, txShares: shares, txPrice: price },
+          { timeout: 15000, validateStatus: () => true },
+        );
+        if (r.status === 200) {
+          setPreview(r.data);
+          setPreviewError(null);
+        } else {
+          setPreview(null);
+          const detail = (r.data as { detail?: { message?: string } })?.detail;
+          setPreviewError(detail?.message ?? `试算失败 (HTTP ${r.status})`);
+        }
+      } catch (e) {
+        setPreview(null);
+        setPreviewError(e instanceof Error ? e.message : '试算失败');
+      } finally {
+        setPreviewing(false);
+      }
+    }, 600);
+    return () => clearTimeout(handle);
+  }, [watched.stockCode, watched.action, watched.shares, watched.price]);
+
   const onSubmit = async (data: FormData) => {
     setSubmitting(true);
     setError(null);
+    setErrorCode(null);
     try {
       const payload: TransactionCreate = {
         stockCode: data.stockCode,
@@ -73,7 +124,8 @@ export function TransactionForm({ onSuccess, onCancel, initialStockCode }: Trans
       reset();
       onSuccess?.(tx);
     } catch (e) {
-      if (e instanceof Error) setError(e.message);
+      setErrorCode(apiErrorCode(e));
+      setError(apiErrorMessage(e, '录入失败'));
     } finally {
       setSubmitting(false);
     }
@@ -181,8 +233,74 @@ export function TransactionForm({ onSuccess, onCancel, initialStockCode }: Trans
         )}
       </div>
 
+      {(preview || previewError || previewing) && (
+        <div className="bg-bg-elevated border border-border-def border-l-[3px] border-l-accent rounded-md px-3 py-2.5">
+          <div className="text-[11px] text-text-ter mb-1.5">
+            录入后(实时试算 · 复用 POST /api/calculator)
+            {previewing ? ' · 计算中...' : ''}
+          </div>
+          {previewError ? (
+            <div className="text-xs text-warn">⚠ {previewError}</div>
+          ) : preview ? (
+            <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-text-sec">
+              <span>
+                当前{' '}
+                <b className="font-mono text-text-pri">
+                  {preview.before.shares} 股 @ {priceFormat(preview.before.costPrice)}
+                </b>
+              </span>
+              <span>
+                成交后股数{' '}
+                <b className="font-mono text-text-pri">
+                  {preview.after.shares.toLocaleString()}
+                </b>
+              </span>
+              <span>
+                新均价{' '}
+                <b className="font-mono text-text-pri">
+                  {preview.after.costPrice ? priceFormat(preview.after.costPrice) : '—'}
+                </b>
+              </span>
+              <span>
+                持仓资金{' '}
+                <b className="font-mono text-text-pri">
+                  ¥{decimalFormat(preview.after.totalCost)}
+                </b>
+              </span>
+              <span>
+                本笔已实现{' '}
+                <b className="font-mono text-text-pri">
+                  ¥{decimalFormat(preview.after.realizedPnlNet)}
+                </b>
+              </span>
+              <span>
+                费用{' '}
+                <b className="font-mono text-text-pri">
+                  ¥{decimalFormat(preview.after.feePaid)}
+                </b>
+              </span>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      <div className="text-[11px] leading-relaxed text-text-ter">
+        <span className="text-warn">基准语义:</span>
+        若该笔已被持仓基准吸收,改 / 删会被拒绝(409
+        <code className="font-mono"> TX_ABSORBED </code>)—— 需要修正这段历史时,先在持仓页重新导入该股票的基准。
+        <br />
+        <span className="text-warn">链自洽:</span>
+        卖出超过「该日可卖额度」时,录入会被拒绝(422
+        <code className="font-mono"> INSUFFICIENT_SHARES </code>),不会写坏成本链。
+      </div>
+
       {error && (
-        <div className="p-3 bg-up-bg text-up rounded-sm text-sm">{error}</div>
+        <div className="p-3 bg-danger-bg text-danger rounded-sm text-sm">
+          {errorCode && (
+            <span className="font-mono text-xs mr-1.5 opacity-80">{errorCode}</span>
+          )}
+          {error}
+        </div>
       )}
 
       <div className="flex gap-2 justify-end">

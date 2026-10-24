@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 
+import Decimal from 'decimal.js-light';
 import { useRouter } from 'next/navigation';
 
 import { apiDelete, apiGet, apiPost } from '@/lib/api';
@@ -15,6 +16,25 @@ import { ScoreBadge } from '../signal/ScoreBadge';
 import { ScoreDetail } from '../signal/ScoreDetail';
 
 import { Button } from '../ui/Button';
+
+/**
+ * 「录入后持仓」快照(v0.5.0 事件溯源)
+ *
+ * 每笔流水带自己应用后的持仓(shares_after / total_cost_after)。
+ * 没有快照 = 已被持仓基准吸收 或 历史数据 → 显示「—」。
+ */
+function snapshotOf(tx: Transaction): { shares: number; avg: string } | null {
+  if (tx.sharesAfter == null) return null;
+  let avg = '—';
+  if (tx.totalCostAfter != null && tx.sharesAfter > 0) {
+    try {
+      avg = new Decimal(tx.totalCostAfter).div(tx.sharesAfter).toFixed(3);
+    } catch {
+      avg = '—';
+    }
+  }
+  return { shares: tx.sharesAfter, avg };
+}
 
 /**
  * 流水列表(frontend-arch §10.3,P4.7 升级)
@@ -154,6 +174,7 @@ export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: numbe
               <th className="text-right py-2 px-2">价格</th>
               <th className="text-right py-2 px-2">交易额</th>
               <th className="text-center py-2 px-2">评分</th>
+              <th className="text-right py-2 px-2 whitespace-nowrap">录入后持仓</th>
               <th className="text-right py-2 px-2">操作</th>
             </tr>
           </thead>
@@ -166,6 +187,7 @@ export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: numbe
                 liveScore !== undefined && liveScore !== null;
               const isPending =
                 status === 'pending' || (liveScore === undefined && tx.score === null);
+              const snap = snapshotOf(tx);
 
               return (
                 <tr
@@ -192,6 +214,20 @@ export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: numbe
                       <ScoreBadge score={null} loading />
                     ) : (
                       <ScoreBadge score={liveScore ?? tx.score} />
+                    )}
+                  </td>
+                  <td className="py-2 px-2 text-right font-mono whitespace-nowrap">
+                    {snap ? (
+                      <span className="text-text-pri">
+                        {snap.shares.toLocaleString()} 股 @ {snap.avg}
+                      </span>
+                    ) : (
+                      <span
+                        className="text-text-ter"
+                        title="没有快照:该笔已被持仓基准吸收,或属于历史数据"
+                      >
+                        —
+                      </span>
                     )}
                   </td>
                   <td className="py-2 px-2 text-right space-x-1">

@@ -78,7 +78,7 @@ export function HistoryToolsCard() {
         open={showCalculator}
         onClose={() => setShowCalculator(false)}
         title="🧮 计算器"
-        size="xl"
+        size="2xl"
       >
         <CalculatorPanel />
       </LiquidModal>

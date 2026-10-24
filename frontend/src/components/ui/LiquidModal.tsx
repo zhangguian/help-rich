@@ -36,7 +36,7 @@ export function LiquidModal({
   open: boolean;
   onClose: () => void;
   title: string;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
   maskClosable?: boolean;
   escToClose?: boolean;
   children: ReactNode;
@@ -51,7 +51,22 @@ export function LiquidModal({
     return () => window.removeEventListener('keydown', onKey);
   }, [open, escToClose, onClose]);
 
-  const widths = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-2xl', xl: 'max-w-4xl' };
+  /**
+   * 尺寸档
+   *
+   * - `xl` = max-w-4xl(896px):通用大弹窗
+   * - `2xl` = 1280px:给「内容多、需要一屏读完」的弹窗(成本计算器)
+   *
+   * ⚠️ 为什么加新档而不是把 xl 加宽:xl 被工作台「持仓体检」弹窗共用,
+   * 改它会连带改变那个弹窗的版式。所以宁可多一档,也不误伤共用方。
+   */
+  const widths = {
+    sm: 'max-w-sm',
+    md: 'max-w-md',
+    lg: 'max-w-2xl',
+    xl: 'max-w-4xl',
+    '2xl': 'max-w-[1280px]',
+  };
 
   return (
     <AnimatePresence>

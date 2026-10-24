@@ -218,6 +218,78 @@ export const apiPut = <T>(url: string, body?: unknown, config?: AxiosRequestConf
 export const apiDelete = <T>(url: string, config?: AxiosRequestConfig) =>
   api.delete<T>(url, config).then((r) => r.data);
 
+/**
+ * 从 axios 错误对象里取后端业务文案
+ *
+ * axios 的 `e.message` 只会给 "Request failed with status code 422",
+ * 直接展示等于没告诉用户发生了什么。后端实际有三种形态:
+ *
+ * 1. `{"detail": {"code": "...", "message": "..."}}`
+ *    —— FastAPI `HTTPException(status_code, detail={...})`
+ *    (calculator.py / api_transactions.py 都是这种;注意 code/message 藏在 detail 里)
+ * 2. `{"detail": "纯文本"}` —— `HTTPException(detail="...")`
+ * 3. `{"code": "...", "message": "..."}` —— 扁平 ApiError
+ * 4. `{"detail": [{"loc": [...], "msg": "..."}]}` —— FastAPI 请求体校验错误(422)
+ */
+export function apiErrorMessage(e: unknown, fallback = '请求失败'): string {
+  if (!e || typeof e !== 'object') return fallback;
+  const err = e as {
+    response?: { status?: number; data?: unknown };
+    code?: string;
+    message?: string;
+  };
+  const data = err.response?.data as
+    | { code?: string; message?: string; detail?: unknown }
+    | undefined;
+
+  // 1. HTTPException(detail={code,message})
+  if (data?.detail && typeof data.detail === 'object' && !Array.isArray(data.detail)) {
+    const d = data.detail as { message?: string; code?: string };
+    if (d.message) return d.message;
+    if (d.code) return d.code;
+  }
+  // 2. HTTPException(detail="文本")
+  if (typeof data?.detail === 'string' && data.detail) return data.detail;
+  // 3. 扁平 ApiError
+  if (data?.code && data.message) return data.message;
+  // 4. 请求体校验错误(422)
+  const detail = data?.detail;
+  const issues = Array.isArray(detail)
+    ? (detail as Array<{ loc?: (string | number)[]; msg?: string }>)
+    : null;
+  if (err.response?.status === 422 && issues) {
+    const first = issues[0];
+    if (first?.msg) {
+      const field = Array.isArray(first.loc)
+        ? first.loc.filter((x) => x !== 'body').join('.')
+        : '';
+      return field ? `${field}: ${first.msg}` : first.msg;
+    }
+  }
+  // 5. 网络 / 超时
+  if (err.code === 'ERR_NETWORK') return '网络错误:后端可能未启动或 CORS 被拦截';
+  if (err.code === 'ECONNABORTED') return '请求超时,请重试';
+  if (err.message) return err.message;
+  return fallback;
+}
+
+/**
+ * 取后端业务错误码(如 INSUFFICIENT_SHARES / TX_ABSORBED)
+ *
+ * 用途:前端要按错误码走**不同的语义提示**(而不是把所有 4xx 当同一种错)。
+ */
+export function apiErrorCode(e: unknown): string | null {
+  if (!e || typeof e !== 'object') return null;
+  const data = (e as { response?: { data?: unknown } }).response?.data as
+    | { code?: string; detail?: unknown }
+    | undefined;
+  if (data?.detail && typeof data.detail === 'object' && !Array.isArray(data.detail)) {
+    const code = (data.detail as { code?: string }).code;
+    if (code) return code;
+  }
+  return data?.code ?? null;
+}
+
 /** SSE 端点(原地址,EventSource 不支持自定义 header,需直接传 base) */
 export const sseUrl = (): string => {
   const base = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';

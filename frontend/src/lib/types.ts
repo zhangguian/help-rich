@@ -411,6 +411,120 @@ export interface CalculatorResponse {
   pnlGrid: PnlGridRow[];
 }
 
+/* ============================================================
+ * 拟交易复核(v0.6 · POST /api/calculator/review)
+ * 三档判定 + 做 T 评估 —— 纯算法、零 LLM
+ * ============================================================ */
+
+/** ok=符合条件 / conditional=有条件可做 / not_recommended=不建议 / unknown=数据不足 */
+export type ReviewVerdict = 'ok' | 'conditional' | 'not_recommended' | 'unknown';
+
+export interface ReviewPriceCheck {
+  /** 引擎给出的建议价(NULL = 没有可参考的建议价位) */
+  suggested: number | null;
+  yourPrice: number;
+  verdict: ReviewVerdict;
+  note: string;
+}
+
+export interface ReviewSizeCheck {
+  /** 建议股数(sell = 持仓的 1/3;buy = null) */
+  suggestedShares: number | null;
+  yourShares: number;
+  note: string;
+}
+
+export interface ReviewTAssessment {
+  suitable: boolean;
+  tHigh: number | null;
+  tLow: number | null;
+  sellTrigger: string;
+  buybackTrigger: string;
+  yourPriceInRange: boolean | null;
+  /** 可动 T 仓上限(底仓之外的部分) */
+  maxTShares: number | null;
+  note: string;
+}
+
+export interface ReviewPositionAfter {
+  shares: number;
+  avgCost: string | null;
+  totalCost: string;
+  realizedPnl: string;
+}
+
+/**
+ * 做 T 的一个方向(正T / 反T)
+ *
+ * 术语(后端写死,前后端一致):
+ * - 反T(reverse)= 先卖后买(高抛低吸),持股数不变
+ * - 正T(forward)= 先买后卖(低吸高抛),要占用买入资金
+ */
+export interface ReviewTDirection {
+  key: 'reverse' | 'forward';
+  label: string;
+  applicable: boolean;
+  /**
+   * 不可用的原因码 —— 前端据此区分「缺资金 → 引导去填」与「真不适用 → 只灰显」。
+   * ok | no_cash | cash_too_little | no_position | not_suitable
+   * | no_t_range | base_too_large | no_base_ratio | unknown
+   */
+  reasonCode: string;
+  prerequisite: string;
+  /** 股数上限(null = 算不出来,如未填写资金) */
+  maxShares: number | null;
+  /** 对应金额(元,字符串保精度) */
+  maxAmount: string | null;
+  steps: ReviewTStep[];
+  statusText: string;
+}
+
+export interface ReviewTStep {
+  /** sell / buyback(反T)· buy / sell(正T) */
+  role: string;
+  text: string;
+}
+
+export interface ReviewTDirections {
+  reverse: ReviewTDirection;
+  forward: ReviewTDirection;
+  /** 推荐的方向(null = 都不推荐) */
+  recommended: 'reverse' | 'forward' | null;
+  recommendReason: string;
+  /**
+   * 用户拟的这笔落在推荐方向的具体哪条腿:
+   * reverse.sell / reverse.buyback / forward.buy / forward.sell / null
+   */
+  yourLeg: string | null;
+  /** A 股 T+1 提示 */
+  tPlusOneNote: string;
+}
+
+export interface TradeReviewResponse {
+  verdict: ReviewVerdict;
+  headline: string;
+  /** 支持本次操作的依据 */
+  reasons: string[];
+  /** 反对本次操作的依据 */
+  blockers: string[];
+  priceCheck: ReviewPriceCheck;
+  sizeCheck: ReviewSizeCheck;
+  tAssessment: ReviewTAssessment;
+  positionAfter: ReviewPositionAfter;
+  riskFlags: string[];
+  /** 数据降级说明(缺数据 → 降级,不编数字) */
+  degraded: string[];
+  /** 正T / 反T 两行对照 */
+  tDirections: ReviewTDirections;
+}
+
+/** 账户可用资金(GET/PUT /accounts/{id}/cash) */
+export interface AccountCash {
+  accountId: number;
+  /** null = 未填写(不是 0) */
+  cashAvailable: number | null;
+}
+
 /** K 线智能分析 v1 — 新增指标类型(backend/app/services/ta_service.py) */
 
 export interface MacdIndicator {

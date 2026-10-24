@@ -987,7 +987,7 @@ export default function Workbench() {
         open={showCalc}
         onClose={() => setShowCalc(false)}
         title="🧮 成本计算器"
-        size="xl"
+        size="2xl"
       >
         <CalculatorPanel initialCode={activeCode} />
       </LiquidModal>
