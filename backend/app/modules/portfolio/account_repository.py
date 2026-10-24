@@ -6,8 +6,9 @@
 """
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import async_session
 from app.models.orm import Account
@@ -90,6 +91,44 @@ class AccountRepo:
             await s.delete(row)
             await s.commit()
             return True, ""
+
+
+    async def get_cash_available(self, account_id: int) -> Decimal | None:
+        """账户可用资金(元)。None = 未填写。
+
+        **未填写 ≠ 0** —— 这两个语义对用户完全不同(「没填」是待补充信息,
+        「0 元」是已确认没钱)。判定层据此决定给不给数字。
+        """
+        async with async_session() as s:
+            row = await s.get(Account, account_id)
+            if row is None:
+                return None
+            raw = row.cash_available
+            if raw is None:
+                return None
+            raw = raw.strip()
+            if not raw:
+                return None
+            try:
+                return Decimal(raw)
+            except InvalidOperation:
+                # 库里是脏数据(非数字) —— 当作未填写,不要编一个数字出来
+                return None
+
+    async def set_cash_available(self, account_id: int, value: Decimal | None) -> bool:
+        """写账户可用资金。value=None = 清空(= 未填写)。
+
+        返回 False = 账户不存在。
+        """
+        async with async_session() as s:
+            row = await s.get(Account, account_id)
+            if row is None:
+                return False
+            row.cash_available = (
+                None if value is None else str(value.quantize(Decimal("0.01")))
+            )
+            await s.commit()
+            return True
 
 
 account_repo = AccountRepo()

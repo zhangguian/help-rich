@@ -5,7 +5,11 @@
 - PATCH  /api/accounts/{id}         → 重命名
 - DELETE /api/accounts/{id}         → 删除(默认账户/有持仓/有流水时拒绝)
 - GET    /api/accounts/{id}/summary → 单账户持仓与盈亏汇总
+- GET    /api/accounts/{id}/cash     → 账户可用资金(null = 未填写)
+- PUT    /api/accounts/{id}/cash     → 写账户可用资金(null = 清空)
 """
+from decimal import Decimal, InvalidOperation
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -23,6 +27,17 @@ class AccountIn(BaseModel):
 
 class AccountPatch(BaseModel):
     name: str = Field(min_length=1, max_length=50)
+
+
+class AccountCashIn(BaseModel):
+    """写账户可用资金。null = 清空(= 未填写)。"""
+
+    cash_available: Decimal | None = Field(default=None, ge=0)
+
+
+class AccountCashOut(BaseModel):
+    account_id: int
+    cash_available: float | None = None
 
 
 @router.get("")
@@ -62,3 +77,38 @@ async def account_summary(account_id: int) -> dict:
         return await account_service.summary(account_id)
     except AccountError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.get("/{account_id}/cash", response_model=AccountCashOut)
+async def get_account_cash(account_id: int) -> AccountCashOut:
+    """账户可用资金(正T 测算用)。null = 未填写。"""
+    try:
+        cash = await account_service.get_cash_available(account_id)
+    except AccountError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return AccountCashOut(account_id=account_id, cash_available=cash)
+
+
+@router.put("/{account_id}/cash", response_model=AccountCashOut)
+async def put_account_cash(
+    account_id: int, payload: AccountCashIn
+) -> AccountCashOut:
+    """写账户可用资金。传 null 表示清空(= 未填写)。"""
+    value = payload.cash_available
+    if value is not None:
+        try:
+            value = Decimal(value).quantize(Decimal("0.01"))
+        except InvalidOperation:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "INVALID_CASH",
+                    "message": "可用资金必须是数字",
+                    "detail": {"value": str(payload.cash_available)},
+                },
+            ) from None
+    try:
+        saved = await account_service.set_cash_available(account_id, value)
+    except AccountError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return AccountCashOut(account_id=account_id, cash_available=saved)

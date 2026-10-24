@@ -629,9 +629,9 @@ async def check_chain(
     stock_code: str,
     account_id: int | None = None,
     *,
-    override: Optional[TxSpec] = None,
-    drop_id: Optional[int] = None,
-    insert: Optional[TxSpec] = None,
+    override: TxSpec | None = None,
+    drop_id: int | None = None,
+    insert: TxSpec | None = None,
 ) -> ChainState:
     """按给定改动试算链,失败抛 PositionChainError;返回改动后的最终状态
 
@@ -701,6 +701,31 @@ async def delete_position(stock_code: str, account_id: int | None = None) -> boo
         return True
 
 
+# ============================================================
+# 账户可用资金(正T 测算用)
+# ============================================================
+
+async def get_cash_available(account_id: int | None = None) -> Decimal | None:
+    """账户可用资金(元)。None = 未填写。
+
+    只给跨域调用方(calculator 域)用 —— 跨域只能 import 本模块的 service。
+    """
+    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID, account_repo
+
+    return await account_repo.get_cash_available(account_id or DEFAULT_ACCOUNT_ID)
+
+
+async def set_cash_available(
+    value: Decimal | None, account_id: int | None = None
+) -> bool:
+    """写账户可用资金。传 None = 清空(= 未填写)。"""
+    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID, account_repo
+
+    return await account_repo.set_cash_available(
+        account_id or DEFAULT_ACCOUNT_ID, value
+    )
+
+
 __all__ = [
     "Position",
     "ChainState",
@@ -717,4 +742,6 @@ __all__ = [
     "position_before_trade",
     "shares_available_at",
     "is_absorbed",
+    "get_cash_available",
+    "set_cash_available",
 ]

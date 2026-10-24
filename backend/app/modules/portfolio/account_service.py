@@ -5,6 +5,8 @@ API 层不直连 repository(架构守卫强制),账户概览里的持仓聚合�
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
 from app.core.logging import logger
 from app.modules.portfolio.account_repository import account_repo
 
@@ -109,6 +111,27 @@ class AccountService:
             "realized_pnl": round(realized, 2),
             "positions": items,
         }
+
+
+    async def get_cash_available(self, account_id: int) -> Decimal | None:
+        """账户可用资金(元)。None = 未填写(不是 0)。
+
+        账户不存在 → 抛 AccountError(API 层转 404);
+        账户存在但没填 → 返回 None(判定层据此降级,不编数字)。
+        """
+        acc = await account_repo.get(account_id)
+        if acc is None:
+            raise AccountError("账户不存在")
+        return await account_repo.get_cash_available(account_id)
+
+    async def set_cash_available(
+        self, account_id: int, value: Decimal | None
+    ) -> Decimal | None:
+        """写账户可用资金。value=None = 清空(= 未填写)。返回落库后的值。"""
+        ok = await account_repo.set_cash_available(account_id, value)
+        if not ok:
+            raise AccountError("账户不存在")
+        return value
 
 
 account_service = AccountService()

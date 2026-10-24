@@ -268,6 +268,9 @@ class Account(Base):
     kind: Mapped[str] = mapped_column(String, nullable=False, default="broker")
     broker: Mapped[str | None] = mapped_column(String, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 可用资金(元,字符串存保精度)—— 用于正T 买入腿的股数测算。
+    # NULL = 用户未填写 → 判定层给 None + degraded,绝不猜一个数字。
+    cash_available: Mapped[str | None] = mapped_column(String, nullable=True)
     # 标记默认账户(不可删除);恒有且仅有一个
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
