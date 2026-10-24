@@ -367,7 +367,7 @@ export function WatchList({
   const [removeTarget, setRemoveTarget] = useState<WatchItem | null>(null);
   // 设置持仓弹窗(直设股数/成本 or 录入流水)
   const [setPosTarget, setSetPosTarget] = useState<WatchItem | null>(null);
-  const [posForm, setPosForm] = useState({ shares: '', costPrice: '' });
+  const [posForm, setPosForm] = useState({ shares: '', costPrice: '', realizedPnl: '', baseDate: '' });
   // portal 挂载标记:只在客户端渲染 portal,避免 SSR/CSR hydration mismatch
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -469,6 +469,8 @@ export function WatchList({
     if (!setPosTarget) return;
     const shares = Number(posForm.shares);
     const price = posForm.costPrice.trim();
+    const pnl = posForm.realizedPnl.trim();
+    const baseDate = posForm.baseDate.trim();
     if (!Number.isFinite(shares) || shares <= 0) {
       showToast({ type: 'warning', message: '请输入有效股数' });
       return;
@@ -477,16 +479,22 @@ export function WatchList({
       showToast({ type: 'warning', message: '请输入有效每股成本价' });
       return;
     }
+    if (pnl && Number.isNaN(Number(pnl))) {
+      showToast({ type: 'warning', message: '已实现盈亏不是有效数字' });
+      return;
+    }
     try {
       await apiPost('/positions', {
         stockCode: setPosTarget.code,
         stockName: setPosTarget.name ?? undefined,
         shares,
         costPrice: price,
+        ...(pnl ? { realizedPnl: pnl } : {}),
+        ...(baseDate ? { baseDate } : {}),
       });
       showToast({ type: 'success', message: `${setPosTarget.name ?? setPosTarget.code} 持仓已保存` });
       setSetPosTarget(null);
-      setPosForm({ shares: '', costPrice: '' });
+      setPosForm({ shares: '', costPrice: '', realizedPnl: '', baseDate: '' });
       onChanged();
     } catch {
       /* toast 已由拦截器处理 */
@@ -495,7 +503,7 @@ export function WatchList({
 
   const openSetPos = useCallback((item: WatchItem) => {
     setSetPosTarget(item);
-    setPosForm({ shares: '', costPrice: '' });
+    setPosForm({ shares: '', costPrice: '', realizedPnl: '', baseDate: '' });
   }, []);
 
   const toggleFavorite = useCallback(async (code: string, next: boolean) => {
@@ -803,10 +811,30 @@ export function WatchList({
                 <label className="text-xs text-text-ter block mb-1">每股成本价</label>
                 <input
                   type="number"
-                  step="0.001"
+                  step="0.000001"
                   value={posForm.costPrice}
                   onChange={(e) => setPosForm({ ...posForm, costPrice: e.target.value })}
-                  placeholder="10.500"
+                  placeholder="10.500000"
+                  className="w-full px-2 py-1.5 text-sm rounded-lg bg-bg-surface border border-border-str focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
+                />
+                </div>
+                <div className="flex-1">
+                <label className="text-xs text-text-ter block mb-1">已实现盈亏(可选)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={posForm.realizedPnl}
+                  onChange={(e) => setPosForm({ ...posForm, realizedPnl: e.target.value })}
+                  placeholder="-259.91"
+                  className="w-full px-2 py-1.5 text-sm rounded-lg bg-bg-surface border border-border-str focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
+                />
+                </div>
+                <div className="flex-1">
+                <label className="text-xs text-text-ter block mb-1">基准日期(可选)</label>
+                <input
+                  type="date"
+                  value={posForm.baseDate}
+                  onChange={(e) => setPosForm({ ...posForm, baseDate: e.target.value })}
                   className="w-full px-2 py-1.5 text-sm rounded-lg bg-bg-surface border border-border-str focus:border-accent outline-none text-text-pri placeholder:text-text-ter"
                 />
                 </div>
@@ -815,7 +843,7 @@ export function WatchList({
                 </Button>
               </div>
               <p className="text-xs text-text-ter mt-1.5">
-                直接设置会覆盖当前持仓；或改用下方流水录入（推荐，自动同步成本与股数）。
+                直接设置会覆盖当前持仓（以本次录入为新基准）；已实现盈亏填该股历史累计值，可为负，留空 = 沿用当前累计。基准日期 = 这份持仓快照是哪一天：只吸收该日期之前的流水，之后的流水继续参与计算；留空 = 吸收现有全部流水。或改用下方流水录入（推荐，自动同步成本与股数）。
               </p>
             </div>
 

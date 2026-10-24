@@ -60,7 +60,14 @@ export function PositionsSection() {
     }
   };
 
-  const onAdd = async (form: { stockCode: string; shares: number; costPrice: string; stockName?: string }) => {
+  const onAdd = async (form: {
+    stockCode: string;
+    shares: number;
+    costPrice: string;
+    stockName?: string;
+    realizedPnl?: string;
+    baseDate?: string;
+  }) => {
     try {
       await apiPost('/positions', form);
       showToast({ type: 'success', message: '持仓已保存' });
@@ -173,18 +180,23 @@ function AddPositionForm({
     shares: number;
     costPrice: string;
     stockName?: string;
+    realizedPnl?: string;
+    baseDate?: string;
   }) => Promise<boolean>;
 }) {
   const [stockCode, setStockCode] = useState('');
   const [stockName, setStockName] = useState('');
   const [shares, setShares] = useState('');
   const [costPrice, setCostPrice] = useState('');
+  const [realizedPnl, setRealizedPnl] = useState('');
+  const [baseDate, setBaseDate] = useState('');
   const [busy, setBusy] = useState(false);
   const showToast = useUIStore((s) => s.showToast);
 
   const submit = async () => {
     const sharesNum = Number(shares);
     const price = costPrice.trim();
+    const pnl = realizedPnl.trim();
     if (!stockCode.trim()) {
       showToast({ type: 'error', message: '请输入股票代码' });
       return;
@@ -197,12 +209,18 @@ function AddPositionForm({
       showToast({ type: 'error', message: '请输入有效每股成本价' });
       return;
     }
+    if (pnl && Number.isNaN(Number(pnl))) {
+      showToast({ type: 'error', message: '已实现盈亏不是有效数字' });
+      return;
+    }
     setBusy(true);
     const ok = await onAdd({
       stockCode: stockCode.trim(),
       ...(stockName.trim() ? { stockName: stockName.trim() } : {}),
       shares: sharesNum,
       costPrice: price,
+      ...(pnl ? { realizedPnl: pnl } : {}),
+      ...(baseDate ? { baseDate } : {}),
     });
     setBusy(false);
     if (ok) {
@@ -210,12 +228,14 @@ function AddPositionForm({
       setStockName('');
       setShares('');
       setCostPrice('');
+      setRealizedPnl('');
+      setBaseDate('');
     }
   };
 
   return (
-    <Card padding="md" className="mb-4">
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
+    <Card padding="md" className="mb-4" data-testid="add-position-form">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3 items-end">
         <div>
           <label className="text-xs text-text-sec block mb-1">股票代码</label>
           <input
@@ -254,6 +274,27 @@ function AddPositionForm({
             className="w-full px-2 py-1.5 text-sm border border-border-def rounded-sm bg-bg-surface focus:border-accent"
           />
         </div>
+        <div>
+          <label className="text-xs text-text-sec block mb-1">已实现盈亏(可选)</label>
+          <input
+            value={realizedPnl}
+            onChange={(e) => setRealizedPnl(e.target.value)}
+            inputMode="decimal"
+            data-testid="position-realized-pnl"
+            placeholder="-259.91"
+            className="w-full px-2 py-1.5 text-sm border border-border-def rounded-sm bg-bg-surface focus:border-accent"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-text-sec block mb-1">基准日期(可选)</label>
+          <input
+            type="date"
+            value={baseDate}
+            onChange={(e) => setBaseDate(e.target.value)}
+            data-testid="position-base-date"
+            className="w-full px-2 py-1.5 text-sm border border-border-def rounded-sm bg-bg-surface focus:border-accent"
+          />
+        </div>
         <div className="flex gap-2">
           <Button variant="primary" onClick={submit} loading={busy} size="sm">
             保存
@@ -263,6 +304,10 @@ function AddPositionForm({
           </Button>
         </div>
       </div>
+      <p className="text-xs text-text-ter mt-2">
+        保存即以本次录入为该股的新基准。已实现盈亏填该股历史累计值，可为负，留空 = 沿用当前累计。
+        基准日期 = 这份持仓快照是哪一天：只吸收该日期之前的流水，该日期之后的流水继续参与计算（可改可删、每笔带持仓快照）；留空 = 吸收现有全部流水。
+      </p>
     </Card>
   );
 }

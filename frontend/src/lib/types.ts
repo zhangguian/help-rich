@@ -49,6 +49,10 @@ export interface Transaction {
   note: string | null;
   score: number | null;
   createdAt: string;
+  /** v0.5.0 事件溯源快照:该笔应用后的持仓状态(NULL = 已被基准吸收 / 旧数据) */
+  sharesAfter: number | null;
+  totalCostAfter: string | null;
+  realizedAfter: string | null;
 }
 
 export interface TransactionCreate {
@@ -91,6 +95,10 @@ export interface PositionCreate {
   shares: number;
   costPrice: string;
   stockName?: string;
+  /** v0.5.0:累计已实现盈亏(可为负)。留空 = 沿用当前累计值 */
+  realizedPnl?: string;
+  /** v0.5.0:这份持仓快照是哪一天(YYYY-MM-DD)。只吸收该日期前的流水 */
+  baseDate?: string;
 }
 
 /** 持仓体检(v0.4.0) */

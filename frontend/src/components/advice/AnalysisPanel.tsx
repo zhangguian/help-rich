@@ -738,6 +738,8 @@ function PatternsCard({ patterns }: { patterns: PatternMatch[] | undefined }) {
             )}
           >
             {p.emoji} {p.name}
+            {/* canvas 上的标记不可聚焦,这里补一个「?」让键盘用户也能查到同样的解释 */}
+            <TermHint term={p.name} />
           </span>
         ))}
       </div>

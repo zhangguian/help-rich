@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import clsx from 'clsx';
 
@@ -20,8 +20,15 @@ import {
 
 import { apiGet } from '@/lib/api';
 import { useChartTheme } from '@/lib/chartTheme';
+import { GLOSSARY, resolveSignalTerm, type GlossaryEntry } from '@/lib/glossary';
+import {
+  computeSignalMarkerHits,
+  hitTestSignalMarker,
+  type SignalMarkerHit,
+} from '@/lib/signalMarker';
 import { TermHint } from '@/components/ui/TermHint';
-import type { KlineIndicatorsResponse } from '@/lib/types';
+import { SignalExplainCard } from '@/components/charts/SignalExplainCard';
+import type { KlineIndicatorsResponse, SignalMarker } from '@/lib/types';
 
 export type KlinePeriod = 'daily' | 'weekly' | 'monthly' | '60min' | 'intraday';
 
@@ -195,6 +202,26 @@ export function KLineChart({
   const hoverRafRef = useRef<number | null>(null);
   const hoverPendingRef = useRef<Record<string, number | null> | null>(null);
   const hoverLastFlushRef = useRef(0);
+  // ---- 信号标记悬停解释(视觉稿:docs/design/preview/signal-tooltip-preview.html) ----
+  // lightweight-charts 的 marker 画在 canvas 上,没有 DOM 节点 →
+  // 原生 title/hover 不生效,这里自建「几何命中测试 + DOM 浮层」。
+  // 只有「换了一个标记」才 setState,mousemove 不会反复重渲染整棵图例。
+  const [signalTip, setSignalTip] = useState<{
+    hit: SignalMarkerHit;
+    entry: GlossaryEntry | null;
+  } | null>(null);
+  const [tipPos, setTipPos] = useState<{ left: number; top: number } | null>(null);
+  const tipRef = useRef<HTMLDivElement | null>(null);
+  const signalTipIndexRef = useRef<number>(-1);
+  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+  const hideTimerRef = useRef<number | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const barOfRef = useRef<Map<string, { high: number; low: number; close: number }>>(new Map());
+  const markersRef = useRef<SignalMarker[]>([]);
+  const nowInfoRef = useRef<{ date: string; close: number; pct: number | null } | null>(null);
+  const updateTipRef = useRef<
+    ((point: { x: number; y: number } | null, force?: boolean) => void) | null
+  >(null);
   // 整组显隐(MA / BOLL / MACD / KDJ);volume 单独由 showVolume 控制
   const [visibleGroups, setVisibleGroups] = useState<Record<OverlayGroup, boolean>>(() => ({
     ...DEFAULT_VISIBLE,
@@ -351,6 +378,8 @@ export function KLineChart({
           /* chart disposed */
         }
       }
+      // 宽度变了 → 标记坐标变了 → 浮层位置跟着重算
+      updateTipRef.current?.(lastPointRef.current, true);
     };
     window.addEventListener('resize', onResize);
 
@@ -368,6 +397,7 @@ export function KLineChart({
         } catch {
           /* chart disposed */
         }
+        updateTipRef.current?.(lastPointRef.current, true);
       });
       ro.observe(containerRef.current);
     }
@@ -494,6 +524,93 @@ export function KLineChart({
           }
         }
 
+        // ---- 悬停解释用的数据(命中测试要拿当根 K 线的 OHLC) ----
+        candleSeriesRef.current = series;
+        barOfRef.current = new Map(
+          items.map((it) => [
+            it.date,
+            { high: Number(it.high), low: Number(it.low), close: Number(it.close) },
+          ]),
+        );
+        markersRef.current = ind.signalSeries;
+        {
+          const lastItem = items[items.length - 1];
+          const prevItem = items[items.length - 2];
+          if (lastItem) {
+            const close = Number(lastItem.close);
+            const prevClose = prevItem ? Number(prevItem.close) : null;
+            nowInfoRef.current = {
+              date: lastItem.date,
+              close,
+              pct: prevClose ? ((close - prevClose) / prevClose) * 100 : null,
+            };
+          }
+        }
+
+        // ---- 信号标记命中测试(复刻 lightweight-charts 的 marker 绘制几何) ----
+        const markerHits = (): SignalMarkerHit[] => {
+          const ch = chartRef.current;
+          const ser = candleSeriesRef.current;
+          if (!ch || !ser) return [];
+          const ts = ch.timeScale();
+          const layout = ch.options().layout;
+          const lr = ts.getVisibleLogicalRange();
+          const paneWidth = ts.width();
+          const barSpacing = lr && lr.to > lr.from ? paneWidth / (lr.to - lr.from) : 6;
+          return computeSignalMarkerHits({
+            markers: markersRef.current,
+            barOf: barOfRef.current,
+            timeToX: (t) => ts.timeToCoordinate(t as Time),
+            priceToY: (p) => ser.priceToCoordinate(p),
+            barSpacing,
+            fontSize: layout.fontSize,
+            fontFamily: layout.fontFamily,
+          });
+        };
+
+        // 丢失命中后延迟一点再收 —— 浮层盖住了图表,鼠标移向浮层时
+        // 画布的 mouseleave 会先到,直接收的话用户根本读不到。
+        const cancelHide = () => {
+          if (hideTimerRef.current !== null) {
+            window.clearTimeout(hideTimerRef.current);
+            hideTimerRef.current = null;
+          }
+        };
+        const scheduleHide = () => {
+          if (hideTimerRef.current !== null) return;
+          hideTimerRef.current = window.setTimeout(() => {
+            hideTimerRef.current = null;
+            signalTipIndexRef.current = -1;
+            setSignalTip(null);
+          }, 260);
+        };
+
+        const updateSignalTip = (
+          point: { x: number; y: number } | null,
+          force = false,
+        ) => {
+          lastPointRef.current = point;
+          if (!point) {
+            scheduleHide();
+            return;
+          }
+          const hit = hitTestSignalMarker(markerHits(), point.x, point.y);
+          const idx = hit ? hit.index : -1;
+          if (!force && idx === signalTipIndexRef.current) {
+            if (idx === -1) scheduleHide();
+            return;
+          }
+          cancelHide();
+          signalTipIndexRef.current = idx;
+          if (!hit) {
+            setSignalTip(null);
+            return;
+          }
+          const term = resolveSignalTerm(hit.name);
+          setSignalTip({ hit, entry: term ? (GLOSSARY[term] ?? null) : null });
+        };
+        updateTipRef.current = updateSignalTip;
+
         chart.timeScale().fitContent();
 
         // ---- Hover 同步(图例显示当前值,不改动 series 避免回调死循环) ----
@@ -532,6 +649,8 @@ export function KLineChart({
         };
 
         const handleCrosshair = (param: MouseEventParams) => {
+          // 命中测试放在节流之外:只改「命中了哪个标记」,很便宜
+          updateSignalTip(param.point ?? null);
           if (!param.time) {
             hoverPendingRef.current = {};
             scheduleHoverFlush();
@@ -546,6 +665,10 @@ export function KLineChart({
           scheduleHoverFlush();
         };
         chart.subscribeCrosshairMove(handleCrosshair);
+        // 缩放/平移后标记坐标变了 → 命中框要重算(浮层跟着走)
+        chart.timeScale().subscribeVisibleTimeRangeChange(() => {
+          updateSignalTip(lastPointRef.current, true);
+        });
 
         (chart as unknown as { __cleanupCrosshair?: () => void }).__cleanupCrosshair = () => {
           chart.unsubscribeCrosshairMove(handleCrosshair);
@@ -573,6 +696,11 @@ export function KLineChart({
         hoverRafRef.current = null;
       }
       hoverPendingRef.current = null;
+      if (hideTimerRef.current !== null) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+      updateTipRef.current = null;
       const cleanup = (chart as unknown as { __cleanupCrosshair?: () => void }).__cleanupCrosshair;
       if (cleanup) cleanup();
       chart.remove();
@@ -598,6 +726,26 @@ export function KLineChart({
   // v3:在原有 MA/BOLL/MACD/KDJ 基础上新增 RSI/CCI/STOCH/MOM/WMSR/SKT/FASK
   // 每个新指标组不画线,仅显示当前末值 + state chip + 知识点 tooltip
   const ind = indicators;
+  // 「当前这只票」的真实数据行:只拼接口真有的字段,没有的字段不编
+  const nowLine = useMemo(() => {
+    const n = nowInfoRef.current;
+    if (!n) return null;
+    const parts: string[] = [];
+    parts.push(
+      `${n.date} 收 ${n.close.toFixed(2)}` +
+        (n.pct != null ? `(${n.pct >= 0 ? '+' : ''}${n.pct.toFixed(2)}%)` : ''),
+    );
+    const bw = ind?.boll?.bandwidth;
+    if (bw != null) {
+      parts.push(`BOLL 带宽 ${bw.toFixed(2)}%${ind?.boll?.squeeze ? ',处于收口状态' : ''}`);
+    }
+    const sup = ind?.supportPressure?.support?.[0];
+    const res = ind?.supportPressure?.pressure?.[0];
+    if (sup != null && res != null) {
+      parts.push(`支撑 ${sup.toFixed(2)} / 压力 ${res.toFixed(2)}`);
+    }
+    return `${stockCode} · ${parts.join(';')}`;
+  }, [ind, stockCode]);
   // P2(阶段10):图例行 memo —— 原来每次渲染都重建整棵 legendRows 数组,
   // 而 legendRows 只依赖「指标末值快照」与「图表配色」,两者都是稳定引用。
   // memo 之后,光标读数变化不再连带重建图例结构,只重渲染读数本身。
@@ -721,8 +869,35 @@ export function KLineChart({
     },
   ], [ind, COLOR]);
 
+
+  // 浮层位置:贴标记文字**左边并排**,水平留 14px 缝,且不能压住标记本身
+  // (视觉稿实测:压住了就等于把标记的悬停入口盖掉,点不到)
+  useLayoutEffect(() => {
+    if (!signalTip) {
+      setTipPos(null);
+      return;
+    }
+    const cont = containerRef.current;
+    const el = tipRef.current;
+    if (!cont || !el) return;
+    const cw = cont.clientWidth;
+    const ch = cont.clientHeight;
+    const tw = el.offsetWidth;
+    const th = el.offsetHeight;
+    const hit = signalTip.hit;
+    const textHalf = hit.halfW - 4; // halfW = 文字半宽 + 4
+    const textLeft = hit.cx - textHalf;
+    const textRight = hit.cx + textHalf;
+    let left = textLeft - 14 - tw; // 默认放标记左边
+    if (left < 4) left = textRight + 14; // 左边放不下就改放右边
+    if (left + tw > cw - 4) left = Math.max(4, cw - tw - 4);
+    let top = hit.cy - 10; // 顶边与标记文字基本齐平
+    if (top + th > ch - 6) top = Math.max(4, ch - th - 6);
+    if (top < 4) top = 4;
+    setTipPos({ left: left + cont.offsetLeft, top: top + cont.offsetTop });
+  }, [signalTip]);
   return (
-    <div className={clsx(fill && 'h-full flex flex-col min-h-0')}>
+    <div className={clsx('relative', fill && 'h-full flex flex-col min-h-0')}>
       {loadError && (
         <div className="mb-2 px-3 py-1.5 rounded-md bg-down/10 border border-down/30 text-xs text-down">
           ⚠ K 线加载失败:{loadError}(打开浏览器 Console 查看详情)
@@ -733,6 +908,34 @@ export function KLineChart({
         style={fill ? { width: '100%' } : { width: '100%', height }}
         className={clsx('rounded-sm overflow-hidden', fill && 'flex-1 min-h-0')}
       />
+      {signalTip && (
+        <div
+          ref={tipRef}
+          className="absolute z-20"
+          style={{ left: tipPos?.left ?? -9999, top: tipPos?.top ?? -9999 }}
+          onMouseEnter={() => {
+            if (hideTimerRef.current !== null) {
+              window.clearTimeout(hideTimerRef.current);
+              hideTimerRef.current = null;
+            }
+          }}
+          onMouseLeave={() => {
+            if (hideTimerRef.current !== null) return;
+            hideTimerRef.current = window.setTimeout(() => {
+              hideTimerRef.current = null;
+              signalTipIndexRef.current = -1;
+              setSignalTip(null);
+            }, 160);
+          }}
+        >
+          <SignalExplainCard
+            name={signalTip.hit.name}
+            entry={signalTip.entry}
+            nowLine={nowLine}
+            style={{}}
+          />
+        </div>
+      )}
       <div className={clsx('mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs', fill && 'shrink-0')}>
         {legendRows.map((row) => {
           const groupVisible = visibleGroups[row.group];

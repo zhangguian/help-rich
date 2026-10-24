@@ -103,8 +103,29 @@ export function TermHint({ term, className }: { term: string; className?: string
             >
               <div className="text-text-ter text-[10px] uppercase tracking-wide mb-1">
                 术语 · {term}
+                {entry.kindLabel && <span className="ml-1.5">· {entry.kindLabel}</span>}
               </div>
-              <div className="text-text-pri">{entry.desc}</div>
+              {entry.what ? (
+                <>
+                  <div className="text-text-pri">{entry.what}</div>
+                  {entry.soWhat && (
+                    <div className="mt-2">
+                      <div className="text-text-ter text-[10px] tracking-wide mb-0.5">
+                        对股票走向的含义
+                      </div>
+                      <div className="text-text-pri">{entry.soWhat}</div>
+                    </div>
+                  )}
+                  {entry.watch && (
+                    <div className="mt-2">
+                      <div className="text-text-ter text-[10px] tracking-wide mb-0.5">要注意</div>
+                      <div className="text-text-sec">{entry.watch}</div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="text-text-pri">{entry.desc}</div>
+              )}
             </motion.div>
           </AnimatePresence>,
           document.body,
