@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" href="data:," />
+<title>做 T 方向判定 · 正T / 反T 视觉稿</title>
+<style>
+  :root {
+    --canvas:#070b12; --surface:#0d131d; --surface-2:#121a26; --surface-3:#18212f;
+    --border:#1e2836; --border-strong:#2a3648;
+    --text-primary:#e2e8f2; --text-secondary:#8fa0b8; --text-tertiary:#5c6b84;
+    --text-disabled:#3d4a5e;
+    --accent:#22d3ee; --accent-subtle:rgba(34,211,238,.12);
+    --up:#f6465d; --down:#0ecb81; --warn:#f5a524;
+    --up-bg:rgba(246,70,93,.14); --down-bg:rgba(14,235,129,.12); --warn-bg:rgba(245,165,36,.14);
+    --r-xs:3px; --r-sm:4px; --r-md:6px; --r-lg:8px; --r-xl:10px;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--canvas); color:var(--text-primary);
+    font-family:"Jakarta Sans",-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    font-size:14px; line-height:1.55;
+  }
+  .mono { font-family:"JetBrains Mono","SF Mono",Consolas,monospace; }
+  .wrap { max-width:1180px; margin:0 auto; padding:28px 20px 90px; }
+  header.top { margin-bottom:6px; }
+  h1 { font-size:20px; font-weight:700; margin:0 0 6px; }
+  .sub { color:var(--text-secondary); font-size:13px; margin:0; max-width:920px; }
+  .sub b { color:var(--text-primary); font-weight:600; }
+  code { background:var(--surface-3); padding:1px 5px; border-radius:var(--r-xs);
+    color:var(--text-secondary); font-family:"JetBrains Mono",Consolas,monospace; font-size:12px; }
+  section { margin-top:34px; }
+  h2 { font-size:15px; font-weight:600; margin:0 0 4px; }
+  h2 .idx { color:var(--accent); font-family:"JetBrains Mono",monospace; margin-right:8px; }
+  .note { color:var(--text-tertiary); font-size:12px; margin:0 0 14px; }
+
+  /* ============ 卡片容器 ============ */
+  .card {
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg);
+    padding:14px 16px 12px;
+  }
+  .scene-label {
+    font-size:12px; color:var(--text-tertiary); margin:0 0 10px;
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  }
+  .scene-label .req {
+    background:var(--surface-3); border:1px solid var(--border); border-radius:var(--r-xs);
+    padding:1px 7px; color:var(--text-secondary); font-family:"JetBrains Mono",Consolas,monospace;
+  }
+
+  /* ============ 推荐条 ============ */
+  .rec {
+    display:flex; align-items:flex-start; gap:10px; padding:9px 12px; border-radius:var(--r-md);
+    background:var(--accent-subtle); border:1px solid rgba(34,211,238,.30); margin-bottom:10px;
+  }
+  .rec.none { background:var(--surface-2); border-color:var(--border); }
+  .rec .tag {
+    flex:none; font-size:11px; font-weight:700; letter-spacing:.4px; padding:2px 8px;
+    border-radius:var(--r-sm); background:var(--accent); color:#04222a; white-space:nowrap;
+  }
+  .rec.none .tag { background:var(--surface-3); color:var(--text-tertiary); }
+  .rec .txt { font-size:13px; color:var(--text-primary); }
+  .rec .txt .leg { color:var(--accent); font-weight:600; }
+
+  /* ============ 两行对照 ============ */
+  .dirs { display:flex; flex-direction:column; gap:8px; }
+  .dir {
+    border:1px solid var(--border); border-radius:var(--r-md); padding:10px 12px;
+    background:var(--surface-2); position:relative;
+  }
+  .dir.recommended { border-color:var(--accent); background:rgba(34,211,238,.05); }
+  .dir.disabled { opacity:.72; }
+  .dir-head { display:flex; align-items:center; gap:9px; margin-bottom:6px; }
+  .dir-name { font-size:13.5px; font-weight:600; }
+  .dir.recommended .dir-name { color:var(--accent); }
+  .dir.disabled .dir-name { color:var(--text-tertiary); }
+  .pill {
+    font-size:10.5px; padding:1px 7px; border-radius:999px; border:1px solid var(--border-strong);
+    color:var(--text-tertiary); white-space:nowrap;
+  }
+  .pill.rec { border-color:var(--accent); color:var(--accent); background:var(--accent-subtle); font-weight:600; }
+  .pill.off { border-style:dashed; }
+  .pill.warn { border-color:var(--warn); color:var(--warn); background:var(--warn-bg); }
+  .pill.you { border-color:var(--up); color:var(--up); background:var(--up-bg); }
+  .dir-max { margin-left:auto; font-size:12px; color:var(--text-secondary); white-space:nowrap; }
+  .dir-max b { color:var(--text-primary); font-size:13px; font-family:"JetBrains Mono",Consolas,monospace; }
+  .dir-max .amt { color:var(--text-tertiary); margin-left:6px; }
+
+  .steps { list-style:none; margin:0; padding:0; }
+  .steps li {
+    display:flex; gap:8px; align-items:baseline; font-size:12.5px; color:var(--text-secondary);
+    padding:2px 0;
+  }
+  .steps li .n {
+    flex:none; width:16px; height:16px; border-radius:50%; background:var(--surface-3);
+    color:var(--text-tertiary); font-size:10px; display:inline-flex; align-items:center;
+    justify-content:center; font-family:"JetBrains Mono",Consolas,monospace; align-self:center;
+  }
+  .dir.recommended .steps li .n { background:var(--accent-subtle); color:var(--accent); }
+  .steps li.hit .txt { color:var(--text-primary); }
+  .steps li.hit .n { background:var(--up-bg); color:var(--up); border:1px solid var(--up); }
+  .prereq {
+    margin-top:6px; font-size:11.5px; color:var(--text-tertiary);
+    padding-top:6px; border-top:1px dashed var(--border);
+  }
+  .prereq b { color:var(--warn); font-weight:600; }
+
+  /* ============ 资金填写入口 ============ */
+  .cashbar {
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    margin-top:10px; padding:9px 12px; border-radius:var(--r-md);
+    background:var(--surface-2); border:1px solid var(--border);
+  }
+  .cashbar.need { border-color:var(--warn); background:var(--warn-bg); }
+  .cashbar .lbl { font-size:12.5px; color:var(--text-secondary); }
+  .cashbar.need .lbl { color:var(--warn); font-weight:600; }
+  .cashbar input {
+    background:var(--surface); border:1px solid var(--border-strong); border-radius:var(--r-sm);
+    color:var(--text-primary); padding:5px 9px; font-family:"JetBrains Mono",Consolas,monospace;
+    font-size:13px; width:130px;
+  }
+  .cashbar input:focus { outline:none; border-color:var(--accent); }
+  .cashbar .hint { font-size:11.5px; color:var(--text-tertiary); }
+  .cashbar button {
+    background:var(--accent); color:#04222a; border:none; border-radius:var(--r-sm);
+    padding:5px 12px; font-size:12.5px; font-weight:600; cursor:pointer;
+  }
+  .cashbar button.ghost { background:transparent; color:var(--text-secondary); border:1px solid var(--border-strong); }
+
+  /* ============ T+1 提示 ============ */
+  .tplus {
+    margin-top:8px; font-size:11.5px; color:var(--text-tertiary);
+    background:var(--surface-2); border-left:2px solid var(--border-strong);
+    padding:6px 10px; border-radius:0 var(--r-xs) var(--r-xs) 0;
+  }
+
+  .grid2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+  @media (max-width:900px){ .grid2 { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>做 T 方向判定 · 正T / 反T 两行对照</h1>
+    <p class="sub">
+      两个方向都写出来,并指出<b>更适合哪一种</b>。
+      <code>反T = 先卖后买(高抛低吸)</code>、<code>正T = 先买后卖(低吸高抛)</code>。
+      正T 的股数受<b>账户可用资金</b>约束 —— 没填资金就<b>不给数字</b>(不给 0,不给猜的数)。
+      <br />下面每个场景都是<b>真实接口</b> <code>POST /api/calculator/review</code> 的返回,数据取自 2026-10-24 盘中。
+    </p>
+  </header>
+
+  <section>
+    <h2><span class="idx">1</span>推荐条 + 两行对照(核心形态)</h2>
+    <p class="note">推荐方向用青色描边 + 「更适合」标签;不适用的方向照常显示、灰显并写明原因(不隐藏)。</p>
+    <div id="s1"></div>
+  </section>
+
+  <section>
+    <h2><span class="idx">2</span>缺资金时的形态</h2>
+    <p class="note">
+      未填写可用资金时,正T 一行灰显 + 提示原因,并给出<b>资金填写入口</b>(琥珀色提示条)。
+      填了钱之后,正T 才会有股数上限 —— 见下方场景 E。
+    </p>
+    <div id="s2"></div>
+  </section>
+
+  <section>
+    <h2><span class="idx">3</span>正T 被推荐时的形态</h2>
+    <p class="note">
+      实盘 5 只持仓里只有 002185 适合做 T,而它现价落在 T 区间 57% 位置 → 判定推荐的是<b>反T</b>,
+      真实数据里拿不到「正T 被推荐」的样本。下这一场景是<b>派生示意</b>:
+      forward 一行的股数 / 金额 / 两步全部取自真实接口响应,只把推荐方向按规则改写,界面上标了「示意」。
+    </p>
+    <div id="s3"></div>
+  </section>
+
+  <section>
+    <h2><span class="idx">4</span>两个方向都不可用</h2>
+    <p class="note">当前行情不适合做 T 时,两行都灰显 + 说明原因,不给出任何股数。</p>
+    <div id="s4"></div>
+  </section>
+</div>
+
+<script>
+const SCENES = {"A_002185_sell_200_at_17.000_no_cash": {"request": {"stock_code": "002185", "action": "sell", "tx_shares": 200, "tx_price": "17.000"}, "status": 200, "body": {"verdict": "conditional", "headline": "有条件可做 · 现价 16.19 元,等触发:涨到 19.16 元可解套(需涨 5.1%)", "reasons": [], "blockers": ["当前没有卖出触发条件(既未到止盈位,也未跌破止损位)"], "price_check": {"suggested": null, "your_price": 17.0, "verdict": "unknown", "note": ""}, "size_check": {"suggested_shares": 333, "your_shares": 200, "note": ""}, "t_assessment": {"suitable": true, "t_high": 16.86, "t_low": 15.29, "sell_trigger": "冲高至 16.86 元附近且量能未超 5 日均量 1.5 倍时卖出 T 仓", "buyback_trigger": "回落至 15.29 元附近且缩量企稳(MACD 绿柱不放大)时买回", "your_price_in_range": false, "max_t_shares": 500, "note": "你的 17.00 元接近 T 高点 16.86 元,价位适合 T 的卖出腿"}, "position_after": {"shares": 800, "avg_cost": "17.021", "total_cost": "13617.17", "realized_pnl": "-4.29"}, "risk_flags": [], "degraded": ["板块资金流无该行业(行业名为证监会口径,与新浪板块名不同)", "没有可参考的建议价位,跳过价位检查", "未填写账户可用资金,正T 股数无法测算"], "t_directions": {"reverse": {"key": "reverse", "label": "反T · 先卖后买", "applicable": true, "reason_code": "ok", "prerequisite": "需有老底仓可卖:可动 500 股(底仓保留 ≥50%),卖出所得即可覆盖买回", "max_shares": 500, "max_amount": "8430.00", "steps": [{"role": "sell", "text": "冲高至 16.86 元附近卖出 500 股(老仓)"}, {"role": "buyback", "text": "回落至 15.29 元附近买回 500 股"}], "status_text": "可做 500 股:冲高 16.86 元卖 500 股,回落 15.29 元买回 500 股(持股数不变)"}, "forward": {"key": "forward", "label": "正T · 先买后卖", "applicable": false, "reason_code": "no_cash", "prerequisite": "未填写账户可用资金,无法测算正T 股数", "max_shares": null, "max_amount": null, "steps": [], "status_text": "未填写账户可用资金,无法测算正T 股数"}, "recommended": "reverse", "recommend_reason": "正T 当前不可用(未填写账户可用资金,无法测算正T 股数),只能做反T", "your_leg": "reverse.sell", "t_plus_one_note": "A 股 T+1:当天买入的股票当天不能卖出。正T 的卖出腿只能用预留的老底仓承接;反T 持股数不变,买回的部分当天也不能再卖。"}}}, "B_002185_buy_100_at_15.300_no_cash": {"request": {"stock_code": "002185", "action": "buy", "tx_shares": 100, "tx_price": "15.300"}, "status": 200, "body": {"verdict": "not_recommended", "headline": "不建议 · 现价 16.19 元,等触发:涨到 19.16 元可解套(需涨 5.1%)", "reasons": [], "blockers": ["补仓摊薄 条件不成立:下跌通道(趋势未破条件不成立);尚无企稳信号", "下跌通道中不要抄底"], "price_check": {"suggested": 16.19, "your_price": 15.3, "verdict": "ok", "note": "建议 16.19 元附近,你的 15.30 元低 5.50%,价位更划算"}, "size_check": {"suggested_shares": null, "your_shares": 100, "note": ""}, "t_assessment": {"suitable": true, "t_high": 16.86, "t_low": 15.29, "sell_trigger": "冲高至 16.86 元附近且量能未超 5 日均量 1.5 倍时卖出 T 仓", "buyback_trigger": "回落至 15.29 元附近且缩量企稳(MACD 绿柱不放大)时买回", "your_price_in_range": true, "max_t_shares": 500, "note": "你的 15.30 元接近 T 低点 15.29 元,价位适合 T 的买回腿"}, "position_after": {"shares": 1100, "avg_cost": "16.865", "total_cost": "18551.46", "realized_pnl": "0.00"}, "risk_flags": [], "degraded": ["板块资金流无该行业(行业名为证监会口径,与新浪板块名不同)", "未填写账户可用资金,正T 股数无法测算"], "t_directions": {"reverse": {"key": "reverse", "label": "反T · 先卖后买", "applicable": true, "reason_code": "ok", "prerequisite": "需有老底仓可卖:可动 500 股(底仓保留 ≥50%),卖出所得即可覆盖买回", "max_shares": 500, "max_amount": "8430.00", "steps": [{"role": "sell", "text": "冲高至 16.86 元附近卖出 500 股(老仓)"}, {"role": "buyback", "text": "回落至 15.29 元附近买回 500 股"}], "status_text": "可做 500 股:冲高 16.86 元卖 500 股,回落 15.29 元买回 500 股(持股数不变)"}, "forward": {"key": "forward", "label": "正T · 先买后卖", "applicable": false, "reason_code": "no_cash", "prerequisite": "未填写账户可用资金,无法测算正T 股数", "max_shares": null, "max_amount": null, "steps": [], "status_text": "未填写账户可用资金,无法测算正T 股数"}, "recommended": "reverse", "recommend_reason": "正T 当前不可用(未填写账户可用资金,无法测算正T 股数),只能做反T", "your_leg": "reverse.buyback", "t_plus_one_note": "A 股 T+1:当天买入的股票当天不能卖出。正T 的卖出腿只能用预留的老底仓承接;反T 持股数不变,买回的部分当天也不能再卖。"}}}, "C_002185_sell_200_at_17.000_cash_20000": {"request": {"stock_code": "002185", "action": "sell", "tx_shares": 200, "tx_price": "17.000", "cash_available": "20000.00"}, "status": 200, "body": {"verdict": "conditional", "headline": "有条件可做 · 现价 16.19 元,等触发:涨到 19.16 元可解套(需涨 5.1%)", "reasons": [], "blockers": ["当前没有卖出触发条件(既未到止盈位,也未跌破止损位)"], "price_check": {"suggested": null, "your_price": 17.0, "verdict": "unknown", "note": ""}, "size_check": {"suggested_shares": 333, "your_shares": 200, "note": ""}, "t_assessment": {"suitable": true, "t_high": 16.86, "t_low": 15.29, "sell_trigger": "冲高至 16.86 元附近且量能未超 5 日均量 1.5 倍时卖出 T 仓", "buyback_trigger": "回落至 15.29 元附近且缩量企稳(MACD 绿柱不放大)时买回", "your_price_in_range": false, "max_t_shares": 500, "note": "你的 17.00 元接近 T 高点 16.86 元,价位适合 T 的卖出腿"}, "position_after": {"shares": 800, "avg_cost": "17.021", "total_cost": "13617.17", "realized_pnl": "-4.29"}, "risk_flags": [], "degraded": ["板块资金流无该行业(行业名为证监会口径,与新浪板块名不同)", "没有可参考的建议价位,跳过价位检查"], "t_directions": {"reverse": {"key": "reverse", "label": "反T · 先卖后买", "applicable": true, "reason_code": "ok", "prerequisite": "需有老底仓可卖:可动 500 股(底仓保留 ≥50%),卖出所得即可覆盖买回", "max_shares": 500, "max_amount": "8430.00", "steps": [{"role": "sell", "text": "冲高至 16.86 元附近卖出 500 股(老仓)"}, {"role": "buyback", "text": "回落至 15.29 元附近买回 500 股"}], "status_text": "可做 500 股:冲高 16.86 元卖 500 股,回落 15.29 元买回 500 股(持股数不变)"}, "forward": {"key": "forward", "label": "正T · 先买后卖", "applicable": true, "reason_code": "ok", "prerequisite": "需有老底仓承接卖腿(可动 500 股,底仓保留 ≥50%),且买入腿需占用资金 7645.00 元", "max_shares": 500, "max_amount": "7645.00", "steps": [{"role": "buy", "text": "回落至 15.29 元附近买入 500 股(占资金 7645.00 元)"}, {"role": "sell", "text": "冲高至 16.86 元附近卖出老底仓 500 股"}], "status_text": "可做 500 股:回落 15.29 元买 500 股(占资金 7645.00 元),冲高 16.86 元卖老底仓 500 股"}, "recommended": "reverse", "recommend_reason": "现价 16.19 元位于 T 区间 15.29~16.86 元的57% 位置,偏上沿,先卖后买更稳妥", "your_leg": "reverse.sell", "t_plus_one_note": "A 股 T+1:当天买入的股票当天不能卖出。正T 的卖出腿只能用预留的老底仓承接;反T 持股数不变,买回的部分当天也不能再卖。"}}}, "D_000066_buy_200_at_11.780": {"request": {"stock_code": "000066", "action": "buy", "tx_shares": 200, "tx_price": "11.780"}, "status": 200, "body": {"verdict": "not_recommended", "headline": "不建议 · 现价 11.78 元,等触发:涨到 18.71 元可解套(需涨 58.0%)", "reasons": [], "blockers": ["补仓摊薄 条件不成立:下跌通道(趋势未破条件不成立);尚无企稳信号", "单笔加仓 2356.00 元超过持仓市值 2356.00 元的一半", "下跌通道中不要抄底"], "price_check": {"suggested": 11.78, "your_price": 11.78, "verdict": "ok", "note": "建议 11.78 元附近,你的 11.78 元在容差内"}, "size_check": {"suggested_shares": null, "your_shares": 200, "note": "单笔加仓 2356.00 元超过持仓市值 2356.00 元的一半"}, "t_assessment": {"suitable": false, "t_high": null, "t_low": null, "sell_trigger": "", "buyback_trigger": "", "your_price_in_range": null, "max_t_shares": null, "note": "现价已跌破 P20 低位带 14.10,下行空间不明,不建议做 T"}, "position_after": {"shares": 400, "avg_cost": "15.198", "total_cost": "6079.20", "realized_pnl": "0.00"}, "risk_flags": ["单笔加仓过大"], "degraded": ["板块资金流无该行业(行业名为证监会口径,与新浪板块名不同)"], "t_directions": {"reverse": {"key": "reverse", "label": "反T · 先卖后买", "applicable": false, "reason_code": "not_suitable", "prerequisite": "现价已跌破 P20 低位带 14.10,下行空间不明,不建议做 T", "max_shares": null, "max_amount": null, "steps": [], "status_text": "现价已跌破 P20 低位带 14.10,下行空间不明,不建议做 T"}, "forward": {"key": "forward", "label": "正T · 先买后卖", "applicable": false, "reason_code": "not_suitable", "prerequisite": "现价已跌破 P20 低位带 14.10,下行空间不明,不建议做 T", "max_shares": null, "max_amount": null, "steps": [], "status_text": "现价已跌破 P20 低位带 14.10,下行空间不明,不建议做 T"}, "recommended": null, "recommend_reason": "现价已跌破 P20 低位带 14.10,下行空间不明,不建议做 T", "your_leg": null, "t_plus_one_note": "A 股 T+1:当天买入的股票当天不能卖出。正T 的卖出腿只能用预留的老底仓承接;反T 持股数不变,买回的部分当天也不能再卖。"}}}, "E_002185_buy_100_at_15.300_cash_3000": {"request": {"stock_code": "002185", "action": "buy", "tx_shares": 100, "tx_price": "15.300", "cash_available": "3000.00"}, "status": 200, "body": {"verdict": "not_recommended", "headline": "不建议 · 现价 16.19 元,等触发:涨到 19.16 元可解套(需涨 5.1%)", "reasons": [], "blockers": ["补仓摊薄 条件不成立:下跌通道(趋势未破条件不成立);尚无企稳信号", "下跌通道中不要抄底"], "price_check": {"suggested": 16.19, "your_price": 15.3, "verdict": "ok", "note": "建议 16.19 元附近,你的 15.30 元低 5.50%,价位更划算"}, "size_check": {"suggested_shares": null, "your_shares": 100, "note": ""}, "t_assessment": {"suitable": true, "t_high": 16.86, "t_low": 15.29, "sell_trigger": "冲高至 16.86 元附近且量能未超 5 日均量 1.5 倍时卖出 T 仓", "buyback_trigger": "回落至 15.29 元附近且缩量企稳(MACD 绿柱不放大)时买回", "your_price_in_range": true, "max_t_shares": 500, "note": "你的 15.30 元接近 T 低点 15.29 元,价位适合 T 的买回腿"}, "position_after": {"shares": 1100, "avg_cost": "16.865", "total_cost": "18551.46", "realized_pnl": "0.00"}, "risk_flags": [], "degraded": ["板块资金流无该行业(行业名为证监会口径,与新浪板块名不同)"], "t_directions": {"reverse": {"key": "reverse", "label": "反T · 先卖后买", "applicable": true, "reason_code": "ok", "prerequisite": "需有老底仓可卖:可动 500 股(底仓保留 ≥50%),卖出所得即可覆盖买回", "max_shares": 500, "max_amount": "8430.00", "steps": [{"role": "sell", "text": "冲高至 16.86 元附近卖出 500 股(老仓)"}, {"role": "buyback", "text": "回落至 15.29 元附近买回 500 股"}], "status_text": "可做 500 股:冲高 16.86 元卖 500 股,回落 15.29 元买回 500 股(持股数不变)"}, "forward": {"key": "forward", "label": "正T · 先买后卖", "applicable": true, "reason_code": "ok", "prerequisite": "需有老底仓承接卖腿(可动 500 股,底仓保留 ≥50%),且买入腿需占用资金 1530.00 元", "max_shares": 100, "max_amount": "1530.00", "steps": [{"role": "buy", "text": "回落至 15.30 元附近买入 100 股(占资金 1530.00 元)"}, {"role": "sell", "text": "冲高至 16.86 元附近卖出老底仓 100 股"}], "status_text": "可做 100 股:回落 15.30 元买 100 股(占资金 1530.00 元),冲高 16.86 元卖老底仓 100 股"}, "recommended": "reverse", "recommend_reason": "现价 16.19 元位于 T 区间 15.29~16.86 元的57% 位置,偏上沿,先卖后买更稳妥", "your_leg": "reverse.buyback", "t_plus_one_note": "A 股 T+1:当天买入的股票当天不能卖出。正T 的卖出腿只能用预留的老底仓承接;反T 持股数不变,买回的部分当天也不能再卖。"}}}};
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+const LEG_LABEL = {
+  'reverse.sell':'卖出腿','reverse.buyback':'买回腿',
+  'forward.buy':'买入腿','forward.sell':'卖出腿'
+};
+
+function stepsHtml(dir, yourLeg){
+  const prefix = dir.key === 'reverse' ? 'reverse.' : 'forward.';
+  return dir.steps.map((st,i)=>{
+    const hit = yourLeg === prefix + st.role;
+    return `<li class="${hit?'hit':''}">
+      <span class="n">${hit?'●':(i+1)}</span>
+      <span class="txt">${esc(st.text)}${hit?' <span class="pill you">你拟的这笔</span>':''}</span>
+    </li>`;
+  }).join('');
+}
+
+function recBar(td){
+  if(!td.recommended){
+    return `<div class="rec none"><span class="tag">不适合做 T</span><span class="txt">${esc(td.recommend_reason)}</span></div>`;
+  }
+  const isRev = td.recommended === 'reverse';
+  const label = isRev ? '反T · 先卖后买' : '正T · 先买后卖';
+  const legTxt = td.your_leg ? `　你拟的这笔在<span class="leg">${esc(LEG_LABEL[td.your_leg]||td.your_leg)}</span>。` : '';
+  return `<div class="rec"><span class="tag">更适合</span><span class="txt">
+    <b>${esc(label)}</b>${legTxt}${esc(td.recommend_reason)}
+  </span></div>`;
+}
+
+function dirHtml(dir, td){
+  const isRec = td.recommended === dir.key;
+  const pills = [];
+  if(isRec) pills.push('<span class="pill rec">更适合</span>');
+  if(!dir.applicable) pills.push('<span class="pill off">当前不可用</span>');
+  if(dir.reason_code === 'no_cash') pills.push('<span class="pill warn">缺资金</span>');
+  if(dir.reason_code === 'cash_too_little') pills.push('<span class="pill warn">资金不足</span>');
+  let maxHtml = '';
+  if(dir.applicable && dir.max_shares){
+    maxHtml = `<div class="dir-max">上限 <b>${dir.max_shares}</b> 股<span class="amt">${dir.max_amount?'≈ ¥'+esc(dir.max_amount):''}</span></div>`;
+  } else if(dir.max_shares === null && dir.applicable === false && dir.reason_code === 'no_cash'){
+    maxHtml = '<div class="dir-max">上限 <b>—</b></div>';
+  }
+
+  const prereq = dir.applicable
+    ? `<div class="prereq"><b>前提</b> · ${esc(dir.prerequisite)}</div>`
+    : `<div class="prereq"><b>为什么不能做</b> · ${esc(dir.prerequisite)}</div>`;
+
+  return `<div class="dir ${isRec?'recommended':''} ${dir.applicable?'':'disabled'}">
+    <div class="dir-head">
+      <span class="dir-name">${esc(dir.label)}</span>
+      ${pills.join('')}
+      ${maxHtml}
+    </div>
+    ${dir.steps.length?`<ul class="steps">${stepsHtml(dir, td.your_leg)}</ul>`:''}
+    ${prereq}
+  </div>`;
+}
+
+function cashBar(cash, need){
+  if(need){
+    return `<div class="cashbar need">
+      <span class="lbl">⚠ 未填写账户可用资金</span>
+      <input placeholder="例如 20000" />
+      <span class="hint">正T 要先买入,买入腿要先掏钱 —— 填了才能算出正T 能做多少股</span>
+      <button>保存</button>
+    </div>`;
+  }
+  return `<div class="cashbar">
+    <span class="lbl">账户可用资金</span>
+    <input value="${esc(cash==null?'':cash)}" />
+    <span class="hint">影响正T 的股数上限(反T 不占用额外资金)</span>
+    <button>保存</button>
+  </div>`;
+}
+
+function scene(name, cash, need, syntheticNote){
+  const sc = SCENES[name];
+  if(!sc || sc.status !== 200) return '';
+  const body = sc.body, td = body.t_directions;
+  const req = sc.request;
+  const noteHtml = syntheticNote
+    ? `<div class="scene-label" style="margin-top:8px"><span class="pill warn">示意</span><span>${esc(syntheticNote)}</span></div>`
+    : '';
+  return `<div class="card">
+    <div class="scene-label">
+      <span class="req">${esc(req.stock_code)} ${req.action === 'buy' ? '买入' : '卖出'} ${req.tx_shares} @ ${esc(req.tx_price)}</span>
+      <span>· 判定 ${esc(body.verdict)} · ${esc(body.headline)}</span>
+    </div>
+    ${noteHtml}
+    ${recBar(td)}
+    <div class="dirs">
+      ${dirHtml(td.reverse, td)}
+      ${dirHtml(td.forward, td)}
+    </div>
+    ${cashBar(cash, need)}
+    <div class="tplus">${esc(td.t_plus_one_note)}</div>
+  </div>`;
+}
+
+/* ------------------------------------------------------------
+ * 派生场景:正T 被推荐时的形态
+ *
+ * **为什么要派生**:2026-10-24 实盘 5 只持仓里,只有 002185 适合做 T,
+ * 而它现价 16.19 落在 T 区间(15.29~16.86)的 57% 位置 —— 按判定规则
+ * 推荐的是**反T**,正T 不会被推荐。真实数据里拿不到「正T 被推荐」的样本。
+ *
+ * 所以这里派生一个**仅用于展示视觉形态**的场景:
+ * - forward 分支的内容(股数 / 金额 / 两步 / 前提)全部取自**真实接口响应**
+ * - 只有 recommended / recommend_reason 两项按判定规则改写
+ *   (位置比例 <50% → 推荐正T,理由文案按规则模板生成)
+ *
+ * 界面上用「示意」标签明确标出,不让它被误读成实测结论。
+ * ------------------------------------------------------------ */
+function deriveForwardRecommended(){
+  const sc = SCENES['E_002185_buy_100_at_15.300_cash_3000'];
+  const td = JSON.parse(JSON.stringify(sc.body.t_directions));
+  const t = sc.body.t_assessment;
+  const tLow = t.t_low, tHigh = t.t_high;
+  // 位置比例取区间下沿附近(30%),让「偏下沿 → 推荐正T」的文案自洽
+  const ratio = 30;
+  const ep = (tLow + (tHigh - tLow) * (ratio / 100)).toFixed(2);
+  td.recommended = 'forward';
+  td.recommend_reason =
+    `现价 ${ep} 元位于 T 区间 ${tLow.toFixed(2)}~${tHigh.toFixed(2)} 元的${ratio}% 位置,`
+    + `偏下沿,先买后卖更占优`;
+  td.your_leg = 'forward.buy';
+  const out = JSON.parse(JSON.stringify(sc));
+  out.body.t_directions = td;
+  out._derived = true;
+  return out;
+}
+SCENES['F_derived_forward_recommended'] = deriveForwardRecommended();
+
+document.getElementById('s1').innerHTML =
+  scene('C_002185_sell_200_at_17.000_cash_20000', '20000.00', false) +
+  '<div style="height:14px"></div>' +
+  scene('B_002185_buy_100_at_15.300_no_cash', null, false);
+
+document.getElementById('s2').innerHTML =
+  scene('A_002185_sell_200_at_17.000_no_cash', null, true) +
+  '<div style="height:14px"></div>' +
+  scene('E_002185_buy_100_at_15.300_cash_3000', '3000.00', false);
+
+document.getElementById('s3').innerHTML =
+  scene('F_derived_forward_recommended', '3000.00', false,
+    '派生示意:股数 / 金额 / 两步均为真实接口数据,仅推荐方向与理由按判定规则改写(位置比例取 30% 偏下沿),用于展示正T 高亮时的视觉形态');
+
+document.getElementById('s4').innerHTML = scene('D_000066_buy_200_at_11.780', null, false);
+</script>
+</body>
+</html>

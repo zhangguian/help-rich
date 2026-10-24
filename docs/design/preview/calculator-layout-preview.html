@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" href="data:," />
+<title>成本计算器 · 布局优化稿</title>
+<style>
+  :root {
+    --canvas:#070b12; --surface:#0d131d; --surface-2:#121a26; --surface-3:#18212f;
+    --border:#1e2836; --border-strong:#2a3648;
+    --text-primary:#e2e8f2; --text-secondary:#8fa0b8; --text-tertiary:#5c6b84;
+    --accent:#22d3ee; --accent-subtle:rgba(34,211,238,.12);
+    --up:#f6465d; --down:#0ecb81; --warn:#f5a524;
+    --up-bg:rgba(246,70,93,.14); --down-bg:rgba(14,235,129,.12); --warn-bg:rgba(245,165,36,.14);
+    --r-xs:3px; --r-sm:4px; --r-md:6px; --r-lg:8px; --r-xl:10px;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--canvas); color:var(--text-primary);
+    font-family:"Jakarta Sans",-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    font-size:14px; line-height:1.55;
+  }
+  .mono { font-family:"JetBrains Mono","SF Mono",Consolas,monospace; }
+  .wrap { max-width:1400px; margin:0 auto; padding:28px 20px 90px; }
+  header.top { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; margin-bottom:6px; }
+  h1 { font-size:20px; font-weight:700; margin:0 0 6px; letter-spacing:.2px; }
+  .sub { color:var(--text-secondary); font-size:13px; margin:0; max-width:900px; }
+  .sub b { color:var(--text-primary); font-weight:600; }
+  .sub code, code { background:var(--surface-3); padding:1px 5px; border-radius:var(--r-xs);
+    color:var(--text-secondary); font-family:"JetBrains Mono",Consolas,monospace; font-size:12px; }
+  section { margin-top:36px; }
+  h2 { font-size:15px; font-weight:600; margin:0 0 4px; }
+  h2 .idx { color:var(--accent); font-family:"JetBrains Mono",monospace; margin-right:8px; }
+  .note { color:var(--text-tertiary); font-size:12px; margin:0 0 14px; }
+
+  /* ============ 弹窗模拟 ============ */
+  .modal {
+    background:var(--surface); border:1px solid var(--border-strong); border-radius:var(--r-xl);
+    box-shadow:0 24px 60px -20px rgba(0,0,0,.75);
+    width:100%; max-width:1280px; margin:0 auto; overflow:hidden;
+  }
+  .modal-head {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:12px 16px; border-bottom:1px solid var(--border);
+  }
+  .modal-head h3 { margin:0; font-size:15px; font-weight:600; display:flex; align-items:center; gap:8px; }
+  .modal-close { color:var(--text-tertiary); font-size:20px; line-height:1; cursor:pointer; }
+  .modal-body { padding:14px 16px 18px; display:flex; flex-direction:column; gap:12px; }
+
+  /* ① 结论条 */
+  .vbar { display:flex; align-items:flex-start; gap:14px; justify-content:space-between;
+    padding:11px 14px; border:1px solid var(--border); border-radius:var(--r-lg);
+    background:var(--surface-2); border-left-width:3px; }
+  .vbar.state-ok { border-left-color:var(--down); }
+  .vbar.state-cond { border-left-color:var(--warn); }
+  .vbar.state-not { border-left-color:var(--up); }
+  .vbar-left { display:flex; align-items:center; gap:12px; min-width:0; }
+  .badge { display:inline-flex; align-items:center; gap:5px; padding:4px 11px; border-radius:999px;
+    font-size:13px; font-weight:700; white-space:nowrap; border:1px solid; }
+  .badge.ok { color:var(--down); background:var(--down-bg); border-color:rgba(14,235,129,.4); }
+  .badge.cond { color:var(--warn); background:var(--warn-bg); border-color:rgba(245,165,36,.4); }
+  .badge.not { color:var(--up); background:var(--up-bg); border-color:rgba(246,70,93,.4); }
+  .vbar-title { font-size:14px; font-weight:600; display:flex; align-items:baseline; gap:8px; }
+  .vbar-title .code { font-family:"JetBrains Mono",monospace; font-size:12px; color:var(--text-tertiary); font-weight:400; }
+  .vbar-title .act { font-size:13px; font-weight:600; }
+  .act.buy { color:var(--down); }
+  .act.sell { color:var(--up); }
+  .vbar-headline { font-size:13.5px; color:var(--text-primary); margin-top:2px; }
+  .vbar-right { display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end; align-items:center;
+    max-width:340px; }
+  .chip { font-size:11px; padding:2px 7px; border-radius:var(--r-xs); border:1px solid var(--border-strong);
+    color:var(--text-secondary); white-space:nowrap; }
+  .chip.risk { color:var(--warn); border-color:rgba(245,165,36,.45); background:var(--warn-bg); }
+  .chip.deg { color:var(--text-tertiary); border-style:dashed; }
+
+  /* ② 预交易输入行 */
+  .trade { background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-lg); padding:10px 12px; }
+  .trade-fields { display:flex; align-items:flex-end; gap:14px; flex-wrap:wrap; }
+  .seg { display:flex; gap:4px; }
+  .seg span { font-size:13px; padding:5px 13px; border-radius:var(--r-md); border:1px solid var(--border-strong);
+    color:var(--text-secondary); }
+  .seg span.on { color:var(--down); border-color:rgba(14,235,129,.45); background:var(--down-bg); font-weight:600; }
+  .seg span.on.sell { color:var(--up); border-color:rgba(246,70,93,.45); background:var(--up-bg); }
+  .fld label { display:block; font-size:11px; color:var(--text-tertiary); margin-bottom:3px; }
+  .fld .inp { background:var(--surface); border:1px solid var(--border-strong); border-radius:var(--r-md);
+    padding:6px 10px; font-size:14px; font-family:"JetBrains Mono",monospace; color:var(--text-primary);
+    min-width:96px; }
+  .fld .inp.focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-subtle); }
+  .fld .inp.wide { min-width:130px; }
+  .amount { font-size:12.5px; color:var(--text-secondary); padding-bottom:7px; }
+  .amount b { font-family:"JetBrains Mono",monospace; color:var(--text-primary); font-weight:600; }
+  .after-strip { display:flex; gap:22px; flex-wrap:wrap; margin-top:10px; padding-top:9px;
+    border-top:1px dashed var(--border-strong); font-size:12.5px; color:var(--text-secondary); }
+  .after-strip b { font-family:"JetBrains Mono",monospace; color:var(--text-primary); font-weight:600; font-size:13.5px; }
+  .after-strip .sep { color:var(--text-tertiary); }
+
+  /* ③ 双栏 */
+  .cols { display:grid; grid-template-columns:296px 1fr; gap:12px; align-items:start; }
+  .panel { background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-lg); }
+  .panel-h { font-size:12px; color:var(--text-tertiary); padding:9px 12px 7px;
+    border-bottom:1px solid var(--border); letter-spacing:.3px; display:flex; justify-content:space-between; }
+  .pos-list { padding:5px; display:flex; flex-direction:column; gap:2px; max-height:302px; overflow:auto; }
+  .pos { display:grid; grid-template-columns:1fr auto; gap:2px 8px; padding:7px 9px; border-radius:var(--r-md);
+    border:1px solid transparent; }
+  .pos .nm { font-size:13px; }
+  .pos .cd { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--text-tertiary); }
+  .pos .sub { font-size:11.5px; color:var(--text-secondary); grid-column:1; }
+  .pos .pnl { font-family:"JetBrains Mono",monospace; font-size:12.5px; text-align:right; }
+  .pos .px { font-family:"JetBrains Mono",monospace; font-size:12.5px; text-align:right; }
+  .pos.on { background:var(--accent-subtle); border-color:rgba(34,211,238,.28); }
+  .up { color:var(--up); } .down { color:var(--down); }
+
+  /* T 卡 */
+  .tcard { padding:11px 13px; }
+  .tcard-h { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:9px; }
+  .tcard-h .t { font-size:13px; font-weight:600; }
+  .tb { color:var(--warn); background:var(--warn-bg); border:1px solid rgba(245,165,36,.4);
+    font-size:12px; padding:3px 10px; border-radius:999px; font-weight:600; white-space:nowrap; }
+  .tb.ok { color:var(--down); background:var(--down-bg); border-color:rgba(14,235,129,.4); }
+  .trange { display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:14px; margin:4px 0 10px; }
+  .tprice { text-align:center; }
+  .tprice .pk { font-size:11px; color:var(--text-tertiary); }
+  .tprice .pv { font-family:"JetBrains Mono",monospace; font-size:19px; font-weight:700; }
+  .tprice.low .pv { color:var(--down); } .tprice.high .pv { color:var(--up); }
+  .tbar { position:relative; height:8px; border-radius:999px; background:var(--surface-3);
+    border:1px solid var(--border); }
+  .tbar .band { position:absolute; inset:0; border-radius:999px;
+    background:linear-gradient(90deg,rgba(14,235,129,.35),rgba(245,165,36,.35)); }
+  .tbar .mark { position:absolute; top:-5px; width:2px; height:18px; background:var(--accent); border-radius:1px; }
+  .tbar .mark.out { background:var(--text-tertiary); }
+  .tbar .mark.out.right::after { left:auto; right:0; transform:none; color:var(--text-tertiary); }
+  .tbar .mark.out.left::after { left:0; transform:none; color:var(--text-tertiary); }
+  .tbar .mark::after { content:attr(data-label); position:absolute; top:16px; left:50%; transform:translateX(-50%);
+    font-size:10px; color:var(--accent); white-space:nowrap; font-family:"JetBrains Mono",monospace; }
+  .triggers { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .trig { background:var(--surface-3); border:1px solid var(--border); border-radius:var(--r-md); padding:7px 10px; }
+  .trig .tk { font-size:11px; margin-bottom:2px; }
+  .trig.sell .tk { color:var(--up); } .trig.buy .tk { color:var(--down); }
+  .trig .tv { font-size:12.5px; color:var(--text-secondary); }
+  .tmeta { display:flex; gap:8px; margin-top:9px; flex-wrap:wrap; }
+  .tmeta .m { background:var(--surface-3); border-radius:var(--r-sm); padding:5px 9px; font-size:11.5px;
+    color:var(--text-secondary); }
+  .tmeta .m b { font-family:"JetBrains Mono",monospace; color:var(--text-primary); font-weight:600; }
+  .tnote { margin-top:9px; font-size:12.5px; color:var(--text-primary); }
+  .tnote b { color:var(--warn); }
+  .tbad { font-size:13px; color:var(--text-primary); background:var(--surface-3); border-radius:var(--r-md);
+    padding:9px 11px; }
+  .tbad b { color:var(--warn); }
+  .thint { margin-top:8px; font-size:11.5px; color:var(--text-tertiary); line-height:1.6; }
+  .thint b { color:var(--text-secondary); }
+
+  /* 依据 */
+  .why { margin-top:12px; }
+  .why-h { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-tertiary);
+    margin-bottom:7px; }
+  .why-h .cnt { font-family:"JetBrains Mono",monospace; color:var(--text-secondary); }
+  .why-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .wgroup { border:1px solid var(--border); border-radius:var(--r-md); padding:8px 10px; background:var(--surface-2); }
+  .wgroup .gt { font-size:11px; color:var(--text-tertiary); margin-bottom:5px; }
+  .wgroup ul { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:5px; }
+  .wgroup li { font-size:13px; color:var(--text-secondary); line-height:1.5; padding-left:17px; position:relative; }
+  .wgroup li::before { position:absolute; left:0; top:0; font-weight:700; }
+  .wgroup.bad li::before { content:"✕"; color:var(--up); }
+  .wgroup.good li::before { content:"✓"; color:var(--down); }
+  .empty { font-size:12.5px; color:var(--text-tertiary); font-style:italic; }
+
+  /* ④ 检查条 */
+  .checks { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .chk { background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-md); padding:8px 11px; }
+  .chk .ck { font-size:11px; color:var(--text-tertiary); }
+  .chk .cv { font-family:"JetBrains Mono",monospace; font-size:13px; color:var(--text-primary); margin-top:2px; }
+  .chk .cn { font-size:11.5px; color:var(--text-secondary); margin-top:3px; }
+
+  /* ⑤ 热力图 */
+  .heat { background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-lg); padding:10px 12px; }
+  .heat-h { display:flex; justify-content:space-between; font-size:12px; color:var(--text-tertiary); margin-bottom:8px; }
+  .heat-grid { display:grid; grid-template-columns:repeat(21,1fr); gap:3px; }
+  .cell { border-radius:var(--r-xs); padding:5px 2px; text-align:center; font-size:10px;
+    font-family:"JetBrains Mono",monospace; border:1px solid transparent; }
+  .cell .pp { font-size:9.5px; opacity:.75; }
+  .scale { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--text-tertiary);
+    margin-top:8px; justify-content:flex-end; }
+  .scale i { width:26px; height:9px; display:inline-block; border-radius:2px; }
+
+  /* 改动清单 */
+  .changes { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:10px; }
+  .chg { background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-md); padding:10px 12px; }
+  .chg .t { font-size:13px; font-weight:600; color:var(--text-primary); margin-bottom:4px; }
+  .chg .d { font-size:12.5px; color:var(--text-secondary); line-height:1.6; }
+  .chg .d em { color:var(--warn); font-style:normal; }
+  .chg .d s { color:var(--text-tertiary); text-decoration-color:rgba(245,165,36,.6); }
+  .legend { display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--text-tertiary); margin-bottom:14px; }
+  .legend span b { color:var(--text-secondary); }
+  footer { margin-top:44px; padding-top:16px; border-top:1px solid var(--border);
+    color:var(--text-tertiary); font-size:11.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>成本计算器 · 布局优化稿</h1>
+      <p class="sub">
+        目标:<b>一眼看到结论</b>、<b>不用来回滚</b>、<b>没有大片留白</b>。<br />
+        全部数据来自真实后端(<code>POST /api/calculator/review</code> + <code>POST /api/calculator</code> + <code>GET /api/positions</code>),
+        2026-10-24 盘中。判定层是纯函数(零 IO / 零 LLM);徽章只用语义色 <code>success</code> / <code>warn</code> / <code>danger</code>。
+      </p>
+    </div>
+  </header>
+
+  <section>
+    <h2><span class="idx">一</span>新布局(弹窗加宽到 1280,结论前置)</h2>
+    <p class="note">
+      对比上一版:① 结论从「第二屏中间」提到弹窗最顶;② 支持/反对从两块纵向堆叠改为左右两列并排;
+      ③ 做 T 卡不再独占一列(不再出现右下大片留白);④ 成交后持仓从卡内 4 宫格提到输入条,一眼看到;
+      ⑤ 价位/数量检查改成一行三段,不再挤成折行小格。
+    </p>
+    <div id="scenes"></div>
+  </section>
+
+  <section>
+    <h2><span class="idx">二</span>改了什么</h2>
+    <p class="note">逐条对应「不好查看」的具体成因。</p>
+    <div class="changes" id="changes"></div>
+  </section>
+
+  <footer>
+    数据来源:真实接口响应 · 判定规则见 <code>docs/superpowers/specs/2026-10-23-calculator-trade-review-design.md</code> ·
+    未获确认前不改前端源码
+  </footer>
+</div>
+
+<script>
+const DATA = {"samples": {"default_not": {"input": {"stock_code": "000066.SZ", "action": "buy", "tx_shares": 200, "tx_price": "11.780"}, "review_status": 200, "review": {"verdict": "not_recommended", "headline": "不建议 · 现价 11.78 元,等触发:涨到 18.71 元可解套(需涨 58.0%)", "reasons": [], "blockers": ["补仓摊薄 条件不成立:下跌通道(趋势未破条件不成立);尚无企稳信号", "单笔加仓 2356.00 元超过持仓市值 2356.00 元的一半", "下跌通道中不要抄底"], "price_check": {"suggested": 11.78, "your_price": 11.78, "verdict": "ok", "note": "建议 11.78 元附近,你的 11.78 元在容差内"}, "size_check": {"suggested_shares": null, "your_shares": 200, "note": "单笔加仓 2356.00 元超过持仓市值 2356.00 元的一半"}, "t_assessment": {"suitable": false, "t_high": null, "t_low": null, "sell_trigger": "", "buyback_trigger": "", "your_price_in_range": null, "max_t_shares": null, "note": "现价已跌破 P20 低位带 14.10,下行空间不明,不建议做 T"}, "position_after": {"shares": 400, "avg_cost": "15.198", "total_cost": "6079.20", "realized_pnl": "0.00"}, "risk_flags": ["单笔加仓过大"], "degraded": ["板块资金流无该行业(行业名为证监会口径,与新浪板块名不同)"]}, "calc_status": 200, "calc": {"algo_version": "2.0", "input": {"stock_code": "000066.SZ", "action": "buy", "tx_shares": 200, "tx_price": "11.780"}, "before": {"shares": 200, "cost_price": "18.616", "total_cost": "3723.20"}, "after": {"shares": 400, "cost_price": "15.198", "total_cost": "6079.20", "delta_cost": "-3.418", "realized_pnl": "0.00", "realized_pnl_gross": "0.00", "realized_pnl_net": "0.00", "fee_paid": "0.00"}, "pnl_grid": [{"pct": -10, "price": "13.678", "market_value": "5471.20", "pnl": "-608.00"}, {"pct": -9, "price": "13.830", "market_value": "5532.00", "pnl": "-547.20"}, {"pct": -8, "price": "13.982", "market_value": "5592.80", "pnl": "-486.40"}, {"pct": -7, "price": "14.134", "market_value": "5653.60", "pnl": "-425.60"}, {"pct": -6, "price": "14.286", "market_value": "5714.40", "pnl": "-364.80"}, {"pct": -5, "price": "14.438", "market_value": "5775.20", "pnl": "-304.00"}, {"pct": -4, "price": "14.590", "market_value": "5836.00", "pnl": "-243.20"}, {"pct": -3, "price": "14.742", "market_value": "5896.80", "pnl": "-182.40"}, {"pct": -2, "price": "14.894", "market_value": "5957.60", "pnl": "-121.60"}, {"pct": -1, "price": "15.046", "market_value": "6018.40", "pnl": "-60.80"}, {"pct": 0, "price": "15.198", "market_value": "6079.20", "pnl": "0.00"}, {"pct": 1, "price": "15.350", "market_value": "6140.00", "pnl": "60.80"}, {"pct": 2, "price": "15.502", "market_value": "6200.80", "pnl": "121.60"}, {"pct": 3, "price": "15.654", "market_value": "6261.60", "pnl": "182.40"}, {"pct": 4, "price": "15.806", "market_value": "6322.40", "pnl": "243.20"}, {"pct": 5, "price": "15.958", "market_value": "6383.20", "pnl": "304.00"}, {"pct": 6, "price": "16.110", "market_value": "6444.00", "pnl": "364.80"}, {"pct": 7, "price": "16.262", "market_value": "6504.80", "pnl": "425.60"}, {"pct": 8, "price": "16.414", "market_value": "6565.60", "pnl": "486.40"}, {"pct": 9, "price": "16.566", "market_value": "6626.40", "pnl": "547.20"}, {"pct": 10, "price": "16.718", "market_value": "6687.20", "pnl": "608.00"}]}}, "t_sell": {"input": {"stock_code": "002185.SZ", "action": "sell", "tx_shares": 200, "tx_price": "17.000"}, "review_status": 200, "review": {"verdict": "conditional", "headline": "有条件可做 · 现价 16.19 元,等触发:涨到 19.16 元可解套(需涨 5.1%)", "reasons": [], "blockers": ["当前没有卖出触发条件(既未到止盈位,也未跌破止损位)"], "price_check": {"suggested": null, "your_price": 17.0, "verdict": "unknown", "note": ""}, "size_check": {"suggested_shares": 333, "your_shares": 200, "note": ""}, "t_assessment": {"suitable": true, "t_high": 16.86, "t_low": 15.29, "sell_trigger": "冲高至 16.86 元附近且量能未超 5 日均量 1.5 倍时卖出 T 仓", "buyback_trigger": "回落至 15.29 元附近且缩量企稳(MACD 绿柱不放大)时买回", "your_price_in_range": false, "max_t_shares": 500, "note": "你的 17.00 元接近 T 高点 16.86 元,价位适合 T 的卖出腿"}, "position_after": {"shares": 800, "avg_cost": "17.021", "total_cost": "13617.17", "realized_pnl": "-4.29"}, "risk_flags": [], "degraded": ["板块资金流无该行业(行业名为证监会口径,与新浪板块名不同)", "没有可参考的建议价位,跳过价位检查"]}, "calc_status": 200, "calc": {"algo_version": "2.0", "input": {"stock_code": "002185.SZ", "action": "sell", "tx_shares": 200, "tx_price": "17.000"}, "before": {"shares": 1000, "cost_price": "17.021", "total_cost": "17021.46"}, "after": {"shares": 800, "cost_price": "17.021", "total_cost": "13617.17", "delta_cost": "0.000", "realized_pnl": "-4.29", "realized_pnl_gross": "-4.29", "realized_pnl_net": "-4.29", "fee_paid": "0.00"}, "pnl_grid": [{"pct": -10, "price": "15.319", "market_value": "12255.20", "pnl": "-1361.60"}, {"pct": -9, "price": "15.489", "market_value": "12391.20", "pnl": "-1225.60"}, {"pct": -8, "price": "15.659", "market_value": "12527.20", "pnl": "-1089.60"}, {"pct": -7, "price": "15.830", "market_value": "12664.00", "pnl": "-952.80"}, {"pct": -6, "price": "16.000", "market_value": "12800.00", "pnl": "-816.80"}, {"pct": -5, "price": "16.170", "market_value": "12936.00", "pnl": "-680.80"}, {"pct": -4, "price": "16.340", "market_value": "13072.00", "pnl": "-544.80"}, {"pct": -3, "price": "16.510", "market_value": "13208.00", "pnl": "-408.80"}, {"pct": -2, "price": "16.681", "market_value": "13344.80", "pnl": "-272.00"}, {"pct": -1, "price": "16.851", "market_value": "13480.80", "pnl": "-136.00"}, {"pct": 0, "price": "17.021", "market_value": "13616.80", "pnl": "0.00"}, {"pct": 1, "price": "17.191", "market_value": "13752.80", "pnl": "136.00"}, {"pct": 2, "price": "17.361", "market_value": "13888.80", "pnl": "272.00"}, {"pct": 3, "price": "17.532", "market_value": "14025.60", "pnl": "408.80"}, {"pct": 4, "price": "17.702", "market_value": "14161.60", "pnl": "544.80"}, {"pct": 5, "price": "17.872", "market_value": "14297.60", "pnl": "680.80"}, {"pct": 6, "price": "18.042", "market_value": "14433.60", "pnl": "816.80"}, {"pct": 7, "price": "18.212", "market_value": "14569.60", "pnl": "952.80"}, {"pct": 8, "price": "18.383", "market_value": "14706.40", "pnl": "1089.60"}, {"pct": 9, "price": "18.553", "market_value": "14842.40", "pnl": "1225.60"}, {"pct": 10, "price": "18.723", "market_value": "14978.40", "pnl": "1361.60"}]}}, "ok_buy": {"input": {"stock_code": "600036.SH", "action": "buy", "tx_shares": 100, "tx_price": "41.700"}, "review_status": 200, "review": {"verdict": "ok", "headline": "符合条件 · 现价 41.77 元,支撑企稳建仓:回踩 41.70 元不破且 MACD 绿柱缩短时,首仓建仓;当前无底仓,做 T 前需先建仓", "reasons": ["当前有 支撑企稳建仓 条件:回踩 41.70 元不破且 MACD 绿柱缩短时,首仓建仓"], "blockers": [], "price_check": {"suggested": 41.7, "your_price": 41.7, "verdict": "ok", "note": "建议 41.70 元附近,你的 41.70 元在容差内"}, "size_check": {"suggested_shares": null, "your_shares": 100, "note": ""}, "t_assessment": {"suitable": false, "t_high": null, "t_low": null, "sell_trigger": "", "buyback_trigger": "", "your_price_in_range": null, "max_t_shares": null, "note": "近 5 日平均振幅 2.06% 不足 3.0%,做 T 赚不到差价(当前无底仓,做 T 前需先建仓)"}, "position_after": {"shares": 100, "avg_cost": "41.700", "total_cost": "4170.00", "realized_pnl": "0.00"}, "risk_flags": [], "degraded": ["板块资金流无该行业(行业名为证监会口径,与新浪板块名不同)"]}, "calc_status": 200, "calc": {"algo_version": "2.0", "input": {"stock_code": "600036.SH", "action": "buy", "tx_shares": 100, "tx_price": "41.700"}, "before": {"shares": 0, "cost_price": "0.000", "total_cost": "0.00"}, "after": {"shares": 100, "cost_price": "41.700", "total_cost": "4170.00", "delta_cost": "41.700", "realized_pnl": "0.00", "realized_pnl_gross": "0.00", "realized_pnl_net": "0.00", "fee_paid": "0.00"}, "pnl_grid": [{"pct": -10, "price": "37.530", "market_value": "3753.00", "pnl": "-417.00"}, {"pct": -9, "price": "37.947", "market_value": "3794.70", "pnl": "-375.30"}, {"pct": -8, "price": "38.364", "market_value": "3836.40", "pnl": "-333.60"}, {"pct": -7, "price": "38.781", "market_value": "3878.10", "pnl": "-291.90"}, {"pct": -6, "price": "39.198", "market_value": "3919.80", "pnl": "-250.20"}, {"pct": -5, "price": "39.615", "market_value": "3961.50", "pnl": "-208.50"}, {"pct": -4, "price": "40.032", "market_value": "4003.20", "pnl": "-166.80"}, {"pct": -3, "price": "40.449", "market_value": "4044.90", "pnl": "-125.10"}, {"pct": -2, "price": "40.866", "market_value": "4086.60", "pnl": "-83.40"}, {"pct": -1, "price": "41.283", "market_value": "4128.30", "pnl": "-41.70"}, {"pct": 0, "price": "41.700", "market_value": "4170.00", "pnl": "0.00"}, {"pct": 1, "price": "42.117", "market_value": "4211.70", "pnl": "41.70"}, {"pct": 2, "price": "42.534", "market_value": "4253.40", "pnl": "83.40"}, {"pct": 3, "price": "42.951", "market_value": "4295.10", "pnl": "125.10"}, {"pct": 4, "price": "43.368", "market_value": "4336.80", "pnl": "166.80"}, {"pct": 5, "price": "43.785", "market_value": "4378.50", "pnl": "208.50"}, {"pct": 6, "price": "44.202", "market_value": "4420.20", "pnl": "250.20"}, {"pct": 7, "price": "44.619", "market_value": "4461.90", "pnl": "291.90"}, {"pct": 8, "price": "45.036", "market_value": "4503.60", "pnl": "333.60"}, {"pct": 9, "price": "45.453", "market_value": "4545.30", "pnl": "375.30"}, {"pct": 10, "price": "45.870", "market_value": "4587.00", "pnl": "417.00"}]}}, "t_buy": {"input": {"stock_code": "002185.SZ", "action": "buy", "tx_shares": 100, "tx_price": "15.300"}, "review_status": 200, "review": {"verdict": "not_recommended", "headline": "不建议 · 现价 16.19 元,等触发:涨到 19.16 元可解套(需涨 5.1%)", "reasons": [], "blockers": ["补仓摊薄 条件不成立:下跌通道(趋势未破条件不成立);尚无企稳信号", "下跌通道中不要抄底"], "price_check": {"suggested": 16.19, "your_price": 15.3, "verdict": "ok", "note": "建议 16.19 元附近,你的 15.30 元低 5.50%,价位更划算"}, "size_check": {"suggested_shares": null, "your_shares": 100, "note": ""}, "t_assessment": {"suitable": true, "t_high": 16.86, "t_low": 15.29, "sell_trigger": "冲高至 16.86 元附近且量能未超 5 日均量 1.5 倍时卖出 T 仓", "buyback_trigger": "回落至 15.29 元附近且缩量企稳(MACD 绿柱不放大)时买回", "your_price_in_range": true, "max_t_shares": 500, "note": "你的 15.30 元接近 T 低点 15.29 元,价位适合 T 的买回腿"}, "position_after": {"shares": 1100, "avg_cost": "16.865", "total_cost": "18551.46", "realized_pnl": "0.00"}, "risk_flags": [], "degraded": ["板块资金流无该行业(行业名为证监会口径,与新浪板块名不同)"]}, "calc_status": 200, "calc": {"algo_version": "2.0", "input": {"stock_code": "002185.SZ", "action": "buy", "tx_shares": 100, "tx_price": "15.300"}, "before": {"shares": 1000, "cost_price": "17.021", "total_cost": "17021.46"}, "after": {"shares": 1100, "cost_price": "16.865", "total_cost": "18551.46", "delta_cost": "-0.156", "realized_pnl": "0.00", "realized_pnl_gross": "0.00", "realized_pnl_net": "0.00", "fee_paid": "0.00"}, "pnl_grid": [{"pct": -10, "price": "15.179", "market_value": "16696.90", "pnl": "-1854.60"}, {"pct": -9, "price": "15.347", "market_value": "16881.70", "pnl": "-1669.80"}, {"pct": -8, "price": "15.516", "market_value": "17067.60", "pnl": "-1483.90"}, {"pct": -7, "price": "15.684", "market_value": "17252.40", "pnl": "-1299.10"}, {"pct": -6, "price": "15.853", "market_value": "17438.30", "pnl": "-1113.20"}, {"pct": -5, "price": "16.022", "market_value": "17624.20", "pnl": "-927.30"}, {"pct": -4, "price": "16.190", "market_value": "17809.00", "pnl": "-742.50"}, {"pct": -3, "price": "16.359", "market_value": "17994.90", "pnl": "-556.60"}, {"pct": -2, "price": "16.528", "market_value": "18180.80", "pnl": "-370.70"}, {"pct": -1, "price": "16.696", "market_value": "18365.60", "pnl": "-185.90"}, {"pct": 0, "price": "16.865", "market_value": "18551.50", "pnl": "0.00"}, {"pct": 1, "price": "17.034", "market_value": "18737.40", "pnl": "185.90"}, {"pct": 2, "price": "17.202", "market_value": "18922.20", "pnl": "370.70"}, {"pct": 3, "price": "17.371", "market_value": "19108.10", "pnl": "556.60"}, {"pct": 4, "price": "17.540", "market_value": "19294.00", "pnl": "742.50"}, {"pct": 5, "price": "17.708", "market_value": "19478.80", "pnl": "927.30"}, {"pct": 6, "price": "17.877", "market_value": "19664.70", "pnl": "1113.20"}, {"pct": 7, "price": "18.046", "market_value": "19850.60", "pnl": "1299.10"}, {"pct": 8, "price": "18.214", "market_value": "20035.40", "pnl": "1483.90"}, {"pct": 9, "price": "18.383", "market_value": "20221.30", "pnl": "1669.80"}, {"pct": 10, "price": "18.552", "market_value": "20407.20", "pnl": "1855.70"}]}}, "unknown_1": {"input": {"stock_code": "688981.SH", "action": "buy", "tx_shares": 100, "tx_price": "60.000"}, "review_status": 200, "review": {"verdict": "not_recommended", "headline": "不建议 · 现价 104.10 元,暂不满足建仓条件,继续观察;当前无底仓,做 T 前需先建仓", "reasons": [], "blockers": ["当前没有建仓触发条件(未出现企稳 / 超跌反弹 / 放量突破信号)", "下跌通道中不要抄底"], "price_check": {"suggested": null, "your_price": 60.0, "verdict": "unknown", "note": ""}, "size_check": {"suggested_shares": null, "your_shares": 100, "note": ""}, "t_assessment": {"suitable": false, "t_high": null, "t_low": null, "sell_trigger": "", "buyback_trigger": "", "your_price_in_range": null, "max_t_shares": null, "note": "现价已跌破 P20 低位带 117.90,下行空间不明,不建议做 T(当前无底仓,做 T 前需先建仓)"}, "position_after": {"shares": 100, "avg_cost": "60.000", "total_cost": "6000.00", "realized_pnl": "0.00"}, "risk_flags": [], "degraded": ["板块资金流无该行业(行业名为证监会口径,与新浪板块名不同)", "没有可参考的建议价位,跳过价位检查"]}, "calc_status": 200, "calc": {"algo_version": "2.0", "input": {"stock_code": "688981.SH", "action": "buy", "tx_shares": 100, "tx_price": "60.000"}, "before": {"shares": 0, "cost_price": "0.000", "total_cost": "0.00"}, "after": {"shares": 100, "cost_price": "60.000", "total_cost": "6000.00", "delta_cost": "60.000", "realized_pnl": "0.00", "realized_pnl_gross": "0.00", "realized_pnl_net": "0.00", "fee_paid": "0.00"}, "pnl_grid": [{"pct": -10, "price": "54.000", "market_value": "5400.00", "pnl": "-600.00"}, {"pct": -9, "price": "54.600", "market_value": "5460.00", "pnl": "-540.00"}, {"pct": -8, "price": "55.200", "market_value": "5520.00", "pnl": "-480.00"}, {"pct": -7, "price": "55.800", "market_value": "5580.00", "pnl": "-420.00"}, {"pct": -6, "price": "56.400", "market_value": "5640.00", "pnl": "-360.00"}, {"pct": -5, "price": "57.000", "market_value": "5700.00", "pnl": "-300.00"}, {"pct": -4, "price": "57.600", "market_value": "5760.00", "pnl": "-240.00"}, {"pct": -3, "price": "58.200", "market_value": "5820.00", "pnl": "-180.00"}, {"pct": -2, "price": "58.800", "market_value": "5880.00", "pnl": "-120.00"}, {"pct": -1, "price": "59.400", "market_value": "5940.00", "pnl": "-60.00"}, {"pct": 0, "price": "60.000", "market_value": "6000.00", "pnl": "0.00"}, {"pct": 1, "price": "60.600", "market_value": "6060.00", "pnl": "60.00"}, {"pct": 2, "price": "61.200", "market_value": "6120.00", "pnl": "120.00"}, {"pct": 3, "price": "61.800", "market_value": "6180.00", "pnl": "180.00"}, {"pct": 4, "price": "62.400", "market_value": "6240.00", "pnl": "240.00"}, {"pct": 5, "price": "63.000", "market_value": "6300.00", "pnl": "300.00"}, {"pct": 6, "price": "63.600", "market_value": "6360.00", "pnl": "360.00"}, {"pct": 7, "price": "64.200", "market_value": "6420.00", "pnl": "420.00"}, {"pct": 8, "price": "64.800", "market_value": "6480.00", "pnl": "480.00"}, {"pct": 9, "price": "65.400", "market_value": "6540.00", "pnl": "540.00"}, {"pct": 10, "price": "66.000", "market_value": "6600.00", "pnl": "600.00"}]}}, "unknown_2": {"input": {"stock_code": "300394.SZ", "action": "buy", "tx_shares": 100, "tx_price": "20.000"}, "review_status": 200, "review": {"verdict": "conditional", "headline": "有条件可做 · 现价 200.81 元,等触发:站回 229.00 元(P20 低位带)且 KDJ 出金叉时小仓位试仓;当前无底仓,做 T 前需先建仓", "reasons": ["待触发(超跌反弹建仓):站回 229.00 元(P20 低位带)且 KDJ 出金叉时小仓位试仓"], "blockers": [], "price_check": {"suggested": 229.0, "your_price": 20.0, "verdict": "ok", "note": "建议 229.00 元附近,你的 20.00 元低 91.27%,价位更划算"}, "size_check": {"suggested_shares": null, "your_shares": 100, "note": ""}, "t_assessment": {"suitable": false, "t_high": null, "t_low": null, "sell_trigger": "", "buyback_trigger": "", "your_price_in_range": null, "max_t_shares": null, "note": "现价已跌破 P20 低位带 229.00,下行空间不明,不建议做 T(当前无底仓,做 T 前需先建仓)"}, "position_after": {"shares": 100, "avg_cost": "20.000", "total_cost": "2000.00", "realized_pnl": "0.00"}, "risk_flags": [], "degraded": ["板块资金流无该行业(行业名为证监会口径,与新浪板块名不同)"]}, "calc_status": 200, "calc": {"algo_version": "2.0", "input": {"stock_code": "300394.SZ", "action": "buy", "tx_shares": 100, "tx_price": "20.000"}, "before": {"shares": 0, "cost_price": "0.000", "total_cost": "0.00"}, "after": {"shares": 100, "cost_price": "20.000", "total_cost": "2000.00", "delta_cost": "20.000", "realized_pnl": "0.00", "realized_pnl_gross": "0.00", "realized_pnl_net": "0.00", "fee_paid": "0.00"}, "pnl_grid": [{"pct": -10, "price": "18.000", "market_value": "1800.00", "pnl": "-200.00"}, {"pct": -9, "price": "18.200", "market_value": "1820.00", "pnl": "-180.00"}, {"pct": -8, "price": "18.400", "market_value": "1840.00", "pnl": "-160.00"}, {"pct": -7, "price": "18.600", "market_value": "1860.00", "pnl": "-140.00"}, {"pct": -6, "price": "18.800", "market_value": "1880.00", "pnl": "-120.00"}, {"pct": -5, "price": "19.000", "market_value": "1900.00", "pnl": "-100.00"}, {"pct": -4, "price": "19.200", "market_value": "1920.00", "pnl": "-80.00"}, {"pct": -3, "price": "19.400", "market_value": "1940.00", "pnl": "-60.00"}, {"pct": -2, "price": "19.600", "market_value": "1960.00", "pnl": "-40.00"}, {"pct": -1, "price": "19.800", "market_value": "1980.00", "pnl": "-20.00"}, {"pct": 0, "price": "20.000", "market_value": "2000.00", "pnl": "0.00"}, {"pct": 1, "price": "20.200", "market_value": "2020.00", "pnl": "20.00"}, {"pct": 2, "price": "20.400", "market_value": "2040.00", "pnl": "40.00"}, {"pct": 3, "price": "20.600", "market_value": "2060.00", "pnl": "60.00"}, {"pct": 4, "price": "20.800", "market_value": "2080.00", "pnl": "80.00"}, {"pct": 5, "price": "21.000", "market_value": "2100.00", "pnl": "100.00"}, {"pct": 6, "price": "21.200", "market_value": "2120.00", "pnl": "120.00"}, {"pct": 7, "price": "21.400", "market_value": "2140.00", "pnl": "140.00"}, {"pct": 8, "price": "21.600", "market_value": "2160.00", "pnl": "160.00"}, {"pct": 9, "price": "21.800", "market_value": "2180.00", "pnl": "180.00"}, {"pct": 10, "price": "22.000", "market_value": "2200.00", "pnl": "200.00"}]}}, "unknown_3": {"input": {"stock_code": "001400.SZ", "action": "buy", "tx_shares": 100, "tx_price": "12.000"}, "review_status": 200, "review": {"verdict": "conditional", "headline": "有条件可做 · 现价 72.69 元,暂不满足建仓条件,继续观察;当前无底仓,做 T 前需先建仓", "reasons": [], "blockers": ["当前没有建仓触发条件(未出现企稳 / 超跌反弹 / 放量突破信号)"], "price_check": {"suggested": null, "your_price": 12.0, "verdict": "unknown", "note": ""}, "size_check": {"suggested_shares": null, "your_shares": 100, "note": ""}, "t_assessment": {"suitable": false, "t_high": null, "t_low": null, "sell_trigger": "", "buyback_trigger": "", "your_price_in_range": null, "max_t_shares": null, "note": "现价已跌破 P20 低位带 75.65,下行空间不明,不建议做 T(当前无底仓,做 T 前需先建仓)"}, "position_after": {"shares": 100, "avg_cost": "12.000", "total_cost": "1200.00", "realized_pnl": "0.00"}, "risk_flags": [], "degraded": ["板块资金流无该行业(行业名为证监会口径,与新浪板块名不同)", "没有可参考的建议价位,跳过价位检查"]}, "calc_status": 200, "calc": {"algo_version": "2.0", "input": {"stock_code": "001400.SZ", "action": "buy", "tx_shares": 100, "tx_price": "12.000"}, "before": {"shares": 0, "cost_price": "0.000", "total_cost": "0.00"}, "after": {"shares": 100, "cost_price": "12.000", "total_cost": "1200.00", "delta_cost": "12.000", "realized_pnl": "0.00", "realized_pnl_gross": "0.00", "realized_pnl_net": "0.00", "fee_paid": "0.00"}, "pnl_grid": [{"pct": -10, "price": "10.800", "market_value": "1080.00", "pnl": "-120.00"}, {"pct": -9, "price": "10.920", "market_value": "1092.00", "pnl": "-108.00"}, {"pct": -8, "price": "11.040", "market_value": "1104.00", "pnl": "-96.00"}, {"pct": -7, "price": "11.160", "market_value": "1116.00", "pnl": "-84.00"}, {"pct": -6, "price": "11.280", "market_value": "1128.00", "pnl": "-72.00"}, {"pct": -5, "price": "11.400", "market_value": "1140.00", "pnl": "-60.00"}, {"pct": -4, "price": "11.520", "market_value": "1152.00", "pnl": "-48.00"}, {"pct": -3, "price": "11.640", "market_value": "1164.00", "pnl": "-36.00"}, {"pct": -2, "price": "11.760", "market_value": "1176.00", "pnl": "-24.00"}, {"pct": -1, "price": "11.880", "market_value": "1188.00", "pnl": "-12.00"}, {"pct": 0, "price": "12.000", "market_value": "1200.00", "pnl": "0.00"}, {"pct": 1, "price": "12.120", "market_value": "1212.00", "pnl": "12.00"}, {"pct": 2, "price": "12.240", "market_value": "1224.00", "pnl": "24.00"}, {"pct": 3, "price": "12.360", "market_value": "1236.00", "pnl": "36.00"}, {"pct": 4, "price": "12.480", "market_value": "1248.00", "pnl": "48.00"}, {"pct": 5, "price": "12.600", "market_value": "1260.00", "pnl": "60.00"}, {"pct": 6, "price": "12.720", "market_value": "1272.00", "pnl": "72.00"}, {"pct": 7, "price": "12.840", "market_value": "1284.00", "pnl": "84.00"}, {"pct": 8, "price": "12.960", "market_value": "1296.00", "pnl": "96.00"}, {"pct": 9, "price": "13.080", "market_value": "1308.00", "pnl": "108.00"}, {"pct": 10, "price": "13.200", "market_value": "1320.00", "pnl": "120.00"}]}}, "unknown_4": {"input": {"stock_code": "603993.SH", "action": "buy", "tx_shares": 100, "tx_price": "10.000"}, "review_status": 200, "review": {"verdict": "not_recommended", "headline": "不建议 · 现价 14.23 元,等触发:站回 17.37 元(P20 低位带)且 KDJ 出金叉时小仓位试仓;当前无底仓,做 T 前需先建仓", "reasons": ["待触发(超跌反弹建仓):站回 17.37 元(P20 低位带)且 KDJ 出金叉时小仓位试仓"], "blockers": ["下跌通道中不要抄底"], "price_check": {"suggested": 17.37, "your_price": 10.0, "verdict": "ok", "note": "建议 17.37 元附近,你的 10.00 元低 42.43%,价位更划算"}, "size_check": {"suggested_shares": null, "your_shares": 100, "note": ""}, "t_assessment": {"suitable": false, "t_high": null, "t_low": null, "sell_trigger": "", "buyback_trigger": "", "your_price_in_range": null, "max_t_shares": null, "note": "现价已跌破 P20 低位带 17.37,下行空间不明,不建议做 T(当前无底仓,做 T 前需先建仓)"}, "position_after": {"shares": 100, "avg_cost": "10.000", "total_cost": "1000.00", "realized_pnl": "0.00"}, "risk_flags": [], "degraded": ["板块资金流无该行业(行业名为证监会口径,与新浪板块名不同)"]}, "calc_status": 200, "calc": {"algo_version": "2.0", "input": {"stock_code": "603993.SH", "action": "buy", "tx_shares": 100, "tx_price": "10.000"}, "before": {"shares": 0, "cost_price": "0.000", "total_cost": "0.00"}, "after": {"shares": 100, "cost_price": "10.000", "total_cost": "1000.00", "delta_cost": "10.000", "realized_pnl": "0.00", "realized_pnl_gross": "0.00", "realized_pnl_net": "0.00", "fee_paid": "0.00"}, "pnl_grid": [{"pct": -10, "price": "9.000", "market_value": "900.00", "pnl": "-100.00"}, {"pct": -9, "price": "9.100", "market_value": "910.00", "pnl": "-90.00"}, {"pct": -8, "price": "9.200", "market_value": "920.00", "pnl": "-80.00"}, {"pct": -7, "price": "9.300", "market_value": "930.00", "pnl": "-70.00"}, {"pct": -6, "price": "9.400", "market_value": "940.00", "pnl": "-60.00"}, {"pct": -5, "price": "9.500", "market_value": "950.00", "pnl": "-50.00"}, {"pct": -4, "price": "9.600", "market_value": "960.00", "pnl": "-40.00"}, {"pct": -3, "price": "9.700", "market_value": "970.00", "pnl": "-30.00"}, {"pct": -2, "price": "9.800", "market_value": "980.00", "pnl": "-20.00"}, {"pct": -1, "price": "9.900", "market_value": "990.00", "pnl": "-10.00"}, {"pct": 0, "price": "10.000", "market_value": "1000.00", "pnl": "0.00"}, {"pct": 1, "price": "10.100", "market_value": "1010.00", "pnl": "10.00"}, {"pct": 2, "price": "10.200", "market_value": "1020.00", "pnl": "20.00"}, {"pct": 3, "price": "10.300", "market_value": "1030.00", "pnl": "30.00"}, {"pct": 4, "price": "10.400", "market_value": "1040.00", "pnl": "40.00"}, {"pct": 5, "price": "10.500", "market_value": "1050.00", "pnl": "50.00"}, {"pct": 6, "price": "10.600", "market_value": "1060.00", "pnl": "60.00"}, {"pct": 7, "price": "10.700", "market_value": "1070.00", "pnl": "70.00"}, {"pct": 8, "price": "10.800", "market_value": "1080.00", "pnl": "80.00"}, {"pct": 9, "price": "10.900", "market_value": "1090.00", "pnl": "90.00"}, {"pct": 10, "price": "11.000", "market_value": "1100.00", "pnl": "100.00"}]}}}, "positions": {"items": [{"stock_code": "001896.SZ", "stock_name": "豫能控股", "shares": 600, "avg_cost": "15.578", "total_cost": "9346.80", "realized_pnl": "1293.00", "current_price": "9.590", "prev_close": "9.740", "today_pnl": "-90.00", "floating_pnl": "-3592.80"}, {"stock_code": "000807.SZ", "stock_name": "云铝股份", "shares": 100, "avg_cost": "8.977", "total_cost": "897.70", "realized_pnl": "0.00", "current_price": "25.160", "prev_close": "24.650", "today_pnl": "51.00", "floating_pnl": "1618.30"}, {"stock_code": "000066.SZ", "stock_name": "中国长城", "shares": 200, "avg_cost": "18.616", "total_cost": "3723.20", "realized_pnl": "1422.00", "current_price": "11.780", "prev_close": "11.520", "today_pnl": "52.00", "floating_pnl": "-1367.20"}, {"stock_code": "002185.SZ", "stock_name": "华天科技", "shares": 1000, "avg_cost": "17.021", "total_cost": "17021.46", "realized_pnl": "-266.05", "current_price": "16.190", "prev_close": "15.550", "today_pnl": "640.00", "floating_pnl": "-831.00"}, {"stock_code": "000657.SZ", "stock_name": "中钨高新", "shares": 300, "avg_cost": "54.342", "total_cost": "16302.60", "realized_pnl": "0.00", "current_price": "42.280", "prev_close": "41.640", "today_pnl": "192.00", "floating_pnl": "-3618.60"}]}};
+
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+const money = (v) => "¥" + Number(v ?? 0).toLocaleString("zh-CN", {minimumFractionDigits:2, maximumFractionDigits:2});
+const money0 = (v) => "¥" + Number(v ?? 0).toLocaleString("zh-CN", {minimumFractionDigits:0, maximumFractionDigits:0});
+const nf = (v) => Number(v ?? 0).toLocaleString("zh-CN");
+
+const V = {
+  ok:   { cls:"ok",   label:"符合条件",  mark:"✓", state:"state-ok",   tlabel:"✓ 适合做 T",        tcls:"" },
+  conditional:{ cls:"cond", label:"有条件可做", mark:"!", state:"state-cond", tlabel:"! 当前不适合做 T", tcls:"warn" },
+  not_recommended:{ cls:"not", label:"不建议", mark:"✕", state:"state-not", tlabel:"! 当前不适合做 T", tcls:"warn" },
+  unknown:{ cls:"ok", label:"数据不足", mark:"?", state:"state-cond", tlabel:"! 当前不适合做 T", tcls:"warn" },
+};
+
+function actLabel(a){ return a === "buy" ? "买入" : "卖出"; }
+
+/** 结论条 */
+function vbar(r, inp){
+  const v = V[r.verdict] || V.unknown;
+  // 后端 headline 自带档位前缀,这里剥掉(徽章已表达档位)
+  const hl = r.headline.startsWith(v.label) ? r.headline.slice(v.label.length).replace(/^\s*·\s*/,"") : r.headline;
+  const chips = (r.risk_flags||[]).map(x=>`<span class="chip risk">${esc(x)}</span>`).join("")
+    + (r.degraded||[]).map(x=>`<span class="chip deg">${esc(x)}</span>`).join("");
+  return `<div class="vbar ${v.state}">
+    <div class="vbar-left">
+      <span class="badge ${v.cls}">${v.mark} ${v.label}</span>
+      <div>
+        <div class="vbar-title">
+          <span>${esc(inp.name || inp.stock_code)}</span>
+          <span class="code">${esc(inp.stock_code)}</span>
+          <span class="act ${inp.action}">${actLabel(inp.action)} ${nf(inp.tx_shares)} @ ${esc(inp.tx_price)}</span>
+        </div>
+        <div class="vbar-headline">${esc(hl)}</div>
+      </div>
+    </div>
+    <div class="vbar-right">${chips}</div>
+  </div>`;
+}
+
+/** 预交易输入条 + 成交后摘要 */
+function tradeRow(inp, calc){
+  const a = calc.after, b = calc.before;
+  const rpnl = Number(a.realized_pnl_net);
+  return `<div class="trade">
+    <div class="trade-fields">
+      <div class="seg">
+        <span class="${inp.action==="buy"?"on":""}">买入</span>
+        <span class="${inp.action==="sell"?"on sell":""}">卖出</span>
+      </div>
+      <div class="fld"><label>股数</label><div class="inp">${nf(inp.tx_shares)}</div></div>
+      <div class="fld"><label>价格</label><div class="inp wide focus">${esc(inp.tx_price)}</div></div>
+      <div class="amount">交易额 <b>${money(Number(inp.tx_shares) * Number(inp.tx_price))}</b></div>
+    </div>
+    <div class="after-strip">
+      <span>当前 <b>${nf(b.shares)}</b> 股 @ <b>${esc(b.cost_price)}</b></span>
+      <span class="sep">|</span>
+      <span>成交后股数 <b>${nf(a.shares)}</b></span>
+      <span>新均价 <b>${a.cost_price ?? "—"}</b></span>
+      <span>持仓资金 <b>${money(a.total_cost)}</b></span>
+      <span>已实现 <b class="${rpnl>0?"up":rpnl<0?"down":""}">${money(a.realized_pnl_net)}</b></span>
+      <span>费用 <b>${money(a.fee_paid)}</b></span>
+    </div>
+  </div>`;
+}
+
+/** 持仓列表 */
+function posList(pos, code){
+  return `<div class="panel">
+    <div class="panel-h"><span>当前持仓</span><span>${pos.items.length} 只</span></div>
+    <div class="pos-list">
+      ${pos.items.map(p=>{
+        const on = p.stock_code === code;
+        const fl = Number(p.floating_pnl ?? 0);
+        const cp = Number(p.current_price ?? 0);
+        const prev = Number(p.prev_close ?? 0);
+        const pxCls = cp!==prev ? (cp>prev?"up":"down") : "";
+        return `<div class="pos ${on?"on":""}">
+          <div><span class="nm">${esc(p.stock_name || p.stock_code)}</span> <span class="cd">${esc(p.stock_code)}</span></div>
+          <div class="px ${pxCls}">${p.current_price ?? "—"}</div>
+          <div class="sub">${nf(p.shares)} 股 · 成本 ${esc(p.avg_cost)}</div>
+          <div class="pnl ${fl>0?"up":fl<0?"down":""}">${fl>=0?"+":""}${money(fl).replace("¥","¥")}</div>
+        </div>`;
+      }).join("")}
+    </div>
+  </div>`;
+}
+
+/** 做 T 卡 */
+function tcard(r){
+  const t = r.t_assessment;
+  const your = r.price_check.your_price;
+  const hi = t.t_high, lo = t.t_low;
+  const suit = t.suitable && hi!=null && lo!=null && hi>lo;
+  let band="", mark="";
+  if(suit){
+    const span = hi-lo;
+    band = `<div class="band"></div>`;
+    if(your!=null){
+      if(your>=lo && your<=hi){
+        const p = (your-lo)/span*100;
+        mark = `<div class="mark" data-label="你的 ${your}" style="left:${p.toFixed(1)}%"></div>`;
+      } else if(your>hi){
+        // 区间外:中性色 + 贴边,避免让人误以为在区间内
+        mark = `<div class="mark out right" data-label="你的 ${your} ↑" style="left:calc(100% - 2px)"></div>`;
+      } else {
+        mark = `<div class="mark out left" data-label="你的 ${your} ↓" style="left:2px"></div>`;
+      }
+    }
+  }
+  const body = suit ? `
+    <div class="trange">
+      <div class="tprice low"><div class="pk">T 低点(买回)</div><div class="pv">${lo.toFixed(2)}</div></div>
+      <div class="tbar">${band}${mark}</div>
+      <div class="tprice high"><div class="pk">T 高点(卖出)</div><div class="pv">${hi.toFixed(2)}</div></div>
+    </div>
+    <div class="triggers">
+      <div class="trig sell"><div class="tk">卖出时机</div><div class="tv">${esc(t.sell_trigger)}</div></div>
+      <div class="trig buy"><div class="tk">买回时机</div><div class="tv">${esc(t.buyback_trigger)}</div></div>
+    </div>
+    <div class="tmeta">
+      <div class="m">可动 T 仓上限 <b>${t.max_t_shares ?? "—"}</b> 股</div>
+      <div class="m">你的价在 T 区间内 <b>${t.your_price_in_range==null?"—":(t.your_price_in_range?"是":"否")}</b></div>
+      ${t.note?`<div class="m" style="color:var(--text-primary)">${esc(t.note)}</div>`:""}
+    </div>` : `
+    <div class="tbad"><b>不适合</b> ${esc(t.note || "当前不满足做 T 条件")}</div>
+    <div class="thint">做 T 需要至少 <b>3%</b> 的近 5 日平均振幅才有差价空间 —— 当前不满足,做 T 只会平白增加交易成本。</div>`;
+  return `<div class="panel tcard">
+    <div class="tcard-h"><span class="t">做 T 判断</span><span class="tb ${t.suitable?"ok":""}">${t.suitable?"✓ 适合做 T":"! 当前不适合做 T"}</span></div>
+    ${body}
+  </div>`;
+}
+
+/** 依据 */
+function why(r){
+  const rs = r.reasons||[], bs = r.blockers||[];
+  return `<div class="why">
+    <div class="why-h"><span>判定依据</span><span class="cnt">支持 ${rs.length} · 反对 ${bs.length}</span></div>
+    <div class="why-grid">
+      <div class="wgroup bad"><div class="gt">反对(✕)</div>
+        ${bs.length ? `<ul>${bs.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>` : `<div class="empty">没有反对理由</div>`}
+      </div>
+      <div class="wgroup good"><div class="gt">支持(✓)</div>
+        ${rs.length ? `<ul>${rs.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>` : `<div class="empty">没有支持这条操作的条件</div>`}
+      </div>
+    </div>
+  </div>`;
+}
+
+/** 检查条 */
+function checks(r){
+  const pc = r.price_check, sc = r.size_check;
+  return `<div class="checks">
+    <div class="chk"><div class="ck">价位检查</div>
+      <div class="cv">${pc.suggested!=null ? `建议 ${pc.suggested.toFixed(2)} · 你的 ${pc.your_price.toFixed(2)}` : `无建议价 · 你的 ${pc.your_price.toFixed(2)}`}</div>
+      ${pc.note?`<div class="cn">${esc(pc.note)}</div>`:""}</div>
+    <div class="chk"><div class="ck">数量检查</div>
+      <div class="cv">${sc.suggested_shares!=null ? `建议 ${nf(sc.suggested_shares)} 股 · 你的 ${nf(sc.your_shares)} 股` : `你的 ${nf(sc.your_shares)} 股`}</div>
+      ${sc.note?`<div class="cn">${esc(sc.note)}</div>`:""}</div>
+  </div>`;
+}
+
+/** 21 档热力图 */
+function heat(calc){
+  const rows = calc.pnl_grid || [];
+  const maxAbs = Math.max(...rows.map(r=>Math.abs(Number(r.pnl))), 1);
+  const cells = rows.map(r=>{
+    const pnl = Number(r.pnl);
+    const t = Math.min(1, Math.abs(pnl)/maxAbs);
+    const bg = pnl>=0 ? `rgba(14,235,129,${(0.08+t*0.34).toFixed(3)})` : `rgba(246,70,93,${(0.08+t*0.34).toFixed(3)})`;
+    const fg = pnl>=0 ? "#7ef0bd" : "#ffa3b0";
+    return `<div class="cell" style="background:${bg};color:${fg}" title="${r.pct}% · ${r.price} · 盈亏 ${r.pnl}">
+      <div>${pnl>=0?"+":""}${Number(r.pnl).toFixed(0)}</div><div class="pp">${r.pct}%</div></div>`;
+  }).join("");
+  return `<div class="heat">
+    <div class="heat-h"><span>±10% 盈亏热力图(21 档)</span><span>当前 ${calc.input.action==="buy"?"买入":"卖出"} ${nf(calc.input.tx_shares)} @ ${esc(calc.input.tx_price)}</span></div>
+    <div class="heat-grid">${cells}</div>
+    <div class="scale"><span>亏损</span>
+      <i style="background:rgba(246,70,93,.42)"></i><i style="background:rgba(246,70,93,.2)"></i><i style="background:rgba(246,70,93,.08)"></i>
+      <i style="background:rgba(14,235,129,.08)"></i><i style="background:rgba(14,235,129,.2)"></i><i style="background:rgba(14,235,129,.42)"></i>
+      <span>盈利</span></div>
+  </div>`;
+}
+
+function scene(key, name, code){
+  const s = DATA.samples[key];
+  const r = s.review, calc = s.calc;
+  const inp = { ...calc.input, name: (DATA.positions.items.find(p=>p.stock_code===calc.input.stock_code)||{}).stock_name };
+  return `<div style="margin-bottom:26px">
+    <div style="font-size:12px;color:var(--text-tertiary);margin:0 0 8px">
+      场景 ${name} · <span class="mono">${esc(calc.input.stock_code)} ${actLabel(calc.input.action)} ${nf(calc.input.tx_shares)} @ ${esc(calc.input.tx_price)}</span>
+      · 判定 <span class="mono">${esc(r.verdict)}</span>
+    </div>
+    <div class="modal">
+      <div class="modal-head"><h3>🧮 成本计算器</h3><span class="modal-close">×</span></div>
+      <div class="modal-body">
+        ${vbar(r, inp)}
+        ${tradeRow(calc.input, calc)}
+        <div class="cols">
+          ${posList(DATA.positions, calc.input.stock_code)}
+          <div>
+            ${tcard(r)}
+            ${why(r)}
+          </div>
+        </div>
+        ${checks(r)}
+        ${heat(calc)}
+      </div>
+    </div>
+  </div>`;
+}
+
+const CHANGES = [
+  ["结论提到最顶", "原来判定结论在弹窗第二屏中部,要滚过去才看到。<em>现在徽章 + 结论条常驻顶部</em>,打开即读。"],
+  ["支持/反对改两列并排", "原来支持、反对各占一块纵向堆叠,理由一多就拉长页面。<em>现在左右并排</em>,同屏读完所有依据。"],
+  ["做 T 卡不再独占一列", "原来判定卡长、做 T 卡短,右列下方<em>出现大片留白</em>。现在 T 卡与依据同列上下排,页面高度按内容走。"],
+  ["成交后持仓提到输入条", "原来 4 宫格埋在判定卡底部,要滚到才看到「成交后变多少」。<em>现在紧跟输入条</em>,输入一改就能看到结果。"],
+  ["检查项一行三段", "原来「价位检查 / 数量检查」是两个小格,文字被挤成折行。<em>现在一行三段</em>,标签小字 + 值等宽,不再断行。"],
+  ["弹窗加宽到 1280", "原来 xl = max-w-4xl(896px),21 档热力图被压成一团。<em>加宽后</em>21 档一行放得开。"],
+  ["去掉嵌套滚动", "原来持仓列表内滚 + 弹窗外滚,两层滚动条互相打架。<em>持仓列表限高</em>,弹窗整体滚动,只剩一层。"],
+  ["字号整体上调", "原来理由正文 12px 在深底上发糊。<em>理由正文提到 13px / 行高 1.5</em>,辅助信息才用 11px。"],
+];
+
+document.getElementById("scenes").innerHTML =
+  scene("default_not", "A", "000066.SZ") +
+  scene("t_sell", "B", "002185.SZ") +
+  scene("ok_buy", "C", "600036.SH");
+
+document.getElementById("changes").innerHTML = CHANGES.map(([t,d])=>
+  `<div class="chg"><div class="t">${t}</div><div class="d">${d}</div></div>`).join("");
+</script>
+</body>
+</html>
