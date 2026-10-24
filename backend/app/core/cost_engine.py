@@ -45,6 +45,24 @@ class TradeFees:
         object.__setattr__(self, "stamp_tax_rate", Decimal(self.stamp_tax_rate))
         object.__setattr__(self, "transfer_fee_rate", Decimal(self.transfer_fee_rate))
 
+    @classmethod
+    def etf_variant(cls, base: "TradeFees") -> "TradeFees":
+        """ETF 费用档:佣金沿用用户配置,印花税与过户费按法规置 0
+
+        场内基金(ETF/LOF)交易**免印花税、无过户费**,只收佣金。
+        佣金率与最低佣金不另设参数 —— 与股票同一家券商谈的是同一张费率表。
+
+        用法:`fees_for_instrument(code, base)`(见 core/instrument.py),
+        按品种统一选档,避免各调用点各写一遍 if。
+        """
+        return cls(
+            enabled=base.enabled,
+            commission_rate=base.commission_rate,
+            min_commission=base.min_commission,
+            stamp_tax_rate=Decimal("0"),
+            transfer_fee_rate=Decimal("0"),
+        )
+
 
 def buy_fee(shares: int, price: Decimal, fees: Optional[TradeFees] = None) -> Decimal:
     """买入费用 = max(佣金, 最低佣金) + 过户费"""

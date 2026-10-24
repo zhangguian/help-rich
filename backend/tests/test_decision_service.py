@@ -468,3 +468,36 @@ def test_l4_blocked_action_carries_missing_conditions():
     assert any(k in txt for k in ("下跌通道", "企稳", "大盘")), act["missing"]
     assert "均价" not in txt and "持仓" not in txt, f"missing 里只能是条件,不能是事实:{txt}"
 
+
+# ==================================================================
+# ETF 无涨跌停 → 「接近涨停」的文案要分流
+#
+# 9.5% 涨幅对股票是「接近涨停」(有 10% 限制),对 ETF 只是「涨得多」
+# (ETF 没有涨跌幅限制)。沿用同一阈值,但不能再说「涨停」。
+# ==================================================================
+
+
+def test_do_not_near_limit_up_wording_differs_for_etf():
+    from app.services.ta_service import compute_indicators
+
+    klines = _kline([10.0] * 60)
+    base = {
+        "stock_code": "513100.SH",
+        "stock_name": "纳指ETF国泰",
+        "indicators": compute_indicators(klines),
+        "klines": klines,
+        "current_price": 11.0,   # 相对昨收 10.0 涨 10%
+        "prev_close": 10.0,
+        "cost_basis": None,
+        "shares": 0,
+        "position_status": "empty",
+        "env": MarketContext(),
+    }
+
+    stock_out = judge_do_not(DecisionContext(**{**base, "instrument_kind": "stock"}))
+    assert any("涨停" in s for s in stock_out), "股票路径文案不变"
+
+    etf_out = judge_do_not(DecisionContext(**{**base, "instrument_kind": "etf"}))
+    assert not any("涨停" in s for s in etf_out), f"ETF 无涨跌停,不能说涨停:{etf_out}"
+    assert any("不追高" in s for s in etf_out), f"ETF 也要提醒别追高:{etf_out}"
+

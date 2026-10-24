@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
 
+from app.core.instrument import resolve_instrument
 from app.services.sector_fund_flow_service import get_sector_fund_flow
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,11 @@ async def _resolve_sina(code: str) -> str | None:
 
 
 async def resolve_industry(code: str) -> dict:
-    """三级兜底;返回 {code, industry, source, note}"""
+    """四级兜底;返回 {code, industry, source, note}
+
+    1. baostock 离线行业表 → 2. 新浪行业排行反查
+    3. **ETF 跟踪指数**(品种表)→ 4. 降级
+    """
     name = _resolve_local(code)
     if name:
         return {
@@ -85,6 +90,16 @@ async def resolve_industry(code: str) -> dict:
             "industry": name,
             "source": "sina",
             "note": "新浪行业排行领涨股命中(离线表未覆盖)",
+        }
+
+    # ETF 不在个股行业表里 → 用「跟踪指数」作为行业语义的替代表达
+    inst = resolve_instrument(code)
+    if inst.is_etf and inst.index_name:
+        return {
+            "code": code,
+            "industry": f"跟踪{inst.index_name}",
+            "source": "etf_index",
+            "note": f"场内 ETF · {inst.category_label or '其他'}",
         }
 
     return {

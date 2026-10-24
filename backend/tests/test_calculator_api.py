@@ -357,3 +357,96 @@ def test_review_t_directions_keys_are_camelcase_safe():
     keys = _all_keys(r.json()["t_directions"])
     bad = [k for k in keys if re.search(r"_\d", k)]
     assert bad == [], f"字段名含数字段,前端 camelCase 转换会失配: {bad}"
+
+
+# ============================================================
+# ETF 费用档:免印花税、免过户费
+#
+# 卖出 1000 股 @ 20.000 → 成交额 20000
+#   佣金   = max(20000 × 万2.5, 5) = 5.00
+#   印花税 = 20000 × 0.05%  = 10.00   ← ETF 不收
+#   过户费 = 20000 × 0.001% =  0.20   ← ETF 不收
+#   股票 15.20 / ETF 5.00
+# ============================================================
+
+
+def _enabled_fees():
+    from app.core.cost_engine import TradeFees
+
+    return TradeFees(
+        enabled=True,
+        commission_rate=Decimal("0.00025"),
+        min_commission=Decimal("5.00"),
+        stamp_tax_rate=Decimal("0.0005"),
+        transfer_fee_rate=Decimal("0.00001"),
+    )
+
+
+def _post_calc(code: str, action: str = "sell", shares: int = 1000, price: str = "20.000"):
+    body = {
+        "stock_code": code,
+        "action": action,
+        "tx_shares": shares,
+        "tx_price": price,
+    }
+    with _patched(position=_position(), env=MarketContext()):
+        with patch(
+            "app.repositories.cost_settings_repo.cost_settings_repo.get",
+            AsyncMock(return_value=_enabled_fees()),
+        ):
+            r = client.post("/api/calculator", json=body)
+    return r
+
+
+def test_calculator_fees_for_stock_include_tax_and_transfer():
+    """股票:佣金 + 印花税 + 过户费 = 15.20"""
+    r = _post_calc(CODE)
+    assert r.status_code == 200
+    fee = Decimal(r.json()["after"]["fee_paid"])
+    assert fee == Decimal("15.20")
+
+
+def test_calculator_fees_for_etf_only_commission():
+    """ETF:只收佣金 5.00(免印花税、免过户费)"""
+    r = _post_calc("510300.SH")
+    assert r.status_code == 200
+    after = r.json()["after"]
+    fee = Decimal(after["fee_paid"])
+    assert fee == Decimal("5.00")
+    # 净额与毛额之差 = 只有佣金
+    assert Decimal(after["realized_pnl_gross"]) - Decimal(after["realized_pnl_net"]) == fee
+
+
+def test_calculator_etf_outside_table_still_uses_etf_fee_profile():
+    """表外 ETF 也按 ETF 费率(格式判定已足够;品种属性未知只影响 T+0 判定)"""
+    r = _post_calc("510999.SH")
+    assert r.status_code == 200
+    assert Decimal(r.json()["after"]["fee_paid"]) == Decimal("5.00")
+
+
+def test_review_etf_outside_table_adds_degraded_note():
+    """表外 ETF → 判定结果里如实说明「未在品种表内」"""
+    body = {
+        "stock_code": "510999.SH",
+        "action": "sell",
+        "tx_shares": 100,
+        "tx_price": "10.000",
+    }
+    with _patched(position=_position(), env=MarketContext(), cash=Decimal("50000")):
+        r = client.post("/api/calculator/review", json=body)
+    assert r.status_code == 200
+    assert any("未在品种表内" in d for d in r.json()["degraded"])
+
+
+def test_review_known_etf_has_no_degraded_note():
+    """表内 ETF → 不写降级说明"""
+    body = {
+        "stock_code": "510300.SH",
+        "action": "sell",
+        "tx_shares": 100,
+        "tx_price": "10.000",
+    }
+    with _patched(position=_position(), env=MarketContext(), cash=Decimal("50000")):
+        r = client.post("/api/calculator/review", json=body)
+    assert r.status_code == 200
+    assert not any("未在品种表内" in d for d in r.json()["degraded"])

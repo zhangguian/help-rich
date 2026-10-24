@@ -25,6 +25,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
 from app.core.cost_engine import calculate_after_transaction
+from app.core.instrument import degraded_note
 from app.services.decision_service import (
     MIN_KLINES_FOR_SIGNAL,
     DecisionContext,
@@ -95,7 +96,9 @@ def _pick_suggested(actions: list[dict], kinds: tuple[str, ...]) -> dict | None:
     return None
 
 
-def _unknown(reasons: list[str], degraded: list[str], decision: dict) -> dict:
+def _unknown(
+    reasons: list[str], degraded: list[str], decision: dict, t0: bool = False
+) -> dict:
     """数据不足 → 不猜(verdict=unknown)"""
     return {
         "verdict": "unknown",
@@ -131,7 +134,7 @@ def _unknown(reasons: list[str], degraded: list[str], decision: dict) -> dict:
         },
         "risk_flags": [],
         "degraded": _collect_degraded(decision, degraded),
-        "t_directions": _empty_t_directions("数据不足,无法判断做 T 方向"),
+        "t_directions": _empty_t_directions("数据不足,无法判断做 T 方向", t0=t0),
     }
 
 
@@ -165,6 +168,14 @@ T_PLUS_1_NOTE = (
     "反T 持股数不变,买回的部分当天也不能再卖。"
 )
 
+# T+0 品种(跨境/黄金/商品 ETF):当日买入的份额当天即可卖出
+T0_NOTE = (
+    "该品种为 T+0(当日可回转):当天买入的份额当天就能卖出,"
+    "正T 的卖出腿无需预留老底仓;"
+    "反T 持股数不变,买回的部分当天也可以再卖。"
+    "(具体以交易软件显示的品种属性为准)"
+)
+
 
 def _floor_lot(shares: int) -> int:
     """向下取整到整手(100 股的倍数)—— A 股买入腿至少 1 手"""
@@ -173,7 +184,7 @@ def _floor_lot(shares: int) -> int:
     return (shares // T_MIN_LOT) * T_MIN_LOT
 
 
-def _empty_t_directions(reason: str) -> dict:
+def _empty_t_directions(reason: str, t0: bool = False) -> dict:
     """两个方向都不可用时的骨架(照常显示,灰显 + 说明原因)"""
     return {
         "reverse": {
@@ -201,7 +212,7 @@ def _empty_t_directions(reason: str) -> dict:
         "recommended": None,
         "recommend_reason": reason,
         "your_leg": None,
-        "t_plus_one_note": T_PLUS_1_NOTE,
+        "t_plus_one_note": T0_NOTE if t0 else T_PLUS_1_NOTE,
     }
 
 
@@ -213,6 +224,7 @@ def _build_t_directions(
     p80: float | None,
     cash_available: Decimal | None,
     proposed: ProposedTrade,
+    t0: bool = False,
 ) -> dict:
     """正T / 反T 两个方向的适用性、股数上限与推荐
 
@@ -225,8 +237,12 @@ def _build_t_directions(
        正T 的买入腿要先掏钱 → 受「账户可用资金 ÷ 买价」限制。
     2. 顺序:反T 先卖(不用等),正T 先买。
 
-    两者都受**同一个持仓约束**:卖出腿只能用老底仓(A 股 T+1,当天买的当天不能卖),
-    所以股数上限都取「可动 T 仓」= floor(持股 × (1 - 底仓比例))。
+    **持仓约束按品种分流(t0)**:
+    - T+1(股票、境内股票ETF):卖出腿只能用老底仓(当天买的当天不能卖),
+      所以两个方向的股数上限都取「可动 T 仓」= floor(持股 × (1 - 底仓比例))。
+    - T+0(跨境/黄金/商品 ETF):当天买入的份额当天就能卖 →
+      **正T 的卖出腿无需预留老底仓**,上限只受「可用资金 ÷ 买价」约束;
+      反T 仍受可动 T 仓约束(不能把仓位卖光)。
 
     **缺数据不猜**:账户可用资金没填 → 正T 的股数上限给 None(而不是 0),
     并在 prerequisite 里写明「未填写可用资金」。
@@ -272,21 +288,31 @@ def _build_t_directions(
     }
     reverse_block: str | None = None
     reverse_code = "unknown"
+    # 前置条件拆成两条链:
+    #   common   —— 与品种无关(不适合做 T / 缺 T 区间 / 无持仓),两个方向都受限
+    #   position —— 与底仓相关(缺底仓比例 / 可动 T 仓不足 1 手)
+    #               T+1 时正T 也受限(卖腿要预留老底仓);T+0 时正T 不受此限
+    common_block: str | None = None
+    common_code = "unknown"
+    position_block: str | None = None
+    position_code = "unknown"
     if not suitable:
-        reverse_block = str(t_plan.get("unsuitable_signals") or "当前不适合做 T")
-        reverse_code = "not_suitable"
+        common_block = str(t_plan.get("unsuitable_signals") or "当前不适合做 T")
+        common_code = "not_suitable"
     elif t_high is None or t_low is None or t_high <= t_low:
-        reverse_block = "缺 T 区间,无法测算做 T 的股数"
-        reverse_code = "no_t_range"
+        common_block = "缺 T 区间,无法测算做 T 的股数"
+        common_code = "no_t_range"
     elif shares_before <= 0:
-        reverse_block = "当前无底仓,做 T 前需先建仓"
-        reverse_code = "no_position"
+        common_block = "当前无底仓,做 T 前需先建仓"
+        common_code = "no_position"
     elif max_t_shares is None:
-        reverse_block = "缺底仓比例,无法测算可动 T 仓"
-        reverse_code = "no_base_ratio"
+        position_block = "缺底仓比例,无法测算可动 T 仓"
+        position_code = "no_base_ratio"
     elif max_t_shares < T_MIN_LOT:
-        reverse_block = f"底仓需保留 {base_pct},可动 T 仓不足 1 手"
-        reverse_code = "base_too_large"
+        position_block = f"底仓需保留 {base_pct},可动 T 仓不足 1 手"
+        position_code = "base_too_large"
+    reverse_block = common_block or position_block
+    reverse_code = common_code if common_block else position_code
     if reverse_block:
         reverse["reason_code"] = reverse_code
         reverse["prerequisite"] = reverse_block
@@ -333,10 +359,15 @@ def _build_t_directions(
     }
     forward_block: str | None = None
     forward_code = "unknown"
-    if reverse_block:
-        # 持仓/区间层面的前提不成立 → 两个方向一起不成立
-        forward_block = reverse_block
-        forward_code = reverse_code
+    if common_block:
+        # 与品种无关的前提不成立 → 两个方向一起不成立
+        forward_block = common_block
+        forward_code = common_code
+    elif not t0 and position_block:
+        # T+1:卖腿只能用预留老底仓 → 底仓约束同样卡正T
+        # (T+0 时正T 的卖腿可用当日买入的份额,不受此限)
+        forward_block = position_block
+        forward_code = position_code
     elif cash_available is None:
         forward_block = "未填写账户可用资金,无法测算正T 股数"
         forward_code = "no_cash"
@@ -349,7 +380,9 @@ def _build_t_directions(
         )
         forward_code = "cash_too_little"
     else:
-        n = min(max_t_shares or 0, cash_shares)
+        # T+0:卖腿可用当日买入的份额 → 不受可动 T 仓约束,只受资金约束
+        # T+1:卖腿要用预留老底仓 → 取两者较小
+        n = cash_shares if t0 else min(max_t_shares or 0, cash_shares)
         n = _floor_lot(n)
         if n < T_MIN_LOT:
             forward_block = "可动 T 仓与可用资金都不足 1 手"
@@ -360,10 +393,26 @@ def _build_t_directions(
             forward["reason_code"] = "ok"
             forward["max_shares"] = n
             forward["max_amount"] = str(amount)
-            forward["prerequisite"] = (
-                f"需有老底仓承接卖腿(可动 {max_t_shares} 股,底仓保留 {base_pct}),"
-                f"且买入腿需占用资金 {amount:.2f} 元"
-            )
+            if t0:
+                forward["prerequisite"] = (
+                    f"买入腿需占用资金 {amount:.2f} 元"
+                    "(T+0 品种,卖出腿可用当日买入的份额,无需预留老底仓)"
+                )
+                sell_leg_text = f"冲高至 {t_high:.2f} 元附近卖出当日买入的 {n} 股"
+                forward["status_text"] = (
+                    f"可做 {n} 股:回落 {buy_ref:.2f} 元买 {n} 股(占资金 {amount:.2f} 元),"
+                    f"冲高 {t_high:.2f} 元卖出当日买入的 {n} 股"
+                )
+            else:
+                forward["prerequisite"] = (
+                    f"需有老底仓承接卖腿(可动 {max_t_shares} 股,底仓保留 {base_pct}),"
+                    f"且买入腿需占用资金 {amount:.2f} 元"
+                )
+                sell_leg_text = f"冲高至 {t_high:.2f} 元附近卖出老底仓 {n} 股"
+                forward["status_text"] = (
+                    f"可做 {n} 股:回落 {buy_ref:.2f} 元买 {n} 股(占资金 {amount:.2f} 元),"
+                    f"冲高 {t_high:.2f} 元卖老底仓 {n} 股"
+                )
             forward["steps"] = [
                 {
                     "role": "buy",
@@ -371,13 +420,9 @@ def _build_t_directions(
                 },
                 {
                     "role": "sell",
-                    "text": f"冲高至 {t_high:.2f} 元附近卖出老底仓 {n} 股",
+                    "text": sell_leg_text,
                 },
             ]
-            forward["status_text"] = (
-                f"可做 {n} 股:回落 {buy_ref:.2f} 元买 {n} 股(占资金 {amount:.2f} 元),"
-                f"冲高 {t_high:.2f} 元卖老底仓 {n} 股"
-            )
 
     if forward_block:
         forward["reason_code"] = forward_code
@@ -438,7 +483,7 @@ def _build_t_directions(
         "recommended": recommended,
         "recommend_reason": reason,
         "your_leg": your_leg,
-        "t_plus_one_note": T_PLUS_1_NOTE,
+        "t_plus_one_note": T0_NOTE if t0 else T_PLUS_1_NOTE,
     }
 
 
@@ -467,6 +512,11 @@ def review_trade(
     blockers: list[str] = []
     risk_flags: list[str] = []
 
+    # 品种相关:表外 ETF 走保守口径 → 必须明说,不能假装已知
+    unknown_etf_note = degraded_note(ctx.stock_code)
+    if unknown_etf_note:
+        degraded.append(unknown_etf_note)
+
     ind = ctx.indicators or {}
     pos_ind = ind.get("position") or {}
     p20 = _f(pos_ind.get("p20"))
@@ -482,7 +532,7 @@ def review_trade(
         degraded.append("拟交易的股数或价格无效")
     if p20 is None or p80 is None or kline_count < MIN_KLINES_FOR_SIGNAL:
         blockers.append("数据不足,不给结论")
-        return _unknown(blockers, degraded, decision)
+        return _unknown(blockers, degraded, decision, t0=ctx.t0)
 
     actions = list(decision.get("actions") or [])
     ep = effective_price(ctx)
@@ -693,6 +743,7 @@ def review_trade(
         p80=p80,
         cash_available=cash_available,
         proposed=proposed,
+        t0=ctx.t0,
     )
     if cash_available is None and t_plan.get("suitable"):
         degraded.append("未填写账户可用资金,正T 股数无法测算")

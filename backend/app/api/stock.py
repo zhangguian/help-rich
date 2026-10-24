@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.core.instrument import resolve_instrument
 from app.services.kline_service import KLineSourceUnavailable, fetch_klines
 from app.modules.portfolio.service import get_position
 from app.services.quote_service import QuoteService
@@ -171,6 +172,7 @@ async def decision(code: str) -> dict:
     if position_failed:
         env = replace(env, degraded=[*env.degraded, "持仓读取失败,按空仓给出建仓参考"])
 
+    inst = resolve_instrument(code)
     ctx = DecisionContext(
         stock_code=code,
         stock_name=getattr(position, "stock_name", None) if position is not None else None,
@@ -187,6 +189,9 @@ async def decision(code: str) -> dict:
         shares=int(position.shares) if position is not None and position.shares else 0,
         position_status=position_status,
         env=env,
+        # 品种属性:ETF 无涨跌停、跨境/黄金类 T+0 → 判定口径要分流
+        instrument_kind=inst.kind,
+        t0=inst.t0,
     )
     return {"decision": build_decision(ctx)}
 

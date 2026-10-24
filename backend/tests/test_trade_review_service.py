@@ -50,6 +50,8 @@ def _ctx(
     p80: float | None = 12.0,
     n: int = 60,
     shares: int = 0,
+    code: str = "002185.SZ",
+    t0: bool = False,
 ) -> DecisionContext:
     position_ind: dict = {}
     if p20 is not None:
@@ -57,7 +59,7 @@ def _ctx(
     if p80 is not None:
         position_ind["p80"] = p80
     return DecisionContext(
-        stock_code="002185.SZ",
+        stock_code=code,
         stock_name="华天科技",
         indicators={"position": position_ind},
         klines=_klines(n),
@@ -67,6 +69,7 @@ def _ctx(
         shares=shares,
         position_status="profit",
         env=MarketContext(),
+        t0=t0,
     )
 
 
@@ -478,9 +481,11 @@ def _dirs(
     tx_price: float = 10.0,
     pos_shares: int = 1000,
     cash: Decimal | None = None,
+    t0: bool = False,
+    code: str = "002185.SZ",
 ) -> dict:
     """跑一次判定,只取 t_directions"""
-    ctx = _ctx(price=price, p80=p80)
+    ctx = _ctx(price=price, p80=p80, code=code, t0=t0)
     decision = _decision(t_plan=t_plan)
     r = review_trade(
         ctx,
@@ -701,3 +706,102 @@ def test_movable_base_uses_decimal_no_float_error():
     # 底仓 ≥70% → 可动 30%
     d = _dirs(pos_shares=999, cash=Decimal("100000"), t_plan=_t_plan(base="≥70%"))
     assert d["reverse"]["max_shares"] == 200
+
+
+# ============================================================
+# T+0 品种(跨境/黄金/商品 ETF):正T 不需要预留老底仓
+#
+# 差别只在正T 的卖腿来源:
+#   T+1 → 卖腿只能用预留老底仓 → 上限 = min(可动T仓, 资金÷买价)
+#   T+0 → 当天买入的份额当天就能卖 → 上限 = 资金÷买价(不受可动T仓约束)
+# ============================================================
+
+
+def test_t1_forward_upper_bound_is_min_of_base_and_cash():
+    """T+1:正T 上限 = min(可动 T 仓, 资金÷买价) —— 1000 股 × 50% = 500"""
+    d = _dirs(pos_shares=1000, cash=Decimal("20000"))  # 买价 9 → 资金能买 2200
+    assert d["forward"]["max_shares"] == 500
+    assert "老底仓" in d["forward"]["prerequisite"]
+
+
+def test_t0_forward_upper_bound_is_cash_only():
+    """T+0:正T 上限只受资金约束(2200 股),不再被可动 T 仓 500 股砍掉"""
+    d = _dirs(pos_shares=1000, cash=Decimal("20000"), t0=True)
+    assert d["forward"]["max_shares"] == 2200
+    assert d["forward"]["applicable"] is True
+
+
+def test_t0_forward_prerequisite_does_not_require_base_position():
+    """T+0:前提不再要求「老底仓承接卖腿」"""
+    d = _dirs(pos_shares=1000, cash=Decimal("20000"), t0=True)
+    pre = d["forward"]["prerequisite"]
+    assert "承接卖腿" not in pre
+    assert "无需预留老底仓" in pre
+    assert "T+0" in pre
+
+
+def test_t0_forward_sell_leg_is_same_day_shares():
+    """T+0:卖腿写「卖出当日买入的份额」,不是「卖出老底仓」"""
+    d = _dirs(pos_shares=1000, cash=Decimal("20000"), t0=True)
+    sell_text = " ".join(s["text"] for s in d["forward"]["steps"])
+    assert "当日买入" in sell_text
+    assert "老底仓" not in sell_text
+
+
+def test_t0_note_replaces_t_plus_one_note():
+    """T+0 品种的提示不能说「当天不能卖出」"""
+    d = _dirs(pos_shares=1000, cash=Decimal("20000"), t0=True)
+    note = d["t_plus_one_note"]
+    assert "T+0" in note
+    assert "当天不能卖出" not in note
+
+
+def test_t1_note_still_says_a_share_t_plus_one():
+    """T+1 品种(股票/境内股票ETF)提示不变"""
+    d = _dirs(pos_shares=1000, cash=Decimal("20000"))
+    assert "T+1" in d["t_plus_one_note"]
+    assert "当天不能卖出" in d["t_plus_one_note"]
+
+
+def test_t0_reverse_still_limited_by_movable_base():
+    """T+0 反T 仍受可动 T 仓约束(不能把仓位卖光)"""
+    d = _dirs(pos_shares=1000, cash=Decimal("20000"), t0=True)
+    assert d["reverse"]["max_shares"] == 500
+
+
+def test_t0_forward_survives_missing_base_ratio():
+    """缺底仓比例时:T+1 正T 卡住(卖腿没底仓可用),T+0 正T 仍可算(只受资金)"""
+    plan_no_base = _t_plan(base="")
+    t1 = _dirs(pos_shares=1000, cash=Decimal("20000"), t_plan=plan_no_base)
+    assert t1["forward"]["applicable"] is False
+    assert t1["forward"]["reason_code"] == "no_base_ratio"
+
+    t0 = _dirs(pos_shares=1000, cash=Decimal("20000"), t_plan=plan_no_base, t0=True)
+    assert t0["forward"]["applicable"] is True
+    assert t0["forward"]["max_shares"] == 2200
+
+
+def test_t0_forward_without_cash_still_reports_no_cash():
+    """T+0 也要钱:没填资金 → 仍然 no_cash(不给数字)"""
+    d = _dirs(pos_shares=1000, cash=None, t0=True)
+    assert d["forward"]["reason_code"] == "no_cash"
+    assert d["forward"]["max_shares"] is None
+
+
+def test_unknown_etf_is_degraded_not_silent():
+    """表外 ETF → degraded 明说「未在品种表内」(不能假装已知)"""
+    d = _dirs(pos_shares=1000, cash=Decimal("20000"), code="510999.SH")
+    assert d["reverse"]["max_shares"] == 500  # 保守按 T+1
+
+
+def test_unknown_etf_degraded_note_present():
+    ctx = _ctx(price=10.0, code="510999.SH")
+    r = review_trade(ctx, _decision(), ProposedTrade("sell", 100, 10.0), _pos(), Decimal("20000"))
+    assert any("未在品种表内" in d for d in r["degraded"])
+
+
+def test_known_etf_has_no_degraded_note():
+    """表内 ETF 不写降级说明(品种信息是已知的)"""
+    ctx = _ctx(price=10.0, code="513100.SH", t0=True)
+    r = review_trade(ctx, _decision(), ProposedTrade("sell", 100, 10.0), _pos(), Decimal("20000"))
+    assert not any("未在品种表内" in d for d in r["degraded"])

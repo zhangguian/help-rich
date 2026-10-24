@@ -24,6 +24,7 @@ from dataclasses import replace
 from decimal import Decimal
 from typing import Any
 
+from app.core.instrument import resolve_instrument
 from app.services.decision_service import DecisionContext, MarketContext, build_decision
 from app.services.kline_service import KLineSourceUnavailable, fetch_klines
 from app.services.market_context_service import get_market_context
@@ -157,6 +158,7 @@ async def build_decision_context(code: str) -> tuple[DecisionContext, Any]:
         except (TypeError, ValueError):
             prev_close = None
 
+    inst = resolve_instrument(code)
     ctx = DecisionContext(
         stock_code=code,
         stock_name=getattr(position, "stock_name", None) if position is not None else None,
@@ -172,6 +174,9 @@ async def build_decision_context(code: str) -> tuple[DecisionContext, Any]:
         shares=int(position.shares) if position is not None and position.shares else 0,
         position_status=position_status,
         env=env,
+        # 品种属性:ETF 无涨跌停、跨境/黄金类 T+0 → 判定口径要分流
+        instrument_kind=inst.kind,
+        t0=inst.t0,
     )
     return ctx, position
 

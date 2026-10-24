@@ -18,6 +18,7 @@ import re
 import time
 
 from app.core.logging import logger
+from app.core.instrument import resolve_instrument
 from app.core.stock_code import normalize_code
 from app.modules.analysis.contracts import (
     ACTION_LABELS,
@@ -171,7 +172,11 @@ class MultiAgentService:
         report.opinions.extend([bull_op, bear_op])
 
         # ---------- 4. 风控审查 ----------
-        system_r, user_r = build_risk_prompt(stock_name, bull_raw, bear_raw, facts)
+        # 品种差异:ETF 没有涨跌停/退市机制 → 风险清单必须换(见 prompts.build_risk_prompt)
+        instrument_kind = resolve_instrument(code).kind
+        system_r, user_r = build_risk_prompt(
+            stock_name, bull_raw, bear_raw, facts, instrument_kind=instrument_kind
+        )
         risk_raw = await _ask(llm, system_r, user_r)
         report.risk_review = risk_raw.get("argument", "")
         report.risk_flags = [
@@ -180,7 +185,7 @@ class MultiAgentService:
 
         # ---------- 5. PM 裁决 ----------
         system_p, user_p = build_pm_prompt(
-            stock_name, bull_raw, bear_raw, risk_raw, facts
+            stock_name, bull_raw, bear_raw, risk_raw, facts, instrument_kind=instrument_kind
         )
         pm_raw = await _ask(llm, system_p, user_p)
         action = str(pm_raw.get("action", "hold")).lower()

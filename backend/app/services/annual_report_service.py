@@ -19,6 +19,7 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.core.cost_engine import TradeFees, calculate_after_transaction
+from app.core.instrument import fees_for_instrument
 from app.db import async_session
 from app.models.orm import Transaction
 from app.repositories.cost_settings_repo import cost_settings_repo
@@ -113,7 +114,8 @@ async def get_annual_report(year: int) -> dict:
                 action=tx.action,
                 tx_shares=tx.shares,
                 tx_price=Decimal(tx.price),
-                fees=fees,
+                # 品种差异:ETF 免印花税/过户费 → 逐笔按该笔的标的换费用档
+                fees=fees_for_instrument(tx.stock_code, fees),
             )
         except ValueError:
             # 数据异常(卖超额等),跳过

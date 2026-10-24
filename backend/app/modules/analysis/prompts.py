@@ -98,12 +98,23 @@ def build_bear_prompt(
 
 
 def build_risk_prompt(
-    stock_name: str, bull: dict | None, bear: dict | None, facts: dict[str, Any]
+    stock_name: str,
+    bull: dict | None,
+    bear: dict | None,
+    facts: dict[str, Any],
+    instrument_kind: str = "stock",
 ) -> tuple[str, str]:
+    # ETF 没有涨跌停、没有退市机制 → 风险清单必须换,否则 LLM 会输出不存在的风险
+    if instrument_kind == "etf":
+        risk_examples = (
+            "（如折溢价、跟踪误差、流动性不足、跨境品种的汇率波动、"
+            "T+0 品种的当日回转风险、数据不足导致的盲区）"
+        )
+    else:
+        risk_examples = "（如涨跌停、流动性、政策、退市风险、数据不足导致的盲区）"
     user = (
         "你是【风控经理】。多空双方都已陈词，现在做**风险审查**。"
-        "你要指出：还有哪些风险没被双方提及？（如涨跌停、流动性、政策、退市风险、"
-        "数据不足导致的盲区）\n\n"
+        f"你要指出：还有哪些风险没被双方提及？{risk_examples}\n\n"
         f"【标的】{stock_name}\n\n"
         f"【多头观点】\n{_fmt_facts(bull or {})}\n\n"
         f"【空头观点】\n{_fmt_facts(bear or {})}\n\n"
@@ -121,13 +132,19 @@ def build_pm_prompt(
     bear: dict | None,
     risk: dict | None,
     facts: dict[str, Any],
+    instrument_kind: str = "stock",
 ) -> tuple[str, str]:
+    # ETF 无退市/ST → 换成 ETF 语境下的严重风险
+    if instrument_kind == "etf":
+        severe = "风险严重(如跟踪指数大幅下跌/折溢价过大/数据严重缺失) → sell"
+    else:
+        severe = "风险严重(如退市/ST/数据严重缺失) → sell"
     user = (
         "你是【投资经理】，做最终裁决。\n"
         "决策原则：\n"
         "- 双方证据大体均衡且有显著风险 → hold（观望）\n"
         "- 多头论据明显占优且风险可控 → buy；非常强 → strong_buy\n"
-        "- 空头论据明显占优 → reduce；风险严重(如退市/ST/数据严重缺失) → sell\n"
+        f"- 空头论据明显占优 → reduce；{severe}\n"
         "- 不要因为「有人看多」就买，要看论据质量。\n\n"
         f"【标的】{stock_name}\n\n"
         f"【多头观点】\n{_fmt_facts(bull or {})}\n\n"

@@ -211,14 +211,14 @@ async def calculator(req: CalculatorRequest) -> CalculatorResponse:
         )
 
     # 3. 调纯函数
-    price_str = format(req.tx_price, ".3f")
-
     # GB-001 IR-4:读费用参数(开启时双口径,关闭时 net=gross)
-    from app.core.cost_engine import TradeFees
+    from app.core.instrument import fees_for_instrument
     from app.repositories.cost_settings_repo import cost_settings_repo
 
     fees_holder = await cost_settings_repo.get()
     fees = fees_holder if fees_holder.enabled else None
+    # 品种差异:场内 ETF 免印花税、免过户费 → 换 ETF 费用档
+    fees = fees_for_instrument(req.stock_code, fees)
 
     try:
         result = calculate_after_transaction(
@@ -233,7 +233,7 @@ async def calculator(req: CalculatorRequest) -> CalculatorResponse:
         raise HTTPException(
             status_code=422,
             detail={"code": "CALC_ERROR", "message": str(e)},
-        )
+        ) from e
 
     # 4. 构造 21 档网格
     grid_rows = build_pnl_grid(

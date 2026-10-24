@@ -51,6 +51,9 @@ class DecisionContext:
     shares: int
     position_status: str          # 'empty' | 'profit' | 'loss'
     env: MarketContext = field(default_factory=MarketContext)
+    # --- 品种属性(默认按股票,既有构造点零改动) ---
+    instrument_kind: str = "stock"   # 'stock' | 'etf'
+    t0: bool = False                 # 是否当日可回转(T+0:跨境/黄金/商品 ETF)
 
 
 def _f(v: Any) -> float | None:
@@ -558,7 +561,13 @@ def judge_do_not(ctx: DecisionContext) -> list[str]:
     if ep is not None and prev is not None and prev > 0:
         chg = (ep - prev) / prev * 100
         if chg >= NEAR_LIMIT_UP_PCT:
-            out.append("涨停或接近涨停时不要追高")
+            if ctx.instrument_kind == "etf":
+                # ETF 无涨跌幅限制 → 涨到 9.5% 不是涨停,只是涨得多
+                out.append(
+                    f"当日涨幅已达 {chg:.1f}%,不追高(ETF 无涨跌停限制,涨幅可以更大)"
+                )
+            else:
+                out.append("涨停或接近涨停时不要追高")
 
     m = ctx.env.market or {}
     up_total = m.get("up_total")
