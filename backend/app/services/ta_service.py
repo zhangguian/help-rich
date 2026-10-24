@@ -1184,7 +1184,10 @@ def _signal_series(
     if liar.get("bull_liars"):
         add(f"诱多 {len(liar['bull_liars'])} 类", "⚠️", "aboveBar", "#facc15")
     if liar.get("bear_liars"):
-        add(f"诱空 {len(liar['bear_liars'])} 类", "🪤", "belowBar", "#60a5fa")
+        # 诱空用琥珀(#facc15)而不是蓝(#60a5fa):
+        # App 语义色板里没有蓝色 token(青 #22D3EE 只给选中/焦点),
+        # 诱空属于「预警」→ 归 warn 琥珀,与诱多、与解释卡的 kind 徽章一致。
+        add(f"诱空 {len(liar['bear_liars'])} 类", "🪤", "belowBar", "#facc15")
 
     return markers
 

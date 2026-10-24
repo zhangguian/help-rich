@@ -1,17 +1,27 @@
-"""持仓主数据 service(v0.4.0 重构)
+"""持仓主数据 service(v0.5.0 事件溯源重构)
 
-v0.4.0 设计哲学翻转:
-- positions 表是主数据(股民真实持仓,手动录入 / 截图导入 / 流水同步)
-- transactions 流水是事件记录(复盘用),自动同步持仓
+v0.5.0(方案B·每笔流水存持仓快照)设计:
+- positions 表 = 基准(base_*) + 当前状态(shares / total_cost / realized_pnl)
+- transactions 每笔带自己的 after 快照(shares_after / total_cost_after / realized_after)
 
-一致性核心 recalc_position(stock_code):
-  持仓 = 导入基准(delta) + 全部流水聚合
-  其中 delta = positions 当前值 - 流水聚合当前值(导入/手动调整部分,运行时推导,不落库)
+真相公式:
+    当前持仓 = 基准(base_*) + 其后所有 id > base_tx_id 的流水
+               按 (trade_date, id) 顺序逐笔加权平均应用
 
-诊断服务对"单笔交易前状态"的判定仍用 aggregate_positions 纯函数(交易上下文,非持仓视图)。
+任何一笔流水的增 / 删 / 改 → 从基准全量重放链尾 → 重写所有受影响快照 + 持仓行。
+因为基准是「导入那一刻的真实持仓」,历史流水不会被重复计算。
+
+v0.4.0 旧模型(已作废):
+    持仓 = delta(持仓行现值 − 从 0 开始的流水聚合) + 全部流水聚合
+    → 导入快照已含历史流水效果,流水又在其上重放一遍 = 双算
+    → 华天科技 002185 卖出 100 股时少冲成本 1058.72 元,均价从 16.959 掉到 15.900
+
+纯函数职责划分(backend-arch §5.1):
+- `apply_transaction` / `replay_chain`:纯计算,零 IO
+- `recalc_position` / `upsert_position`:落库路径
 """
-from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 
@@ -44,19 +54,110 @@ class Position:
         return format(self.total_cost.quantize(Decimal("0.01")), ".2f")
 
 
-@dataclass
-class DeltaBaseline:
-    """导入基准:持仓主数据相对流水聚合的差额(不落库,运行时推导)
+# ============================================================
+# 事件溯源:链状态 + 流水规格 + 纯重放
+# ============================================================
 
-    capture_delta(变更前) → 变更流水 → recalc_position(变更后)
-    """
+@dataclass(frozen=True)
+class ChainState:
+    """链上某一点(或基准)的持仓状态"""
     shares: int = 0
-    cost: Decimal = field(default_factory=lambda: Decimal("0"))
-    pnl: Decimal = field(default_factory=lambda: Decimal("0"))
+    total_cost: Decimal = field(default_factory=lambda: Decimal("0"))
+    realized_pnl: Decimal = field(default_factory=lambda: Decimal("0"))
+
+    @property
+    def avg_cost(self) -> Decimal:
+        """未量化的加权平均成本(重放内部用,避免 3 位量化累计误差)"""
+        if self.shares <= 0:
+            return Decimal("0")
+        return self.total_cost / self.shares
+
+
+@dataclass(frozen=True)
+class TxSpec:
+    """流水规格(纯数据,便于试算与重放)"""
+    id: int
+    trade_date: date
+    action: str
+    shares: int
+    price: Decimal
+    stock_name: Optional[str] = None
+
+
+class PositionChainError(ValueError):
+    """链重放失败(如卖出超过当时持仓)—— 由 API 层转 422"""
+
+
+def apply_transaction(
+    state: ChainState,
+    action: str,
+    shares: int,
+    price: Decimal,
+) -> ChainState:
+    """纯函数:加权平均法应用一笔交易
+
+    买:shares += n;total_cost += price × n
+    卖:已实现盈亏 += (price − 均价) × n;剩余成本按均价等比例冲减
+
+    均价用**未量化**的 total_cost / shares —— 量化到 3 位再回乘会累计误差
+    (华天科技 16.95852 会被算成 16.959 → 总成本差 0.02 元/次)。
+    """
+    if shares <= 0:
+        raise PositionChainError(f"交易股数必须 > 0,实际 {shares}")
+    if price <= 0:
+        raise PositionChainError(f"交易价格必须 > 0,实际 {price}")
+
+    if action == "buy":
+        return ChainState(
+            shares=state.shares + shares,
+            total_cost=state.total_cost + price * shares,
+            realized_pnl=state.realized_pnl,
+        )
+
+    if action != "sell":
+        raise PositionChainError(f"未知交易方向: {action!r}")
+
+    if state.shares <= 0:
+        raise PositionChainError(
+            f"卖出 {shares} 股时无持仓(基准/前序流水为 0 股)"
+        )
+    if shares > state.shares:
+        raise PositionChainError(
+            f"卖出 {shares} 股超过当时持仓 {state.shares} 股"
+        )
+
+    avg = state.avg_cost
+    realized = (price - avg) * shares
+    new_shares = state.shares - shares
+    return ChainState(
+        shares=new_shares,
+        total_cost=avg * new_shares,
+        realized_pnl=state.realized_pnl + realized,
+    )
+
+
+def replay_chain(
+    base: ChainState,
+    specs: list[TxSpec],
+) -> tuple[ChainState, list[tuple[TxSpec, ChainState]]]:
+    """纯函数:从基准重放一串流水
+
+    Returns:
+        (最终状态, [(流水, 应用完它之后的状态), ...])
+
+    Raises:
+        PositionChainError: 卖出超过当时持仓
+    """
+    state = base
+    snapshots: list[tuple[TxSpec, ChainState]] = []
+    for spec in specs:
+        state = apply_transaction(state, spec.action, spec.shares, spec.price)
+        snapshots.append((spec, state))
+    return state, snapshots
 
 
 # ============================================================
-# 纯函数:流水聚合(v0.4.0 后仅用于交易前状态判定 / 迁移 backfill)
+# 纯函数:流水聚合(v0.4.0 遗留,仅供窗口化复盘 replay_service 使用)
 # ============================================================
 
 def aggregate_positions(
@@ -64,19 +165,17 @@ def aggregate_positions(
     strict: bool = True,
     keep_zero: bool = True,
 ) -> list[Position]:
-    """纯函数:从流水列表聚合持仓
+    """纯函数:从流水列表**从 0 开始**聚合持仓
 
-    按交易日期顺序处理(同一天内按 id 顺序,确保可复现)。
+    ⚠️ 这不是持仓真相(持仓真相 = 基准 + 链尾重放,见 recalc_position)。
+    仅用于「窗口化复盘」这类本来就该从 0 起算的场景。
 
     strict: 默认 True 校验 sell <= 当前持仓(纯流水场景保护);
-      False 跳过校验(用于 recalc_position 的 delta+flow 模式:row 内的
-      导入基准可能允许 sell 超过纯流水聚合)。
-    keep_zero: 默认 True 过滤掉 shares <= 0 的股票(纯流水场景只关心仍有持仓);
-      False 不过滤(用于 recalc_position:flow 可能为负,需要返回供 delta+flow 计算)。
+      False 跳过校验(允许 sell 超过聚合结果)。
+    keep_zero: 默认 True 过滤掉 shares <= 0 的股票;
+      False 不过滤(需要返回供 delta 计算)。
     """
-    # 按 stock_code 分组
     by_code: dict[str, Position] = {}
-    # 全局排序:trade_date 升序,id 升序
     sorted_tx = sorted(transactions, key=lambda t: (t.trade_date, t.id))
 
     for tx in sorted_tx:
@@ -86,7 +185,6 @@ def aggregate_positions(
                 stock_name=tx.stock_name,
             )
         pos = by_code[tx.stock_code]
-        # 更新名称(以最新一条为准)
         if tx.stock_name:
             pos.stock_name = tx.stock_name
 
@@ -96,24 +194,46 @@ def aggregate_positions(
             pos.total_cost += price * tx.shares
         elif tx.action == "sell":
             if strict and tx.shares > pos.shares:
-                # 卖出超过持仓(理论上 Pydantic 已校验,但双保险)
                 raise ValueError(
                     f"卖出 {tx.shares} 股超过持仓 {pos.shares} 股 "
                     f"(stock={tx.stock_code}, tx_id={tx.id})"
                 )
-            realized_per_share = price - pos.avg_cost  # 用卖出前的成本
+            realized_per_share = price - pos.avg_cost
             pos.realized_pnl += realized_per_share * tx.shares
             pos.total_cost -= pos.avg_cost * tx.shares
             pos.shares -= tx.shares
 
     if keep_zero:
-        # 只返回仍有持仓的股票(shares > 0)
         return [p for p in by_code.values() if p.shares > 0]
     return list(by_code.values())
 
 
+def _lenient_flow_realized(txs: list[Transaction]) -> Decimal:
+    """从 0 起算流水的已实现盈亏(宽松口径:允许卖出超过聚合)
+
+    仅用于「用户没给已实现盈亏、且该票没有持仓行」时的兜底。
+    """
+    state = ChainState()
+    for tx in sorted(txs, key=lambda t: (t.trade_date, t.id)):
+        price = Decimal(tx.price)
+        if tx.action == "buy":
+            state = ChainState(
+                state.shares + tx.shares,
+                state.total_cost + price * tx.shares,
+                state.realized_pnl,
+            )
+        else:
+            avg = state.avg_cost
+            state = ChainState(
+                state.shares - tx.shares,
+                state.total_cost - avg * tx.shares,
+                state.realized_pnl + (price - avg) * tx.shares,
+            )
+    return state.realized_pnl
+
+
 # ============================================================
-# 持仓表读写 + recalc_position(v0.4.0 主数据路径)
+# 持仓表读写 + 链重放(v0.5.0 主数据路径)
 # ============================================================
 
 def _row_to_position(row: PositionRow) -> Position:
@@ -126,163 +246,157 @@ def _row_to_position(row: PositionRow) -> Position:
     )
 
 
-async def _load_flow(session, code: str, account_id: int | None = None) -> list[Transaction]:
-    """加载某股票全部流水(已排序),限定账户"""
+def _spec_of(tx: Transaction) -> TxSpec:
+    return TxSpec(
+        id=tx.id,
+        trade_date=tx.trade_date,
+        action=tx.action,
+        shares=tx.shares,
+        price=Decimal(tx.price),
+        stock_name=tx.stock_name,
+    )
+
+
+async def _load_chain(
+    session,
+    code: str,
+    account_id: int,
+) -> tuple[Optional[PositionRow], ChainState, list[TxSpec], list[Transaction]]:
+    """加载某股票的基准 + 链尾流水 + 全部流水行
+
+    Returns:
+        (持仓行 or None, 基准状态, 链尾规格(已按 (trade_date, id) 排序), 全部流水行)
+    """
+    row = (
+        await session.execute(
+            select(PositionRow).where(
+                PositionRow.account_id == account_id,
+                PositionRow.stock_code == code,
+            )
+        )
+    ).scalar_one_or_none()
+
+    tx_rows = list(
+        (
+            await session.execute(
+                select(Transaction)
+                .where(
+                    Transaction.account_id == account_id,
+                    Transaction.stock_code == code,
+                )
+                .order_by(Transaction.trade_date, Transaction.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    if row is None:
+        base = ChainState()
+        base_tx_id = 0
+    else:
+        base = ChainState(
+            shares=row.base_shares,
+            total_cost=Decimal(row.base_total_cost),
+            realized_pnl=Decimal(row.base_realized_pnl),
+        )
+        base_tx_id = row.base_tx_id
+
+    chain = [_spec_of(t) for t in tx_rows if t.id > base_tx_id]
+    return row, base, chain, tx_rows
+
+
+def _write_snapshots(tx_rows: list[Transaction], snaps: list[tuple[TxSpec, ChainState]]) -> None:
+    """把重放结果写回每笔流水的 after 快照(不在链里的清空)"""
+    by_id = {spec.id: state for spec, state in snaps}
+    for tx in tx_rows:
+        state = by_id.get(tx.id)
+        if state is None:
+            tx.shares_after = None
+            tx.total_cost_after = None
+            tx.realized_after = None
+        else:
+            tx.shares_after = state.shares
+            tx.total_cost_after = str(state.total_cost.quantize(Decimal("0.01")))
+            tx.realized_after = str(state.realized_pnl.quantize(Decimal("0.01")))
+
+
+def _replay_chain_into_row(
+    base: ChainState,
+    base_tx_id: int,
+    tx_rows: list[Transaction],
+) -> ChainState:
+    """把基准之上的活链重放到基准上,并把每笔的 after 快照写回
+
+    - 链 = id > base_tx_id 的流水(按 (trade_date, id) 排序,取自 tx_rows 的原顺序)
+    - 不在链里的流水(id <= base_tx_id)= 已被基准吸收 → 快照清空
+    """
+    chain = [_spec_of(t) for t in tx_rows if t.id > base_tx_id]
+    final, snaps = replay_chain(base, chain)
+    _write_snapshots(tx_rows, snaps)
+    return final
+
+
+async def recalc_position(
+    stock_code: str,
+    account_id: int | None = None,
+) -> Optional[Position]:
+    """流水变动后重算该股票持仓(一致性核心)
+
+    流程:基准 + 链尾全量重放 → 重写每笔快照 → 更新持仓行。
+
+    - 基准来自 positions.base_*(导入/手动录入那一刻的真实持仓)
+    - 链尾 = id > base_tx_id 的流水,按 (trade_date, id) 排序
+    - 基准吸收的流水(id <= base_tx_id)不参与重放,快照置空
+    - 清仓(shares <= 0)**保留持仓行**(shares=0),已实现盈亏不丢
+
+    Raises:
+        PositionChainError: 链重放失败(如卖出超过当时持仓)
+    """
     from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
 
     acct = account_id or DEFAULT_ACCOUNT_ID
-    stmt = (
-        select(Transaction)
-        .where(Transaction.stock_code == code, Transaction.account_id == acct)
-        .order_by(Transaction.trade_date, Transaction.id)
-    )
-    return list((await session.execute(stmt)).scalars().all())
-
-
-async def capture_delta(stock_code: str) -> "DeltaBaseline":
-    """变更前捕获导入基准(流水变动前调用)
-
-    delta = 当前持仓 - 当前流水聚合(导入/手动调整部分)
-    - row 不存在(纯流水持仓)→ 基准为 0
-    调用方必须在流水变更前调用,变更后传给 recalc_position 才能正确同步。
-    """
-    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
-
     async with async_session() as session:
-        row = (
-            await session.execute(
-                select(PositionRow).where(
-                    PositionRow.account_id == DEFAULT_ACCOUNT_ID,
-                    PositionRow.stock_code == stock_code,
-                )
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            return DeltaBaseline(shares=0, cost=Decimal("0"), pnl=Decimal("0"))
-        flow_tx = await _load_flow(session, stock_code)
-        # 与 recalc_position 一致:delta+flow 模式允许 sell 超过纯流水聚合
-        # (持仓主数据 + 仅卖/少数流水的场景),strict=False 避免抛错
-        flow = next(
-            (
-                p
-                for p in aggregate_positions(
-                    flow_tx, strict=False, keep_zero=False
-                )
-                if p.stock_code == stock_code
-            ),
-            None,
+        row, base, chain, tx_rows = await _load_chain(session, stock_code, acct)
+        base_tx_id = row.base_tx_id if row is not None else 0
+
+        final = _replay_chain_into_row(base, base_tx_id, tx_rows)
+
+        total_cost = max(Decimal("0"), final.total_cost)
+        realized = final.realized_pnl  # 已实现盈亏允许为负,不做 max(0, …)
+
+        latest_name = next(
+            (t.stock_name for t in reversed(tx_rows) if t.stock_name), None
         )
-        return DeltaBaseline(
-            shares=row.shares - (flow.shares if flow else 0),
-            cost=Decimal(row.total_cost) - (flow.total_cost if flow else Decimal("0")),
-            pnl=Decimal(row.realized_pnl)
-            - (flow.realized_pnl if flow else Decimal("0")),
-        )
-
-
-async def recalc_position(stock_code: str, delta: Optional["DeltaBaseline"] = None) -> None:
-    """流水变动后重算该股票持仓(一致性核心)
-
-    持仓 = 导入基准(delta) + 全部流水聚合
-    - delta 由调用方在流水变更前 capture_delta 捕获(不落库,运行时推导)
-    - 重放全部流水后:新持仓 = delta + 新流水聚合
-    - 股数为 0 且成本为 0 → 删除持仓行
-
-    阶段5:全链路限定默认账户(多账户下需按账户分别重算,见下方 TODO 说明)。
-    """
-    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
-
-    acct = DEFAULT_ACCOUNT_ID
-    if delta is None:
-        delta = await capture_delta(stock_code)
-    async with async_session() as session:
-        row = (
-            await session.execute(
-                select(PositionRow).where(
-                    PositionRow.account_id == acct,
-                    PositionRow.stock_code == stock_code,
-                )
-            )
-        ).scalar_one_or_none()
-
-        flow_tx = await _load_flow(session, stock_code, acct)
-        # strict=False / keep_zero=False:delta+flow 模式下 row 内的导入基准可能
-        # 允许 sell > flow 聚合,且 flow 本身可能为负(清仓后),需要返回所有股票
-        flow = next(
-            (p for p in aggregate_positions(flow_tx, strict=False, keep_zero=False) if p.stock_code == stock_code),
-            None,
-        )
-
-        new_shares = delta.shares + (flow.shares if flow else 0)
-        new_cost = delta.cost + (flow.total_cost if flow else Decimal("0"))
-        new_pnl = delta.pnl + (flow.realized_pnl if flow else Decimal("0"))
-
-        if new_shares <= 0:
-            # 持仓被卖光 → 删除持仓行(成本归零)
-            if row is not None:
-                await session.delete(row)
-            await session.commit()
-            return
-
-        # 防御:股数 > 0 但 cost/pnl 不一致 → 量化处理
-        new_cost = max(Decimal("0"), new_cost)
-        new_pnl = max(Decimal("0"), new_pnl)
 
         if row is None:
+            if not chain:
+                # 无基准无流水 → 没有持仓可言
+                await session.commit()
+                return None
             row = PositionRow(
+                account_id=acct,
                 stock_code=stock_code,
-                stock_name=flow.stock_name if flow else None,
-                shares=new_shares,
-                total_cost=str(new_cost.quantize(Decimal("0.01"))),
-                realized_pnl=str(new_pnl.quantize(Decimal("0.01"))),
+                stock_name=latest_name,
+                shares=final.shares,
+                total_cost=str(total_cost.quantize(Decimal("0.01"))),
+                realized_pnl=str(realized.quantize(Decimal("0.01"))),
+                base_shares=base.shares,
+                base_total_cost=str(base.total_cost.quantize(Decimal("0.01"))),
+                base_realized_pnl=str(base.realized_pnl.quantize(Decimal("0.01"))),
+                base_tx_id=0,
             )
             session.add(row)
         else:
-            row.shares = new_shares
-            row.total_cost = str(new_cost.quantize(Decimal("0.01")))
-            row.realized_pnl = str(new_pnl.quantize(Decimal("0.01")))
-            if flow and flow.stock_name:
-                row.stock_name = flow.stock_name
+            row.shares = final.shares
+            row.total_cost = str(total_cost.quantize(Decimal("0.01")))
+            row.realized_pnl = str(realized.quantize(Decimal("0.01")))
+            if latest_name:
+                row.stock_name = latest_name
+
         await session.commit()
-
-
-# ============================================================
-# 主数据读写接口(对外)
-# ============================================================
-
-async def get_all_positions(account_id: int | None = None) -> list[Position]:
-    """读 positions 表(主数据)。account_id 省略 = 只看默认账户。"""
-    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
-
-    acct = account_id or DEFAULT_ACCOUNT_ID
-    async with async_session() as session:
-        rows = list(
-            (
-                await session.execute(
-                    select(PositionRow).where(PositionRow.account_id == acct)
-                )
-            )
-            .scalars()
-            .all()
-        )
-    return [_row_to_position(r) for r in rows]
-
-
-async def get_position(stock_code: str, account_id: int | None = None) -> Optional[Position]:
-    """读 positions 表单条。account_id 省略 = 只看默认账户。"""
-    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
-
-    acct = account_id or DEFAULT_ACCOUNT_ID
-    async with async_session() as session:
-        row = (
-            await session.execute(
-                select(PositionRow).where(
-                    PositionRow.account_id == acct,
-                    PositionRow.stock_code == stock_code,
-                )
-            )
-        ).scalar_one_or_none()
-    return _row_to_position(row) if row else None
+        await session.refresh(row)
+        return _row_to_position(row)
 
 
 async def upsert_position(
@@ -291,11 +405,22 @@ async def upsert_position(
     cost_price: Decimal,
     stock_name: str | None = None,
     account_id: int | None = None,
+    realized_pnl: Optional[Decimal] = None,
+    base_date: Optional[date] = None,
 ) -> Position:
-    """手动录入 / 截图导入:覆盖式写入持仓(以用户提供为准,不算 delta)
+    """手动录入 / 截图导入:**重置基准**(以用户提供为准)
 
-    delta 推导规则:新值 = 导入值 + (流水聚合 - 旧流水聚合)。流水不变时,
-    新持仓 = 导入值,等价于覆盖;流水变动后导入值作为基准保留。
+    语义(v0.5.0):
+    - base_* = 用户提供的股数 / 每股成本价 / 已实现盈亏(缺省沿用当前累计)
+    - base_tx_id = 基准已吸收的流水 id 上界
+    - 被吸收的流水不再参与重放 → 历史流水不会被重复计算(旧双算 bug 的根治点)
+
+    base_date(可选)= **这份持仓快照是哪一天的**:
+    - 给了 → 只吸收 trade_date <= base_date 的流水(该快照里已经包含的效果),
+            base_date 之后的流水**留在链里继续生效**。
+            典型场景:券商 10-21 快照 + App 10-22/10-23 又记了两笔 → 锚到 10-21,
+            那两笔仍然是「活链」(可改可删、每笔带 after 快照)。
+    - 不给 → 吸收该股票现有全部流水(= 快照就是此刻的真实持仓)。
 
     account_id 省略时落到默认账户(阶段5),保持存量调用方行为不变。
     """
@@ -311,19 +436,36 @@ async def upsert_position(
                 )
             )
         ).scalar_one_or_none()
+
+        tx_rows = list(
+            (
+                await session.execute(
+                    select(Transaction).where(
+                        Transaction.account_id == acct,
+                        Transaction.stock_code == stock_code,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        if base_date is not None:
+            # 只吸收基准日期(含)之前的流水
+            absorbed = [t for t in tx_rows if t.trade_date <= base_date]
+            max_tx_id = max((t.id for t in absorbed), default=0)
+        else:
+            max_tx_id = max((t.id for t in tx_rows), default=0)
+
         total_cost = (Decimal(str(cost_price)) * int(shares)).quantize(Decimal("0.01"))
 
-        # 当前流水聚合值(用于计算 delta 基准)
-        #
-        # strict=False / keep_zero=False:与 capture_delta / recalc_position 同一口径。
-        # 导入基准场景下,流水的**第一条可能就是「卖出」**(底仓不在流水里),
-        # strict=True 会抛「卖出 N 股超过持仓 0 股」→ POST /api/positions 直接 500。
-        # keep_zero=False:卖出后 flow.shares 会变成 0 或负数,keep_zero=True 会把它
-        # 过滤掉,导致已实现盈亏被当成 0 写回(把历史已实现盈亏抹掉)。
-        flow_tx = await _load_flow(session, stock_code, acct)
-        flow_pos = aggregate_positions(flow_tx, strict=False, keep_zero=False)
-        flow = next((p for p in flow_pos if p.stock_code == stock_code), None)
-        flow_pnl = flow.realized_pnl if flow else Decimal("0")
+        # 已实现盈亏:用户显式给 > 沿用当前累计(有行用行值,无行用流水口径)
+        if realized_pnl is not None:
+            base_pnl = Decimal(str(realized_pnl)).quantize(Decimal("0.01"))
+        elif row is not None:
+            base_pnl = Decimal(row.realized_pnl)
+        else:
+            base_pnl = _lenient_flow_realized(tx_rows).quantize(Decimal("0.01"))
 
         if row is None:
             row = PositionRow(
@@ -332,22 +474,210 @@ async def upsert_position(
                 stock_name=stock_name,
                 shares=int(shares),
                 total_cost=str(total_cost),
-                # 已实现盈亏与覆盖分支同一口径:流水部分保留(导入不覆盖历史已实现)。
-                # 两个分支必须一致,否则「先有卖出流水、后导入持仓」会把这笔历史盈亏抹成 0。
-                realized_pnl=str(flow_pnl.quantize(Decimal("0.01"))),
+                realized_pnl=str(base_pnl),
+                base_shares=int(shares),
+                base_total_cost=str(total_cost),
+                base_realized_pnl=str(base_pnl),
+                base_tx_id=max_tx_id,
             )
             session.add(row)
         else:
-            # 用户导入值 = 新的"持仓 - 流水"基准
+            # 重置基准
             row.shares = int(shares)
             row.total_cost = str(total_cost)
-            # 已实现盈亏:流水部分保留(导入不覆盖历史已实现)
-            row.realized_pnl = str(flow_pnl.quantize(Decimal("0.01")))
+            row.realized_pnl = str(base_pnl)
+            row.base_shares = int(shares)
+            row.base_total_cost = str(total_cost)
+            row.base_realized_pnl = str(base_pnl)
+            row.base_tx_id = max_tx_id
             if stock_name:
                 row.stock_name = stock_name
+
+        # 基准之上的活链(base_tx_id 之后的流水)必须重放到新基准上,
+        # 否则「锚到历史快照」会把基准之后的交易效果一起抹掉。
+        final = _replay_chain_into_row(
+            ChainState(int(shares), total_cost, base_pnl),
+            max_tx_id,
+            tx_rows,
+        )
+        row.shares = final.shares
+        row.total_cost = str(max(Decimal("0"), final.total_cost).quantize(Decimal("0.01")))
+        row.realized_pnl = str(final.realized_pnl.quantize(Decimal("0.01")))
+
         await session.commit()
         await session.refresh(row)
         return _row_to_position(row)
+
+
+async def get_all_positions(
+    account_id: int | None = None,
+    include_closed: bool = False,
+) -> list[Position]:
+    """读 positions 表(主数据)。account_id 省略 = 只看默认账户。
+
+    include_closed=False(默认):只返回仍有持仓的股票(shares > 0)——
+    与 v0.4.0「清仓即删行」的对外表现一致(v0.5.0 改为保留行以留存已实现盈亏)。
+    """
+    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
+
+    acct = account_id or DEFAULT_ACCOUNT_ID
+    async with async_session() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(PositionRow).where(PositionRow.account_id == acct)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    out = [_row_to_position(r) for r in rows]
+    if not include_closed:
+        out = [p for p in out if p.shares > 0]
+    return out
+
+
+async def get_position(
+    stock_code: str,
+    account_id: int | None = None,
+    include_closed: bool = False,
+) -> Optional[Position]:
+    """读 positions 表单条。account_id 省略 = 只看默认账户。
+
+    include_closed=False(默认):已清仓(shares <= 0)返回 None —— 与旧行为一致。
+    """
+    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
+
+    acct = account_id or DEFAULT_ACCOUNT_ID
+    async with async_session() as session:
+        row = (
+            await session.execute(
+                select(PositionRow).where(
+                    PositionRow.account_id == acct,
+                    PositionRow.stock_code == stock_code,
+                )
+            )
+        ).scalar_one_or_none()
+    if row is None:
+        return None
+    if not include_closed and row.shares <= 0:
+        return None
+    return _row_to_position(row)
+
+
+async def position_before_trade(
+    stock_code: str,
+    tx_id: int,
+    account_id: int | None = None,
+) -> Optional[Position]:
+    """目标交易**之前**该股票的持仓(基准 + 链尾前缀重放)
+
+    给诊断服务用:判断「这笔交易之前的仓位/成本」,必须走链重放而不是
+    「从 0 开始聚合全部流水」(旧 aggregate_positions 会漏掉导入基准)。
+    """
+    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
+
+    acct = account_id or DEFAULT_ACCOUNT_ID
+    async with async_session() as session:
+        _row, base, chain, tx_rows = await _load_chain(session, stock_code, acct)
+        target = next((t for t in tx_rows if t.id == tx_id), None)
+        if target is None:
+            return None
+        prefix = [
+            spec
+            for spec in chain
+            if (spec.trade_date, spec.id) < (target.trade_date, target.id)
+        ]
+        state, _ = replay_chain(base, prefix)
+        name = next(
+            (t.stock_name for t in reversed(tx_rows) if t.stock_name), None
+        )
+
+    if state.shares <= 0:
+        return None
+    return Position(
+        stock_code=stock_code,
+        stock_name=name,
+        shares=state.shares,
+        total_cost=state.total_cost,
+        realized_pnl=state.realized_pnl,
+    )
+
+
+async def shares_available_at(
+    stock_code: str,
+    trade_date: date,
+    account_id: int | None = None,
+) -> int:
+    """在给定交易日可卖出的股数(基准 + 该日及之前的链尾重放)
+
+    新流水 id 恒大于既有 id → 同日排序它排最后,所以「该日及之前」的链尾
+    就是它落位时的前置状态。卖出校验必须看这个数,而不是当前最终持仓:
+    用户补录一笔更早日期的卖出时,两者不一样。
+    """
+    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
+
+    acct = account_id or DEFAULT_ACCOUNT_ID
+    async with async_session() as session:
+        _row, base, chain, _tx_rows = await _load_chain(session, stock_code, acct)
+        prefix = [spec for spec in chain if spec.trade_date <= trade_date]
+        state, _ = replay_chain(base, prefix)
+    return max(state.shares, 0)
+
+
+async def check_chain(
+    stock_code: str,
+    account_id: int | None = None,
+    *,
+    override: Optional[TxSpec] = None,
+    drop_id: Optional[int] = None,
+    insert: Optional[TxSpec] = None,
+) -> ChainState:
+    """按给定改动试算链,失败抛 PositionChainError;返回改动后的最终状态
+
+    用于「写库前先验算」:修改/新增流水时,先确认改完之后链仍然自洽
+    (不会出现卖出超过当时持仓),再落库。
+    """
+    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
+
+    acct = account_id or DEFAULT_ACCOUNT_ID
+    async with async_session() as session:
+        _row, base, chain, _tx_rows = await _load_chain(session, stock_code, acct)
+
+    specs = list(chain)
+    if drop_id is not None:
+        specs = [s for s in specs if s.id != drop_id]
+    if override is not None:
+        specs = [override if s.id == override.id else s for s in specs]
+    if insert is not None:
+        # 新流水 id 恒大于既有 id → 同日排序它排最后
+        specs.append(replace(insert, id=insert.id or 2**62))
+        specs.sort(key=lambda s: (s.trade_date, s.id))
+
+    state, _ = replay_chain(base, specs)
+    return state
+
+
+async def is_absorbed(stock_code: str, tx_id: int, account_id: int | None = None) -> bool:
+    """该流水是否已被导入基准吸收(id <= base_tx_id)
+
+    已吸收的流水不参与重放,改/删它不会影响成本 → 明确拒绝并提示重新导入基准。
+    """
+    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
+
+    acct = account_id or DEFAULT_ACCOUNT_ID
+    async with async_session() as session:
+        row = (
+            await session.execute(
+                select(PositionRow).where(
+                    PositionRow.account_id == acct,
+                    PositionRow.stock_code == stock_code,
+                )
+            )
+        ).scalar_one_or_none()
+    if row is None:
+        return False
+    return tx_id <= row.base_tx_id
 
 
 async def delete_position(stock_code: str, account_id: int | None = None) -> bool:
@@ -373,12 +703,18 @@ async def delete_position(stock_code: str, account_id: int | None = None) -> boo
 
 __all__ = [
     "Position",
-    "DeltaBaseline",
+    "ChainState",
+    "TxSpec",
+    "PositionChainError",
     "aggregate_positions",
+    "apply_transaction",
+    "replay_chain",
     "recalc_position",
-    "capture_delta",
     "get_all_positions",
     "get_position",
     "upsert_position",
     "delete_position",
+    "position_before_trade",
+    "shares_available_at",
+    "is_absorbed",
 ]

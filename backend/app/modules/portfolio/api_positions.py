@@ -87,13 +87,22 @@ async def list_positions() -> dict:
 async def create_position(payload: PositionCreate) -> dict:
     """手动录入 / 覆盖单只持仓(v0.4.0)
 
-    覆盖语义:以用户提交的股数/每股成本价为准;已实现盈亏保留流水部分。
+    覆盖语义(v0.5.0):以用户提交的股数/每股成本价为准,并**重置基准**
+    —— 该股票现有流水全部视为「已被基准吸收」,不再参与重放。
+
+    realized_pnl(可选):用户手填的累计已实现盈亏(可为负)。
+    不传 = 沿用当前累计值。
+
+    base_date(可选):这份持仓快照是哪一天。只吸收该日期(含)之前的流水,
+    该日期之后的流水留在链里继续生效(可改可删、每笔带 after 快照)。
     """
     pos = await upsert_position(
         stock_code=payload.stock_code,
         shares=payload.shares,
         cost_price=payload.cost_price,
         stock_name=payload.stock_name,
+        realized_pnl=payload.realized_pnl,
+        base_date=payload.base_date,
     )
     return {
         "stock_code": pos.stock_code,
@@ -133,14 +142,14 @@ async def clear_position(code: str, payload: ClearPositionRequest) -> dict:
     业务逻辑:
     1. 取当前持仓(不存在 → 404)
     2. 创建 sell 流水(覆盖全部 shares + payload.price)
-    3. recalc_position 触发 → 持仓归零 → 删除持仓行
+    3. recalc_position 触发 → 持仓归零(保留持仓行,已实现盈亏留存)
     4. 返回生成的 sell 流水记录 + 预估已实现盈亏
     """
     from datetime import date as date_cls
     from decimal import Decimal
 
     from app.core.stock_code import normalize_code
-    from app.modules.portfolio.service import capture_delta, recalc_position
+    from app.modules.portfolio.service import recalc_position
 
     normalized = normalize_code(code) or code
     pos = await get_position(normalized)
@@ -157,9 +166,6 @@ async def clear_position(code: str, payload: ClearPositionRequest) -> dict:
     price = payload.price
     realized = (price - pos.avg_cost) * shares  # 预估已实现盈亏
 
-    # 变更前捕获导入基准(否则 recalc 会失准)
-    delta = await capture_delta(normalized)
-
     async def _do_create():
         return await transaction_repo.create(
             stock_code=normalized,
@@ -172,7 +178,7 @@ async def clear_position(code: str, payload: ClearPositionRequest) -> dict:
         )
 
     tx = await safe_write(_do_create)
-    await recalc_position(normalized, delta)
+    await recalc_position(normalized)
 
     return {
         "stock_code": normalized,

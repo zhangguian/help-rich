@@ -72,11 +72,26 @@ class PositionCreate(BaseModel):
     """POST /api/positions body(v0.4.0 手动录入/截图导入持仓)
 
     每股成本价口径:shares × cost_price = total_cost
+
+    v0.5.0 新增 realized_pnl(可选):用户手填的**累计**已实现盈亏,可为负。
+    不传 = 沿用当前累计值。
+
+    v0.5.1 cost_price 精度 3 → 6 位小数:
+    券商给的是「总成本」(如华天科技 1000 股总成本 17021.46 元),
+    换算成每股是 17.02146 —— 3 位小数会被 pydantic 拒收,导致
+    「与券商完全一致」这个目标差 0.46 元/1000 股。
+    avg_cost 展示仍然量化到 3 位(service.Position.avg_cost),
+    与券商显示的「参考成本」一致;多出来的精度只用于总成本与浮动盈亏。
     """
     stock_code: str
     shares: int = Field(gt=0)
-    cost_price: Decimal = Field(gt=0, max_digits=10, decimal_places=3)
+    cost_price: Decimal = Field(gt=0, max_digits=12, decimal_places=6)
     stock_name: Optional[str] = None
+    realized_pnl: Optional[Decimal] = None
+    # v0.5.0:这份持仓快照是哪一天的。只吸收该日期(含)之前的流水,
+    # 该日期之后的流水留在链里继续生效(可改可删、每笔带 after 快照)。
+    # 不传 = 吸收现有全部流水(快照就是此刻的真实持仓)。
+    base_date: Optional[date] = None
 
     @field_validator("stock_code")
     @classmethod
@@ -142,6 +157,10 @@ class TransactionOut(BaseModel):
     note: Optional[str] = None
     score: Optional[int] = None  # 由 score_repo 关联填充
     created_at: datetime
+    # v0.5.0 事件溯源快照:该笔应用后的持仓状态(NULL = 已被基准吸收)
+    shares_after: Optional[int] = None
+    total_cost_after: Optional[str] = None
+    realized_after: Optional[str] = None
 
     @classmethod
     def from_orm_with_score(cls, tx, score: Optional[int] = None) -> "TransactionOut":
@@ -157,6 +176,9 @@ class TransactionOut(BaseModel):
             note=tx.note,
             score=score,
             created_at=tx.created_at,
+            shares_after=getattr(tx, "shares_after", None),
+            total_cost_after=getattr(tx, "total_cost_after", None),
+            realized_after=getattr(tx, "realized_after", None),
         )
 
     class Config:

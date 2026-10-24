@@ -7,7 +7,6 @@ score_and_notify(trade_id):
 """
 import logging
 import time
-from decimal import Decimal
 
 from app.core.db_lock import safe_write
 from app.core.prompts import build_diagnose_user_prompt, build_trade_line, DIAGNOSE_SYSTEM
@@ -20,7 +19,7 @@ from app.modules.portfolio.repository import transaction_repo
 from app.repositories.watchlist_repo import watchlist_repo
 from app.services.event_bus import event_bus
 from app.services.market_overview_service import get_market_index_service
-from app.modules.portfolio.service import Position, aggregate_positions, get_all_positions, get_position
+from app.modules.portfolio.service import get_all_positions, position_before_trade
 
 logger = logging.getLogger(__name__)
 
@@ -69,48 +68,6 @@ def _load_context_trades(all_tx: list, target_id: int):
     return before, found
 
 
-def position_before_stock(
-    before_trades: list, stock_code: str
-) -> Position | None:
-    """目标交易之前该股票的持仓(流水聚合,供诊断上下文使用)
-
-    strict=False:与 v0.4.0 持仓主数据语义一致,允许 sell 超过纯流水聚合
-    (导入基准 + 仅卖场景,如 001896 持仓 200 + 流水仅 sell 100)
-    """
-    pos = aggregate_positions(before_trades, strict=False, keep_zero=False)
-    for p in pos:
-        if p.stock_code == stock_code:
-            return p
-    return None
-
-
-def _merge_delta_and_flow(
-    delta: Position | None, flow_before: Position | None
-) -> Position | None:
-    """持仓 = 导入基准(delta) + 流水聚合(v0.4.0 主数据语义)
-
-    delta:持仓表当前 − 全部流水聚合(导入/手动调整部分)
-    flow_before:目标交易之前的流水聚合
-    """
-    d_shares = delta.shares if delta else 0
-    d_cost = delta.total_cost if delta else Decimal("0")
-    d_pnl = delta.realized_pnl if delta else Decimal("0")
-    f_shares = flow_before.shares if flow_before else 0
-    f_cost = flow_before.total_cost if flow_before else Decimal("0")
-    f_pnl = flow_before.realized_pnl if flow_before else Decimal("0")
-
-    total_shares = d_shares + f_shares
-    if total_shares <= 0:
-        return None
-    return Position(
-        stock_code=(delta or flow_before).stock_code,
-        stock_name=(delta or flow_before).stock_name,
-        shares=total_shares,
-        total_cost=d_cost + f_cost,
-        realized_pnl=d_pnl + f_pnl,
-    )
-
-
 def _resolve_model_name(llm) -> str:
     """安全解析 LLM 模型名。
 
@@ -149,33 +106,13 @@ class DiagnoseService:
             # 防御:交易不在库里(已删除等)
             before_trades = [t for t in all_tx if t.id != trade_id]
 
-        # v0.4.0:持仓上下文从真实持仓表出发
-        #   position_before = 导入基准(delta) + 交易前流水聚合
+        # v0.5.0:持仓上下文从**链重放**出发
+        #   position_before = 基准(base_*) + 该笔之前的链尾重放(与持仓真相同源)
         #   all_positions = 持仓表当前(集中度维度,真实持仓)
-        from decimal import Decimal as _D
-
-        flow_before = position_before_stock(before_trades, trade.stock_code)
-
-        cur = await get_position(trade.stock_code)
-        # 全部流水聚合(含本交易) → delta = 持仓表当前 - 流水聚合
-        # strict=False:与 capture_delta/recalc_position 一致,允许 sell 超过纯流水聚合
-        flow_all = aggregate_positions(all_tx, strict=False, keep_zero=False)
-        flow_all_stock = next(
-            (p for p in flow_all if p.stock_code == trade.stock_code), None
-        )
-        if cur is not None or flow_all_stock is not None:
-            delta = Position(
-                stock_code=trade.stock_code,
-                stock_name=(cur or flow_all_stock).stock_name,
-                shares=(cur.shares if cur else 0) - (flow_all_stock.shares if flow_all_stock else 0),
-                total_cost=(cur.total_cost if cur else _D("0"))
-                - (flow_all_stock.total_cost if flow_all_stock else _D("0")),
-                realized_pnl=(cur.realized_pnl if cur else _D("0"))
-                - (flow_all_stock.realized_pnl if flow_all_stock else _D("0")),
-            )
-            position_before = _merge_delta_and_flow(delta, flow_before)
-        else:
-            position_before = flow_before
+        #
+        # 旧口径(已作废):position_before = 持仓行现值 − 从 0 起的流水聚合 + 交易前流水聚合
+        # → 与持仓真相不同源,导入基准一旦被历史流水重复计入就会偏。
+        position_before = await position_before_trade(trade.stock_code, trade_id)
 
         # 当前全部持仓(真实持仓表,用于集中度 + 0 数据降级)
         all_positions = await get_all_positions()

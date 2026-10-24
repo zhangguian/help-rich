@@ -104,6 +104,16 @@ class Transaction(Base):
         DateTime, default=datetime.now
     )
 
+    # --- v0.5.0 事件溯源快照(方案B):该笔交易应用后的持仓状态 ---
+    #
+    # 语义:持仓 = 基准(positions.base_*) + 链尾流水逐笔重放。
+    # 每笔流水自己记下「应用完我之后」的持仓快照,于是任意一笔的
+    # 前置状态 = 上一笔有效流水快照(或基准),可精确回滚/还原历史成本。
+    # NULL = 该笔已被导入基准吸收(id <= positions.base_tx_id),不参与重放。
+    shares_after: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_cost_after: Mapped[str | None] = mapped_column(String, nullable=True)
+    realized_after: Mapped[str | None] = mapped_column(String, nullable=True)
+
     # 关联评分(1:1)
     score: Mapped["TradeScore | None"] = relationship(
         "TradeScore", back_populates="transaction", uselist=False, cascade="all, delete-orphan"
@@ -208,6 +218,25 @@ class Position(Base):
     total_cost: Mapped[str] = mapped_column(String, nullable=False)
     # 已实现盈亏(卖出流水累计)
     realized_pnl: Mapped[str] = mapped_column(String, default="0.00", nullable=False)
+    # --- v0.5.0 事件溯源基准(方案B) ---
+    #
+    # 基准 = 「导入/手动录入」那一刻的真实持仓状态,吸收当时已存在的全部流水。
+    # 真相公式:
+    #   当前持仓 = 基准(base_*) + 其后所有 id > base_tx_id 的流水
+    #             按 (trade_date, id) 顺序逐笔加权平均应用
+    # base_tx_id = 基准已吸收的流水 id 上界(= 导入时该股票最大流水 id)。
+    base_shares: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    base_total_cost: Mapped[str] = mapped_column(
+        String, nullable=False, default="0.00", server_default="0.00"
+    )
+    base_realized_pnl: Mapped[str] = mapped_column(
+        String, nullable=False, default="0.00", server_default="0.00"
+    )
+    base_tx_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now, onupdate=datetime.now

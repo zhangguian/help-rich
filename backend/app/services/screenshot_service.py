@@ -184,13 +184,45 @@ class ScreenshotService:
             return "transactions"
         return "position"
 
+    async def _extract_screenshot_date(self, record_id: int):
+        """从截图记录里取 `screenshot_time`(截图当时的日期)→ 基准日期
+
+        取不到就返回 None(= 吸收现有全部流水)。
+        """
+        from datetime import date as date_cls
+
+        record = await screenshot_repo.get_by_id(record_id)
+        if record is None or not record.raw_response:
+            return None
+        raw = record.raw_response
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return None
+        if not isinstance(raw, dict):
+            return None
+        stamp = raw.get("screenshot_time")
+        if not stamp:
+            return None
+        try:
+            return date_cls.fromisoformat(str(stamp)[:10])
+        except ValueError:
+            return None
+
     async def confirm(self, record_id: int, items: list[dict], screenshot_type: str) -> None:
         """用户确认后入库 transactions / watchlist / positions
 
         v0.4.0 变更:position / holdings 类型不再拒绝,改为逐行 upsert 持仓表
         (持仓是主数据,股民真实持仓可直接导入)。
+
+        v0.5.0:截图里若带 `screenshot_time`(截图当时的日期),就把它当作**基准日期** ——
+        只吸收该日期(含)之前的流水,该日期之后的流水留在链里继续生效。
+        没有 screenshot_time → 吸收现有全部流水(快照即此刻真实持仓)。
         """
         from datetime import date as date_cls
+
+        base_date = await self._extract_screenshot_date(record_id)
 
         async def _do():
             if screenshot_type in ("position", "holdings"):
@@ -213,11 +245,17 @@ class ScreenshotService:
                         )
                     from decimal import Decimal
 
+                    # v0.5.0:券商截图一般不含已实现盈亏;若解析到了就一并作为基准
+                    raw_pnl = item.get("realized_pnl")
                     await upsert_position(
                         stock_code=str(code),
                         shares=int(shares),
                         cost_price=Decimal(str(price)),
                         stock_name=item.get("stock_name"),
+                        realized_pnl=(
+                            Decimal(str(raw_pnl)) if raw_pnl is not None else None
+                        ),
+                        base_date=base_date,
                     )
             elif screenshot_type == "transactions":
                 for item in items:

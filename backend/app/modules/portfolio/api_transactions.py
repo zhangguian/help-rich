@@ -1,5 +1,6 @@
 """交易流水 + 自选股 API(P2.1 / P2.2 实施)"""
 from datetime import date
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
@@ -70,29 +71,52 @@ async def create_transaction(
 
     v2.1 §3.2
     P4.4:录入后异步触发诊断(评分 + AI 评语,SSE 推送)
-    """
-    # 校验:卖出不能超过持仓(v0.4.0 改读持仓表主数据)
-    if payload.action == "sell":
-        from app.modules.portfolio.service import get_position
 
-        existing = await get_position(payload.stock_code)
-        current_shares = existing.shares if existing else 0
+    v0.5.0:录入 = 在链尾追加一笔 → 从基准重放全链 → 写快照 + 更新持仓行。
+    卖出额度按「该笔落位时」的持仓判定(补录更早日期的流水也准)。
+    """
+    from app.modules.portfolio.service import (
+        PositionChainError,
+        TxSpec,
+        check_chain,
+        recalc_position,
+        shares_available_at,
+    )
+
+    # 校验:卖出不能超过持仓(v0.5.0 按该笔落位时的链状态判定)
+    if payload.action == "sell":
+        current_shares = await shares_available_at(
+            payload.stock_code, payload.trade_date
+        )
         if payload.shares > current_shares:
             raise HTTPException(
                 status_code=422,
                 detail={
                     "code": "INSUFFICIENT_SHARES",
-                    "message": f"这只票只剩 {current_shares} 股了,卖不出 {payload.shares} 股",
+                    "message": f"这只票在 {payload.trade_date} 只剩 {current_shares} 股了,卖不出 {payload.shares} 股",
                     "detail": {"have": current_shares, "want": payload.shares},
                 },
             )
 
     price_str = format(payload.price, ".3f")  # Decimal → "10.500"
 
-    # v0.4.0:变更前捕获导入基准(流水入库后无法再推导)
-    from app.modules.portfolio.service import capture_delta
-
-    delta = await capture_delta(payload.stock_code)
+    # 写库前先验算:确保落库后链仍然自洽
+    try:
+        await check_chain(
+            payload.stock_code,
+            insert=TxSpec(
+                id=0,
+                trade_date=payload.trade_date,
+                action=payload.action,
+                shares=payload.shares,
+                price=payload.price,
+            ),
+        )
+    except PositionChainError as e:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "CHAIN_INVALID", "message": str(e)},
+        ) from e
 
     async def _do_create():
         return await transaction_repo.create(
@@ -107,10 +131,8 @@ async def create_transaction(
 
     tx = await safe_write(_do_create)
 
-    # v0.4.0:流水变动 → 同步持仓(买入加权 / 卖出减仓 / 清仓删行)
-    from app.modules.portfolio.service import recalc_position
-
-    await recalc_position(tx.stock_code, delta)
+    # v0.5.0:流水变动 → 从基准重放链尾,重写快照 + 持仓行
+    await recalc_position(tx.stock_code)
 
     # P4.4:异步触发诊断(评分 + AI 评语,SSE 推送,不阻塞录入响应)
     from app.services.diagnose_service import diagnose_service
@@ -127,8 +149,13 @@ async def update_transaction(tx_id: int, payload: TransactionUpdate) -> Transact
     if "price" in updates:
         updates["price"] = format(updates["price"], ".3f")
 
-    # v0.4.0:修改前捕获导入基准(改完无法再推导变更前流水)
-    from app.modules.portfolio.service import capture_delta, recalc_position
+    from app.modules.portfolio.service import (
+        PositionChainError,
+        TxSpec,
+        check_chain,
+        is_absorbed,
+        recalc_position,
+    )
 
     before = await transaction_repo.get_by_id(tx_id)
     if before is None:
@@ -136,7 +163,39 @@ async def update_transaction(tx_id: int, payload: TransactionUpdate) -> Transact
             status_code=404,
             detail={"code": "TX_NOT_FOUND", "message": f"交易 #{tx_id} 不存在"},
         )
-    delta = await capture_delta(before.stock_code)
+
+    # v0.5.0:已被导入基准吸收的流水不参与重放,改它不会影响成本 → 明确拒绝
+    if await is_absorbed(before.stock_code, tx_id):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "TX_ABSORBED",
+                "message": (
+                    f"交易 #{tx_id} 已被导入的持仓基准吸收,修改它不会改变成本价。"
+                    "如需修正这笔历史,请先在持仓页重新导入该股票的基准。"
+                ),
+            },
+        )
+
+    # 写库前先验算改完之后链是否自洽
+    new_shares = updates.get("shares", before.shares)
+    new_price = Decimal(updates["price"]) if "price" in updates else Decimal(before.price)
+    try:
+        await check_chain(
+            before.stock_code,
+            override=TxSpec(
+                id=before.id,
+                trade_date=before.trade_date,
+                action=before.action,
+                shares=new_shares,
+                price=new_price,
+            ),
+        )
+    except PositionChainError as e:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "CHAIN_INVALID", "message": str(e)},
+        ) from e
 
     async def _do_update():
         return await transaction_repo.update(tx_id, **updates)
@@ -148,7 +207,7 @@ async def update_transaction(tx_id: int, payload: TransactionUpdate) -> Transact
             detail={"code": "TX_NOT_FOUND", "message": f"交易 #{tx_id} 不存在"},
         )
 
-    await recalc_position(tx.stock_code, delta)
+    await recalc_position(tx.stock_code)
 
     from app.repositories.trade_score_repo import trade_score_repo
     score = await trade_score_repo.get_by_trade_id(tx.id)
@@ -157,7 +216,6 @@ async def update_transaction(tx_id: int, payload: TransactionUpdate) -> Transact
 
 @router.delete("/transactions/{tx_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_transaction(tx_id: int) -> None:
-    # v0.4.0:删除前先取 stock_code,删除后重算持仓(删流水不丢导入基准)
     from app.db import async_session as _db_session
     from app.models.orm import Transaction as _TxOrm
     from sqlalchemy import select as _select
@@ -168,10 +226,38 @@ async def delete_transaction(tx_id: int) -> None:
         ).scalar_one_or_none()
         _code = _row.stock_code if _row else None
 
-    # v0.4.0:删除前捕获导入基准(删后无法推导变更前流水)
-    from app.modules.portfolio.service import capture_delta
+    from app.modules.portfolio.service import (
+        PositionChainError,
+        check_chain,
+        is_absorbed,
+        recalc_position,
+    )
 
-    delta = await capture_delta(_code) if _code else None
+    # v0.5.0:已被基准吸收的流水不参与重放,删它不会改变成本 → 明确拒绝
+    if _code and await is_absorbed(_code, tx_id):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "TX_ABSORBED",
+                "message": (
+                    f"交易 #{tx_id} 已被导入的持仓基准吸收,删除它不会改变成本价。"
+                    "如需清掉这段历史,请先在持仓页重新导入该股票的基准。"
+                ),
+            },
+        )
+
+    # 删掉这笔后链是否还自洽(例如后面的卖出会失去成本基准)
+    if _code:
+        try:
+            await check_chain(_code, drop_id=tx_id)
+        except PositionChainError as e:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "CHAIN_INVALID",
+                    "message": f"删除这笔会让后续流水失去成本基准:{e}",
+                },
+            ) from e
 
     async def _do_delete():
         return await transaction_repo.delete(tx_id)
@@ -183,10 +269,8 @@ async def delete_transaction(tx_id: int) -> None:
             detail={"code": "TX_NOT_FOUND", "message": f"交易 #{tx_id} 不存在"},
         )
 
-    if _code and delta is not None:
-        from app.modules.portfolio.service import recalc_position
-
-        await recalc_position(_code, delta)
+    if _code:
+        await recalc_position(_code)
 
 
 # ============================================================
