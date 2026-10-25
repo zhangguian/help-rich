@@ -25,6 +25,9 @@
 | PATCH | /transactions/{id} | 流水 | 修改 |
 | DELETE | /transactions/{id} | 流水 | 删除 |
 | POST | /calculator | 计算器 | 计算新成本 + 21 档 |
+| POST | /calculator/review | 计算器 | 交易复核(做 T 方向 / 上限,按品种分流) |
+| GET | /stock/{code}/analysis | 个股分析 | 技术指标 + AI 解读 + 行业标签 |
+| GET | /stock/{code}/industry | 个股分析 | 行业归属(ETF 返回跟踪指数) |
 | POST | /diagnose/{trade_id} | 诊断 | 触发评分 + 评语 |
 | GET | /diagnose/{trade_id} | 诊断 | 获取评分(轮询降级) |
 | POST | /diagnose/{trade_id}/regenerate | 诊断 | A/B 用其他模型重新生成 |
@@ -599,7 +602,73 @@ data: {"event":"ping","ts":1690890000}   ← 前端过滤
 
 ---
 
-## 13. 错误码全局清单
+## 13. 场内 ETF 品种与规则(v0.6 新增)
+
+> 场内 ETF / 场内 LOF 与股票的**交易规则不同**:免印花税、免过户费、无涨跌停限制、
+> 跨境/商品类当日可回转(T+0)。本节记录与品种相关的契约差异。
+> 完整设计与实测记录见 `docs/etf-rfc.md`(实施规格 v1.0)。
+
+### 13.1 GET /api/stock/{code}/industry
+
+**目的**:标的行业归属(ETF 返回其跟踪指数)
+
+**响应 200**:
+```json
+{
+  "code": "513120.SH",
+  "industry": "跟踪中证香港创新药",
+  "source": "etf_index",
+  "note": "场内 ETF · QDII"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `code` | string | 规范化代码(带市场后缀) |
+| `industry` | string \| null | 股票=行业名;ETF=「跟踪 {指数}」;查不到=null(**不编造**) |
+| `source` | string | `baostock`(离线行业表)/ `etf_index`(ETF 品种表)/ `sina`(行情排行榜反查) |
+| `note` | string \| null | ETF 附注(形态 · 类别),如「场内 ETF · QDII」;股票为 null |
+
+**错误**:代码格式非法 → 422 `INVALID_STOCK_CODE`
+
+### 13.2 GET /api/stock/{code}/analysis —— 新增三个字段
+
+在既有响应体上新增(节点缓存命中与未命中**两条路径都注入**):
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `industry` | string \| null | 同 13.1 |
+| `industry_source` | string \| null | 同 13.1 的 `source` |
+| `industry_note` | string \| null | 同 13.1 的 `note` |
+
+其余字段(含 `indicators` / `ai` / `degraded`)结构不变。
+
+### 13.3 POST /api/calculator 与 POST /api/calculator/review —— 按品种选费用档
+
+**请求体与响应结构不变**,行为按标的品种分流:
+
+| 项 | 股票 | 场内 ETF / LOF |
+|---|---|---|
+| 费用档 | 印花税 + 过户费 + 佣金 | **免印花税、免过户费**,佣金沿用用户配置 |
+| `t_directions.*.t_plus_one_note` | 「A 股 T+1:当天买入的股票当天不能卖出…」 | T+0 品种→「该品种为 T+0(当日可回转):当天买入的份额当天就能卖出…(具体以交易软件显示的品种属性为准)」 |
+| `t_directions.forward.max_shares`(正T 上限) | `min(可动T仓 M, 资金可买股数)` | **T+0 品种:只受资金约束** `floor(可用资金 ÷ 买价)` |
+| `t_directions.reverse.max_shares`(反T 上限) | 受可动 T 仓约束 | 同左(不变) |
+
+**降级**:代码符合 ETF 格式但**未在品种表内**的标的,按保守口径(T+1 / 股票费率)计算,
+并在 `degraded` 中明说「该 ETF 未在品种表内,已按保守口径(T+1 / 股票费率)计算,交易规则可能有偏差」。
+**不静默、不假装已知**,也不因此报错。
+
+### 13.4 GET /api/annual-report/{year}
+
+逐笔按标的品种选费用档(ETF 免印花税/过户费);响应结构不变。
+
+### 13.5 错误码
+
+本次**无新增错误码**。表外 ETF 不报错 —— 按保守口径降级 + 明说降级原因。
+
+---
+
+## 14. 错误码全局清单
 
 | code | HTTP | 模块 | 用户文案 |
 |---|---|---|---|
@@ -622,7 +691,7 @@ data: {"event":"ping","ts":1690890000}   ← 前端过滤
 
 ---
 
-## 14. 通用约定
+## 15. 通用约定
 
 ### 14.1 时间
 - 所有时间戳 ISO 8601 UTC:`2026-07-30T15:30:00`

@@ -1,488 +1,349 @@
-# ETF 改造方案(RFC v0.6)
+# 场内 ETF 支持(实施规格 v1.0)
 
-> **状态**:待评审
-> **作者**:产品 + 技术联合
-> **目标版本**:v0.6
-> **预计工时**:1-1.5 天
+> **状态**:✅ 已实施(2026-10-25)
+> **范围**:场内 ETF / 场内 LOF —— 品种识别 + 交易规则适配 + 展示层
+> **替换**:本文取代 v0.6《ETF 改造方案(RFC v0.6)》—— 那份是未评审、未实施的设计稿,
+> 且与现状漂移(表文件名、表内容、降级语义、落点位置均不同)。差异清单见 §8。
 
 ---
 
-## 1. 背景
+## 1. 背景与目标
 
-当前项目对**场内 ETF** 已经有数据通路(行情、K 线、AI 解读都跑得通),但**没有为 ETF 优化用户体验**:
+场内 ETF 在本项目里**数据通路一直是通的**(行情 / 日 K / 分时全部实测可用),
+真正缺的是两件事:
 
-- 用户在自选/持仓列表看到 ETF,无法一眼识别
-- 切到 ETF 时,行业归属返回 null(ETF 不在 baostock 离线行业表里)
-- 三线叠加(个股/大盘/行业)对 ETF 无效,行业线为空
-- 用户问"这只 ETF 跟踪什么指数"无法得到回答
-
-**场外基金**(001511 这类)暂不在本次范围,作为 v0.7 计划项。
-
-## 2. 目标
-
-为场内 ETF 用户提供**最小可用**的体验升级:
-
-| 目标 | 验收 |
+| 缺什么 | 后果 |
 |---|---|
-| 用户一眼看出"这是 ETF" | 自选 / 持仓列表显示 `📊 ETF` 徽章 |
-| 切到 ETF 时知道它跟踪什么 | AnalysisPanel 显示"跟踪 X 指数" |
-| 行业归属对 ETF 有意义 | `resolve_industry` 返回 `source=etf_index` |
-| 不破坏现有股票逻辑 | baostock 命中的股票行业保持不变 |
+| **看不出品种** | 自选 / 持仓列表里 ETF 与股票长得一样,用户不知道它跟踪什么指数 |
+| **算不对** | 拿股票规则算 ETF:印花税/过户费照收、T+1 提示错、涨跌停误判、正T 上限算小 |
 
-## 3. 范围
+第 2 条比第 1 条严重 —— **结论是事实性错误**,不只是不好看。
 
-### 3.1 在范围内(P0)
+### 目标(验收口径)
 
-- 新增 `etf_index.json` 静态表(覆盖 5 大类 ~40 只主流 ETF)
-- 后端 `resolve_industry` 加 ETF 兜底分支(优先级:baostock → 新浪 → ETF 跟踪指数 → degrade)
-- 前端 `isEtf` 辅助函数 + 自选/持仓 `📊 ETF` 徽章
-- AnalysisPanel 显示跟踪指数(当 `source='etf_index'`)
-- 文档说明 + 后端测试
+| 目标 | 验收方式 |
+|---|---|
+| 品种可辨 | 自选 / 持仓 / 个股页显示 `📊 ETF` 徽章(跨境/商品带 `T+0` 小标) |
+| 跟踪指数可见 | 分析页「机械信号」卡显示「跟踪 {指数}」 |
+| 费用按品种 | ETF 免印花税、免过户费;佣金沿用用户配置 |
+| 回转规则按品种 | T+0 品种的卖出腿可用当日买入份额;正T 上限只受资金约束 |
+| 涨跌停不误判 | ETF 无涨跌停 → 不再说「涨停」,改说涨幅已达 X% |
+| AI 不说股票的话 | ETF 的风险清单换成折溢价 / 跟踪误差 / 汇率 / T+0 规则差异 |
+| 缺数据不装懂 | 表外 ETF 保守按 T+1,且判定层明说「未在品种表内」 |
 
-### 3.2 不在范围内(后续版本)
+---
 
-| 项 | 计划版本 | 备注 |
+## 2. 范围
+
+### 2.1 本期做
+
+- **品种识别**:境内股票 ETF + 跨境 ETF(QDII)+ 黄金/商品(含商品期货 ETF)+ 场内 LOF
+- **交易规则适配**:费用 / T+0-T+1 / 无涨跌停 / AI 提示词
+- **展示层**:品种徽章 + 跟踪指数 chip
+
+### 2.2 本期不做(字段已预留)
+
+| 项 | 状态 | 原因 |
 |---|---|---|
-| 场外基金(001511) | v0.7 | 需 .OF 后缀 + 新数据源(天天基金/东财) |
-| ETF 持仓股反查(10 大权重) | v0.7 | 数据源 `fundf10.eastmoney.com FundArchivesDatas` |
-| 三线叠加补 ETF 指数对比 | v0.7 | 需 `index_code → K 线 secid` 映射 |
-| 动态 ETF 列表同步脚本 | v0.7 | 一次性同步,后续增量 |
-| 完整 ETF 详情页(规模/费率/折溢价) | v0.8 | 数据源 `fundmobapi.eastmoney.com FundMNFInfo` |
+| 债券 ETF / 货币 ETF | 类别字段(`bond`/`money`)已留,**未启用条目** | 这两类的 T+0 / 费用规则与本期 ETF 不同,不能顺手带过 |
+| 场外基金(001511 等) | 不支持 | 需要 `.OF` 后缀与另一套数据源 |
+| ETF 折溢价 / 规模 / 费率 | 不支持 | 需东财基金详情接口,单独排期 |
+| 三线叠加的 ETF 指数对比线 | 明确禁用 | 缺 `index_code → secid` 映射,给不出真实数据就别画 |
 
-## 4. 现状盘点
+---
 
-### 4.1 场内 ETF 已能工作
+## 3. 总体结构
 
-| 能力 | 状态 | 备注 |
-|---|---|---|
-| 自选 / 持仓入库 | ✅ | `stock_code` 字段无类型限制 |
-| 实时行情 | ✅ | `SinaClient` / `TencentClient` 已支持(实测 159599.SZ / 501099.SH / 588160.SH) |
-| K 线 | ✅ | `KlineCache` 按 stock_code 缓存,新浪/腾讯都能取 |
-| 持仓盈亏计算 | ✅ | `shares × current_price` 公式通用 |
-| AI 解读(LLM) | ✅ | chat endpoint 不区分股票/ETF |
-| 三线叠加 | ⚠️ | 个股/大盘 OK,行业线空(没行业归属) |
-| `resolve_industry` | ⚠️ | ETF 返回 `degrade`,UI 显示空白 |
+```
+backend/app/data/etf_instruments.json   # 品种表(静态,46 项,零数据库迁移)
+backend/app/core/instrument.py           # 判定层:resolve_instrument / fees_for_instrument / degraded_note
+        │
+        ├─ core/cost_engine.py           # TradeFees.etf_variant():印花税/过户费置 0
+        ├─ services/trade_review_service.py  # T+0/T+1 文案 + 正T 上限公式分流
+        ├─ services/decision_service.py  # 追高文案按品种分流
+        ├─ services/industry_service.py  # ETF 分支提前 + resolve_industry_sync(纯本地)
+        ├─ modules/analysis/prompts.py   # 风险清单 / PM 严重风险按品种
+        └─ api/calculator.py / annual_report_service.py  # 按品种选费用档
 
-### 4.2 关键代码位置
+frontend/src/lib/etfInstruments.json    # 前端副本(由后端表生成,后端测试逐项比对防漂移)
+frontend/src/lib/instrument.ts           # resolveInstrument / isEtf / instrumentBadgeTitle
+frontend/src/components/ui/EtfBadge.tsx  # 品种徽章组件
+```
 
-| 模块 | 文件 | 备注 |
-|---|---|---|
-| 代码规范化 | `backend/app/core/stock_code.py` | 5→SH / 1→SZ 已支持 ETF |
-| 行业兜底 | `backend/app/services/industry_service.py` | 三级兜底,本次加第 4 级 |
-| 行业离线表 | `backend/app/data/industry_map.json` | 5536 只股票,不含 ETF |
-| 三线叠加 | `backend/app/services/overview_service.py` | `industry` 为空时 sector 数组为空 |
-| 前端代码规则 | `frontend/src/lib/stockCode.ts` | 镜像后端规则 |
-| 自选 UI | `frontend/src/components/watch/WatchList.tsx` | 加 ETF 徽章 |
-| 持仓 UI | `frontend/src/components/positions/PositionSummaryTable.tsx` | 加 ETF 徽章 |
-| 分析面板 | `frontend/src/components/advice/AnalysisPanel.tsx` | 显示跟踪指数 |
+**依赖方向**:`core/instrument.py` 只依赖 `core/cost_engine.py`(core→core 合法),
+不依赖任何业务层 —— 架构守卫 `test_core_does_not_depend_on_business_layers` 通过。
 
-## 5. 改造方案
+---
 
-### 5.1 新增 ETF 跟踪指数静态表
+## 4. 品种表与判定
 
-**文件**:`backend/app/data/etf_index.json`(新建)
+### 4.1 表结构
 
-**结构**:
+`backend/app/data/etf_instruments.json`
+
 ```json
 {
-  "version": "2026-08-03",
-  "source": "manual + eastmoney fundmobapi 校验;覆盖 5 大类约 40 只主流 ETF",
+  "version": "2026-10-25",
+  "source": "代码与场内简称用新浪行情接口逐只核对;跟踪指数用天天基金 F10 核对",
+  "categories": { "broad": "宽基", "industry": "行业", "qdii": "QDII",
+                  "commodity": "商品", "bond": "债券", "money": "货币" },
   "items": [
-    {"code": "510050.SH", "index": "上证 50",       "category": "broad"},
-    {"code": "510300.SH", "index": "沪深 300",      "category": "broad"},
-    {"code": "510500.SH", "index": "中证 500",      "category": "broad"},
-    {"code": "159915.SZ", "index": "创业板指",      "category": "broad"},
-    {"code": "588000.SH", "index": "科创 50",       "category": "broad"},
-    {"code": "588080.SH", "index": "科创 50",       "category": "broad"},
-
-    {"code": "512480.SH", "index": "国证半导体芯片",  "category": "industry"},
-    {"code": "515790.SH", "index": "中证光伏产业",   "category": "industry"},
-    {"code": "512760.SH", "index": "国证芯片",       "category": "industry"},
-    {"code": "159995.SZ", "index": "国证半导体芯片",  "category": "industry"},
-    {"code": "512660.SH", "index": "中证军工",        "category": "industry"},
-    {"code": "159825.SZ", "index": "中证农业",        "category": "industry"},
-    {"code": "515030.SH", "index": "中证新能源车",    "category": "industry"},
-    {"code": "159806.SZ", "index": "中证新能源车",    "category": "industry"},
-    {"code": "512170.SH", "index": "中证医疗",        "category": "industry"},
-    {"code": "159992.SZ", "index": "中证创新药",      "category": "industry"},
-    {"code": "159801.SZ", "index": "中证芯片",        "category": "industry"},
-    {"code": "512880.SH", "index": "中证证券",        "category": "industry"},
-    {"code": "512000.SH", "index": "中证全指证券公司","category": "industry"},
-    {"code": "515220.SH", "index": "中证煤炭",        "category": "industry"},
-    {"code": "515210.SH", "index": "中证钢铁",        "category": "industry"},
-    {"code": "516970.SH", "index": "中证基建",        "category": "industry"},
-    {"code": "159996.SZ", "index": "中证家居家电",    "category": "industry"},
-
-    {"code": "513050.SH", "index": "中概互联",        "category": "qdii"},
-    {"code": "513100.SH", "index": "纳斯达克 100",    "category": "qdii"},
-    {"code": "513300.SH", "index": "纳斯达克 100",    "category": "qdii"},
-    {"code": "513500.SH", "index": "标普 500",        "category": "qdii"},
-    {"code": "513880.SH", "index": "日经 225",        "category": "qdii"},
-    {"code": "513730.SH", "index": "东南亚科技",      "category": "qdii"},
-    {"code": "159941.SZ", "index": "纳斯达克 100",    "category": "qdii"},
-    {"code": "513870.SH", "index": "纳斯达克科技",    "category": "qdii"},
-
-    {"code": "518880.SH", "index": "黄金现货",        "category": "commodity"},
-    {"code": "518800.SH", "index": "黄金 9999",       "category": "commodity"},
-    {"code": "162411.SZ", "index": "标普石油",        "category": "commodity"},
-    {"code": "501018.SH", "index": "原油",            "category": "commodity"},
-    {"code": "160723.SZ", "index": "嘉实原油",        "category": "commodity"},
-    {"code": "160216.SZ", "index": "国泰商品",        "category": "commodity"},
-
-    {"code": "511010.SH", "index": "上证 5 年国债",   "category": "bond"},
-    {"code": "511260.SH", "index": "上证 10 年国债",  "category": "bond"},
-    {"code": "511880.SH", "index": "银华日利",        "category": "money"},
-    {"code": "511990.SH", "index": "华宝添益",        "category": "money"}
+    {"code": "513100.SH", "name": "纳指ETF国泰", "index": "纳斯达克 100",
+     "category": "qdii", "t0": true},
+    {"code": "162411.SZ", "name": "华宝油气", "index": "标普石油天然气上游",
+     "category": "commodity", "t0": true, "form": "lof"}
   ]
 }
 ```
 
-**5 大类覆盖**:
-- **broad**(宽基):6 只 — 上证 50/沪深 300/中证 500/创业板/科创 50
-- **industry**(行业/主题):~21 只 — 半导体/光伏/军工/农业/新能源车/医疗/创新药/证券/煤炭/钢铁/基建/家居家电/传媒
-- **qdii**(QDII/跨境):~8 只 — 中概/纳指/标普 500/日经 225/东南亚科技
-- **commodity**(商品):6 只 — 黄金/原油/石油
-- **bond/money**(债券/货币):4 只 — 国债/货币基金
+| 字段 | 含义 |
+|---|---|
+| `code` | 带市场后缀的规范代码 |
+| `name` | 场内简称(新浪行情口径,与应用里显示的一致) |
+| `index` | 跟踪指数 / 业绩比较基准 |
+| `category` | 宽基 / 行业 / QDII / 商品 / 债券 / 货币 |
+| `t0` | 是否当日可回转(T+0) |
+| `form` | `etf`(默认)/ `lof`(场内上市开放式基金) |
 
-**刷新策略**:
-- v0.6 手工维护
-- v0.7 跑一次性脚本从 `fundmobapi.eastmoney.com FundMNFInfo?Fcodes=...` 增量同步
-- 年度维护成本:< 5 只新增
+**46 项分布**:宽基 6 / 行业 23 / QDII 10 / 商品 7;其中 `form=lof` 5 项、`t0=true` 17 项。
 
-### 5.2 后端 `resolve_industry` 升级
+### 4.2 判定顺序(`core/instrument.py::resolve_instrument`)
 
-**优先级**(四级兜底):
-1. **baostock** 离线行业表(已有,~5000 只股票)
-2. **新浪** 行业排行领涨反查(已有)
-3. **🆕 ETF 跟踪指数**(`etf_index.json` 静态表,本 RFC 重点)
-4. **degrade**(已有)
+1. **命中表** → `kind=etf`、带类别 / 跟踪指数 / T+0 / 形态
+2. **表外但符合 ETF 格式**(`5xxxxx.SH` / `1xxxxx.SZ`)→ `kind=etf`、`known=False`、**保守按 T+1**
+3. 其余 → `kind=stock`
 
-**关键改动** `backend/app/services/industry_service.py`:
+> **为什么表外要保守**:513100(纳指,跨境)与 510300(沪深 300,境内)都是 51 开头,
+> 代码前缀分不开。无据不判 T+0 —— 判错 T+0 会直接算错正T 上限。
+> 表外 ETF 必须显式降级(§4.3),不静默、不假装已知。
 
-```python
-import json
-from pathlib import Path
+### 4.3 降级语义
 
-_ETF_INDEX_PATH = Path(__file__).resolve().parents[1] / "data" / "etf_index.json"
-_etf_index_cache: dict[str, dict] | None = None
-
-# 5 大类中文映射
-_CATEGORY_LABEL = {
-    "broad": "宽基",
-    "industry": "行业",
-    "qdii": "QDII",
-    "commodity": "商品",
-    "bond": "债券",
-    "money": "货币",
-}
-
-
-def _load_etf_index() -> dict[str, dict]:
-    """code → {code, index, category};启动时一次性加载,后续命中内存"""
-    global _etf_index_cache
-    if _etf_index_cache is None:
-        try:
-            with open(_ETF_INDEX_PATH, encoding="utf-8") as f:
-                data = json.load(f)
-            _etf_index_cache = {item["code"]: item for item in data["items"]}
-        except FileNotFoundError:
-            logger.warning("etf_index.json 不存在,ETF 行业兜底失效")
-            _etf_index_cache = {}
-    return _etf_index_cache
-
-
-def _resolve_etf_index(code: str) -> dict | None:
-    """ETF 跟踪指数兜底;未命中返回 None"""
-    return _load_etf_index().get(code)
-
-
-async def resolve_industry(code: str) -> dict:
-    """四级兜底:baostock → 新浪 → ETF 跟踪指数 → degrade"""
-    name = _resolve_local(code)
-    if name:
-        return {"code": code, "industry": name, "source": "baostock", "note": None}
-
-    name = await _resolve_sina(code)
-    if name:
-        return {
-            "code": code,
-            "industry": name,
-            "source": "sina",
-            "note": "新浪行业排行领涨股命中(离线表未覆盖)",
-        }
-
-    etf = _resolve_etf_index(code)
-    if etf:
-        cat_label = _CATEGORY_LABEL.get(etf["category"], "其他")
-        return {
-            "code": code,
-            "industry": f"跟踪{etf['index']}",
-            "source": "etf_index",
-            "note": f"场内 ETF · {cat_label}",
-        }
-
-    return {
-        "code": code,
-        "industry": None,
-        "source": "degrade",
-        "note": "未能识别行业归属,可能是新股/小盘股/非主流品种",
-    }
-```
-
-**返回示例**:
-```json
-{
-  "code": "510050.SH",
-  "industry": "跟踪上证 50",
-  "source": "etf_index",
-  "note": "场内 ETF · 宽基"
-}
-```
-
-### 5.3 前端 `isEtf` 辅助函数
-
-**`frontend/src/lib/stockCode.ts`** 新增:
-
-```ts
-/** 场内 ETF:5xxxxx.SH(51/56/58 系列)或 1xxxxx.SZ(15/16 系列)
- *  与后端 etf_index.json 覆盖范围不同 — 此函数仅做"代码格式"识别,
- *  实际跟踪指数展示以后端 resolve_industry 的 industry 字段为准 */
-export function isEtf(code: string): boolean {
-  const c = code.toUpperCase();
-  if (c.endsWith('.SH')) return /^5\d{5}\.SH$/.test(c);
-  if (c.endsWith('.SZ')) return /^1\d{5}\.SZ$/.test(c);
-  return false;
-}
-```
-
-### 5.4 前端 ETF 徽章
-
-**`frontend/src/components/watch/WatchList.tsx`** (~line 132):
-```tsx
-<div className="flex items-center gap-1.5">
-  <span className="text-sm text-text-pri truncate">
-    {it.name ?? it.code}
-  </span>
-  {isEtf(it.code) && (
-    <span
-      className="text-[10px] px-1 py-px rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0"
-      title="场内 ETF · 基金"
-    >
-      ETF
-    </span>
-  )}
-  {it.inPosition && (
-    <span className="text-[10px] px-1 py-px rounded bg-accent-subtle text-accent border border-accent/30">
-      持仓
-    </span>
-  )}
-</div>
-```
-
-**`frontend/src/components/positions/PositionSummaryTable.tsx`** (line 86 附近):
-```tsx
-<td className="py-2 px-2">
-  <div className="flex items-center gap-1.5">
-    <div className="text-text-pri font-semibold font-sans truncate max-w-[10rem]">
-      {p.stockName ?? p.stockCode}
-    </div>
-    {isEtf(p.stockCode) && (
-      <span className="text-[10px] px-1 py-px rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0">
-        ETF
-      </span>
-    )}
-  </div>
-  <div className="text-text-ter text-xs">{p.stockCode}</div>
-</td>
-```
-
-### 5.5 AnalysisPanel 显示跟踪指数
-
-**`frontend/src/components/advice/AnalysisPanel.tsx`** 行业显示位置:
-
-```tsx
-{ind.industry && (
-  <div className="flex items-center gap-2 flex-wrap">
-    <span className="text-xs text-text-ter">行业</span>
-    <span
-      className={clsx(
-        'text-xs px-2 py-0.5 rounded border',
-        ind.industrySource === 'etf_index'
-          ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
-          : 'bg-white/5 text-text-sec border-white/10',
-      )}
-    >
-      {ind.industry}
-    </span>
-    {ind.industrySource === 'etf_index' && ind.note && (
-      <span className="text-[10px] text-text-ter">{ind.note}</span>
-    )}
-  </div>
-)}
-```
-
-### 5.6 后端测试
-
-**`backend/tests/test_industry_service.py`** 新增 `TestEtfIndex` 类:
-
-```python
-class TestEtfIndex:
-    """ETF 跟踪指数兜底分支(优先级介于新浪与 degrade 之间)"""
-
-    async def test_mainstream_broad_etf_returns_tracking_index(self):
-        """510050(上证 50ETF)→ 跟踪上证 50,note 含 '宽基'"""
-        r = await resolve_industry("510050.SH")
-        assert r["source"] == "etf_index"
-        assert r["industry"] == "跟踪上证 50"
-        assert "宽基" in r["note"]
-
-    async def test_sz_market_etf(self):
-        """159915(创业板 ETF)→ 跟踪创业板指,source=etf_index"""
-        r = await resolve_industry("159915.SZ")
-        assert r["source"] == "etf_index"
-        assert r["industry"] == "跟踪创业板指"
-
-    async def test_industry_etf_category_label(self):
-        """512480(半导体 ETF)→ note 含 '行业'"""
-        r = await resolve_industry("512480.SH")
-        assert r["source"] == "etf_index"
-        assert "行业" in r["note"]
-
-    async def test_qdii_etf_category_label(self):
-        """513050(中概互联)→ note 含 'QDII'"""
-        r = await resolve_industry("513050.SH")
-        assert r["source"] == "etf_index"
-        assert "QDII" in r["note"]
-
-    async def test_commodity_etf_category_label(self):
-        """518880(黄金 ETF)→ note 含 '商品'"""
-        r = await resolve_industry("518880.SH")
-        assert r["source"] == "etf_index"
-        assert "商品" in r["note"]
-
-    async def test_unknown_etf_falls_to_degrade(self):
-        """511999.SH(假设不在表内)→ industry=None, source='degrade'"""
-        r = await resolve_industry("511999.SH")
-        assert r["industry"] is None
-        assert r["source"] == "degrade"
-
-    async def test_stock_not_affected(self):
-        """600519(茅台) 走 baostock,不被 ETF 路径影响"""
-        r = await resolve_industry("600519.SH")
-        assert r["source"] == "baostock"
-        assert r["industry"]  # 非空
-```
-
-## 6. 实施步骤(执行顺序)
-
-| 顺序 | 任务 | 文件 | 工时 |
-|---|---|---|---|
-| 1 | 新增 ETF 跟踪指数静态表 | `backend/app/data/etf_index.json` | 0.5h |
-| 2 | 后端 `resolve_industry` 加 ETF 兜底分支 | `backend/app/services/industry_service.py` | 0.5h |
-| 3 | 后端测试 | `backend/tests/test_industry_service.py` | 0.5h |
-| 4 | 前端 `isEtf` helper | `frontend/src/lib/stockCode.ts` | 10min |
-| 5 | 自选 ETF 徽章 | `frontend/src/components/watch/WatchList.tsx` | 20min |
-| 6 | 持仓 ETF 徽章 | `frontend/src/components/positions/PositionSummaryTable.tsx` | 20min |
-| 7 | AnalysisPanel 跟踪指数显示 | `frontend/src/components/advice/AnalysisPanel.tsx` | 0.5h |
-| 8 | 文档说明 | `docs/release-notes.md` | 10min |
-| 9 | 回归测试 + typecheck + build | - | 0.5h |
-
-**总工时**:~3-3.5h(约半天到 1 天)
-
-## 7. 验收标准
-
-### 7.1 自动测试
-
-```bash
-cd backend
-.venv\Scripts\python.exe -m pytest tests/test_industry_service.py -q
-# 预期:原 7 + 新 7 = 14 passed
-
-cd ../frontend
-npm run typecheck && npm run build
-# 预期:无错
-```
-
-### 7.2 手动验证
-
-| 场景 | 操作 | 预期 |
+| 情况 | 判定层行为 | 文案 |
 |---|---|---|
-| ETF 徽章显示 | 自选加 `510050.SH` | 列表显示 `📊 ETF` 徽章 |
-| ETF 跟踪指数 | 切到 510050 → AnalysisPanel | 行业 chip 显示"跟踪上证 50"(amber 配色) + note "场内 ETF · 宽基" |
-| 普通股票不受影响 | 切到 `600519.SH` | 行业 chip 显示"白酒"(原配色) |
-| 非主流 ETF 兜底 | 切到 `511999.SH`(不在表) | 行业为空,不报错 |
-| 深市 ETF | 切到 `159915.SZ` | 显示"跟踪创业板指",note"场内 ETF · 宽基" |
-| 行业 ETF | 切到 `512480.SH` | 显示"跟踪国证半导体芯片",note"场内 ETF · 行业" |
-| K 线 | ETF 周期切换 | 正常显示 |
+| 表内 ETF | 正常 | —— |
+| 表外 ETF | 按 T+1 / 股票费率算,`degraded` 里明说 | 「该 ETF 未在品种表内,已按保守口径(T+1 / 股票费率)计算,交易规则可能有偏差」 |
+| 表缺失 / 损坏 | 不抛错,空表 + 保守路径 + `logger.warning` | 同上 |
+| 表项缺 `t0` | 视为 `false`(保守) | —— |
 
-## 8. 风险与缓解
+### 4.4 前后端两份表防漂移
 
-| 风险 | 概率 | 影响 | 缓解 |
-|---|---|---|---|
-| ETF 跟踪指数会变(基金转型) | 低 | 中 | 静态表 + `version` 字段,年度更新 |
-| 新 ETF 持续新增 | 高 | 低 | v0.6 40 只够用,v0.7 接自动同步 |
-| 跟踪指数名和实际有出入(分级基金) | 中 | 中 | 文档注明"以基金公司公告为准";note 文案可发现 |
-| `etf_index.json` 加载失败 | 极低 | 中 | try/except + 降级到空 cache,不抛错 |
-| 前端 ETF 徽章颜色与持仓徽章混淆 | 中 | 低 | amber 配色 vs accent 配色,加 hover title |
-| 分类与实际不符 | 中 | 低 | v0.6 手工校验,v0.7 接自动数据校验 |
+前端徽章要出现在自选 / 持仓列表 —— 那些接口不返回品种属性 → 前端必须本地能查表。
+前端副本 `frontend/src/lib/etfInstruments.json` **由后端表生成**,并由后端测试逐项比对:
 
-## 9. 后续计划(v0.7+)
+```
+backend/tests/test_instrument.py::TestFrontendTableConsistency
+  ├─ test_frontend_copy_has_same_code_set   代码集合一致
+  ├─ test_frontend_copy_fields_match         name/index/category/t0/form 逐项一致
+  └─ test_frontend_copy_categories_match     类别中文标签一致
+```
 
-| 项 | 优先级 | 数据源 | 工作量 |
-|---|---|---|---|
-| 场外基金持仓 | P0 | 天天基金 / 东财 fund.eastmoney.com | 1-2 周 |
-| ETF 持仓股反查(10 大权重) | P0 | `fundf10.eastmoney.com FundArchivesDatas` | 2-3 天 |
-| 三线叠加补 ETF 指数对比 | P1 | 静态表 `index_code → secid` | 1 天 |
-| ETF 动态同步脚本 | P1 | `fundmobapi.eastmoney.com FundMNFInfo` | 1-2 天 |
-| ETF 完整详情页(规模/费率/折溢价) | P2 | 同上 | 3-5 天 |
-| ETF 跨市场套利监控(IOPV) | P3 | 实时 IOPV 数据源 | 1-2 周 |
-
-## 10. 附录
-
-### 10.1 数据源参考
-
-| 数据源 | URL | 用途 | 备注 |
-|---|---|---|---|
-| 场内 ETF 行情 | `https://hq.sinajs.cn/list=sh510050` | 实时报价 | 已有,Sina/Tencent |
-| 场内 ETF K 线 | `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.510050&klt=101` | 历史 K 线 | 已有,通过 Sina fallback |
-| 场外净值 | `https://hq.sinajs.cn/rn={ts}&list=f_{基金代码}` | 场外基金净值 | 需 Referer,GBK,v0.7 |
-| 场外实时估值 | `https://fundgz.1234567.com.cn/js/{基金代码}.js` | 场外基金估值 | JSONP,v0.7 |
-| 历史净值 | `https://fund.eastmoney.com/pingzhongdata/{基金代码}.js` | 场外净值曲线 | JS 文本 + 正则,v0.7 |
-| 基本信息 | `https://fundmobapi.eastmoney.com/FundMNewApi/FundMNFInfo?Fcodes={代码}` | 基金详情 | v0.7 |
-| 十大持仓 | `https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={代码}` | ETF 持仓股 | v0.7 |
-| 基金排行 | `https://fund.eastmoney.com/data/rankhandler.aspx` | 排行 | v0.7 |
-
-### 10.2 ETF 代码前缀规则
-
-| 前缀 | 市场 | 类型 | 说明 |
-|---|---|---|---|
-| 50xxxx | SH | 跨境/QDII/商品 | 510050(上证 50)是例外,其他多为跨境 |
-| 51xxxx | SH | 宽基/行业/债券 | 510300(沪深 300)/ 511010(国债 5 年) |
-| 56xxxx | SH | 行业/主题 | 56xxxx 系列 |
-| 58xxxx | SH | 行业/主题 | 588000(科创 50)/ 588080 等 |
-| 15xxxx | SZ | 宽基/行业/主题 | 159915(创业板)/ 159995(芯片) |
-| 16xxxx | SZ | 行业/主题/商品 | 162411(石油)/ 161725 等 |
-
-### 10.3 关键决策记录
-
-- **Decision 1**:静态表而非实时查询
-  - 原因:ETF 跟踪指数变化极慢(基金转型才变),40 只硬编码够用;实时查询 `FundMNFInfo` 增加请求量和复杂度
-  - 后续:v0.7 一次性同步脚本
-- **Decision 2**:不修改 Position / Watchlist 数据模型
-  - 原因:`stock_code` 字段已能容纳 ETF;`shares` 是整数,场内 ETF 100 整数倍,无需改
-  - 后续:场外基金再考虑 `Decimal` 化
-- **Decision 3**:`industry` 字段返回 `"跟踪{指数}"` 而非仅 `"{指数}"`
-  - 原因:让用户立刻知道这是"跟踪"语义,区别于 baostock 的"行业归属"
-  - 前端用 amber 配色进一步强化视觉
-- **Decision 4**:不实现三线叠加对 ETF 的支持
-  - 原因:需要 `index_code → secid` 映射,工作量大;v0.6 聚焦最小可用
-  - 后续:v0.7 加
+改后端表必须重跑生成脚本,否则 CI 红。已实测:故意把前端副本的 `category` 改错 → 测试立即失败并指出
+「510050.SH 的 category 不一致:后端='broad' 前端='BROKEN'」。
 
 ---
 
-**评审要点**:
-- [ ] ETF 列表覆盖范围是否足够(可补充具体代码)
-- [ ] `industry` 字段返回 `"跟踪{指数}"` 还是 `"{指数}"`?
-- [ ] ETF 徽章颜色(amber)是否合适?
-- [ ] 是否同时改 `PositionDetailModal`(如存在)?
-- [ ] 文档措辞是否清晰?
+## 5. 规则层(G1–G5)
+
+### G1 费用:ETF 免印花税、免过户费
+
+- `core/cost_engine.py` 新增 `TradeFees.etf_variant(base)`:印花税 / 过户费置 0,佣金沿用用户配置
+- `calculate_after_transaction` **签名不变**(费用由调用方传入)
+- 落点只有两处:**试算**(`api/calculator.py`)与**年报**(`annual_report_service.py`,逐笔按品种选档)
+- **判定层费用仍是 `None`** —— 持仓成本链本就不含费(D3 既有口径不变),`cost_settings` 表与 API 契约零改动
+
+实测:卖出 1000 @ 20.000 → 股票档 fee **15.20** / ETF 档 fee **5.00**(佣金 5 + 印花税 10 + 过户费 0.2)
+
+### G2 T+0 / T+1 回转规则
+
+- `trade_review_service` 新增 `T0_NOTE`;`_build_t_directions(..., t0=False)`
+- 前置条件拆成 `common_block`(通用)与 `position_block`(仓位相关),按品种分流
+- **T+0 品种不再卡「缺底仓比例」**(T+1 仍卡 —— 卖腿要预留老底仓)
+- 提示文案分流:股票「A 股 T+1:当天买入的股票当天不能卖出…」/
+  ETF「该品种为 T+0(当日可回转):当天买入的份额当天就能卖出…(具体以交易软件显示的品种属性为准)」
+
+### G3 正T 上限公式
+
+| 品种 | 正T(先买后卖)上限 | 反T(先卖后买)上限 |
+|---|---|---|
+| T+1 | `min(可动T仓 M, 资金可买股数)` | 受 M 约束 |
+| **T+0** | **只受资金约束** `floor(可用资金 ÷ 买价)` | 仍受 M 约束(不能把仓位卖光) |
+
+`_floor_lot`(100 份整手)不变。
+
+实测(持股 1000 → 可动 T 仓 500,可用资金 20000):
+
+| 标的 | 品种 | 正T 上限 | 依据 |
+|---|---|---|---|
+| 513120.SH 港股创新药 | T+0 | **16,500 股**(≈¥19,899) | 只受资金约束 |
+| 002185.SZ 华天科技 | T+1 | **500 股**(≈¥7,645) | 受可动 T 仓约束 |
+
+### G4 涨跌停文案分流
+
+`NEAR_LIMIT_UP_PCT = 9.5` **不分档**(9.5% 对 ETF 已是极端涨幅),只改文案:
+
+- 股票:「已接近涨停(9.5%)」
+- ETF:「当日涨幅已达 X%,不追高(ETF 无涨跌停限制,涨幅可以更大)」
+
+一字板判定保留(ETF 也会一字)。
+
+### G5 AI 提示词按品种
+
+- `modules/analysis/prompts.py`:`build_risk_prompt` / `build_pm_prompt` 加 `instrument_kind` 参数
+- ETF 风险清单换成:**折溢价 / 跟踪误差 / 流动性 / 汇率 / T+0 规则差异**
+- PM 严重风险换成:**跟踪指数大幅下跌 / 折溢价过大**
+- 判定层纯函数、零 IO、零 LLM;LLM 只翻译不计算;缺数据 → `None` + degraded,绝不编数字
+
+---
+
+## 6. 展示层
+
+### 6.1 品种徽章 `components/ui/EtfBadge.tsx`
+
+| 形态 | 样式 |
+|---|---|
+| 表内 ETF | 实线琥珀徽章 `bg-warn-bg` + `text-warn` + `border-warn/30` |
+| 表内 T+0 品种 | 徽章内再加深底小块 `T+0`(`bg-warn/30`) |
+| 表外 ETF | 虚线灰徽章(`border-dashed` + `text-text-ter`) |
+| 股票 | 不渲染 |
+
+hover 说明:形态(场内 ETF / 场内 LOF)· 类别 · 跟踪指数 · 是否 T+0。
+
+> **配色语义**:琥珀(warn 家族)表示「这是另一类标的」,刻意避开
+> accent(青 = 选中/焦点)与 danger(红 = 判定结论)—— 徽章是**品种分类**,不是判定结论。
+
+### 6.2 落点清单
+
+| 位置 | 组件 |
+|---|---|
+| 自选 · 盯盘侧栏(rail) | `components/watch/WatchList.tsx` |
+| 自选 · 大卡片 | `components/watch/WatchList.tsx` |
+| 持仓摘要表(首页) | `components/positions/PositionSummaryTable.tsx` |
+| 持仓卡片列表(/positions) | `components/positions/PositionsList.tsx` |
+| 个股详情页标题 | `app/(app)/stock/[code]/page.tsx` |
+
+### 6.3 跟踪指数 chip
+
+落在**机械信号卡(SignalPanel)标题行下方**(现状 AnalysisPanel 没有行业 chip 位置,SignalPanel 是唯一稳定落点):
+
+- 股票 → 行业名(baostock 口径),灰白 chip
+- ETF → 「跟踪 {指数}」,琥珀 chip + 副注「场内 ETF · QDII」
+
+---
+
+## 7. 接口与行业归属
+
+### 7.1 行业归属兜底顺序调整
+
+```
+resolve_industry(带网络):baostock → ETF 本地表 → 新浪排行反查 → 降级
+resolve_industry_sync(纯本地):baostock → ETF 本地表
+```
+
+**为什么 ETF 提前**:命中 ETF 本地表是纯本地判定,而新浪要打网络。
+先查 ETF,否则每个 ETF 请求都要白等一次网络超时。股票路径完全不受影响。
+
+### 7.2 analysis 端点新增三字段
+
+`GET /api/stock/{code}/analysis` 增加(缓存命中与未命中两条路径都注入):
+
+| 字段 | 股票 | ETF |
+|---|---|---|
+| `industry` | 行业名 | 「跟踪 {指数}」 |
+| `industry_source` | `baostock` | `etf_index` |
+| `industry_note` | `null` | 「场内 ETF · {类别}」 |
+
+实测:`513120.SH` → `{"industry":"跟踪中证香港创新药","source":"etf_index","note":"场内 ETF · QDII"}`;
+`002185.SZ` → `{"industry":"C39计算机、通信和其他电子设备制造业","source":"baostock","note":null}`。
+
+### 7.3 `GET /api/stock/{code}/industry`
+
+返回 `{code, industry, source, note}`;`source` 取值 `baostock` / `etf_index` / `sina`。
+表外 ETF → `industry: null`(不编造)。
+
+---
+
+## 8. 与 v0.6 原稿的差异
+
+| 原稿(v0.6) | 实际实施 | 原因 |
+|---|---|---|
+| 表文件 `etf_index.json` | `etf_instruments.json` | 表里不止指数,还有类别 / T+0 / 形态 → 叫「品种表」更准 |
+| ~40 只,含债券 / 货币 ETF 条目 | 46 项;债券 / 货币类别字段预留但**未启用条目** | 这两类的 T+0 与费用规则不同,不能顺手带过 |
+| `resolve_industry` 顺序 baostock→新浪→ETF→降级 | baostock→**ETF**→新浪→降级 | ETF 是本地表判定,新浪要打网络;先查 ETF 省一次超时 |
+| 降级返回 `source="degrade"` | 降级是 `industry=null`(+ note) | 现状实现就是 `None`,不是 `"degrade"` 字符串 |
+| 跟踪指数显示在 AnalysisPanel | 落在 **SignalPanel**(机械信号卡) | 现状 AnalysisPanel 没有行业 chip 的位置 |
+| 只解决「看得见」 | **新增规则层 G1–G5** | 原稿没解决「算得对」—— 用股票规则算 ETF,结论是事实性错误 |
+| 无 LOF 概念 | 新增 `form=lof` | 场内 LOF 规则与 ETF 一致但不是 ETF,文案别混为一谈 |
+
+---
+
+## 9. 测试与实测记录
+
+### 9.1 自动测试
+
+| 文件 | 条数 |
+|---|---|
+| `tests/test_instrument.py`(新增) | 24(判定 7 + 降级 3 + 费用 3 + 表完整性 5 + 前后端一致性 3 + 表缺失/损坏 3) |
+| `tests/test_trade_review_service.py` | +12(共 76;T+0 上限 / 反T 约束 / 文案 / 降级) |
+| `tests/test_industry_service.py` | +14(共 20;ETF 兜底 / 不打新浪 / sync 版) |
+| `tests/test_calculator_api.py` | +5(共 24;股票档 15.20 / ETF 档 5.00 / 表外仍走 ETF 档) |
+| `tests/test_decision_service.py` | +1(共 33;股票说涨停 / ETF 不说但仍提醒不追高) |
+
+全量:**1492 → 1548 passed(新增 56 条),零红**(11m51s)。
+
+### 9.2 真机实测(tabbit / Playwright)
+
+| 场景 | 结果 |
+|---|---|
+| 自选 rail 9 只 ETF 徽章 | 全部正确:琥珀实线 + `T+0` 深底小块(`rgba(245,165,36,.3)`)+ 跟踪指数准确 + LOF 显示「场内 LOF」 |
+| 持仓卡片徽章 | `513120.SH` 行显示 `📊 ETF T+0` ✓ |
+| 个股详情页 | 标题徽章 + 行业 chip「跟踪中证香港创新药」+ 副注「场内 ETF · QDII」 ✓ |
+| 计算器 T 卡 T+0 | 513120:正T 上限 16,500 股(资金约束),前提写明「T+0 品种,卖出腿可用当日买入的份额,无需预留老底仓」 |
+| 计算器 T 卡 T+1 | 002185:正T 上限 500 股(可动 T 仓约束),前提写明「需有老底仓承接卖腿」 |
+| console 错误 | 0 |
+
+实测用临时持仓 + 账户资金 20,000,**测完已清理**(持仓删除 204、现金恢复 `null`),
+用户真实持仓与自选未被改动。
+
+---
+
+## 10. 风险与已知边界
+
+| 边界 | 说明 |
+|---|---|
+| 表外 ETF 一律按 T+1 | 跨境 / 商品 ETF 实际 T+0 → 保守处理会**低估**正T 上限。这是刻意的:宁可少算,不可算错 |
+| 表是手工维护 | 新增品种要:① 改后端表 ② 重跑生成脚本 ③ 跑 `test_instrument.py` |
+| 跟踪指数是「展示名」 | 用跟踪指数名的常见简称;业绩比较基准与跟踪标的不同的(如混合型 LOF)按主口径记 |
+| 债券 / 货币 ETF | 类别已留,条目未启用 |
+| 折溢价 / 规模 / 费率 | 未接数据源,界面上不出现 |
+
+---
+
+## 11. 后续计划
+
+| 项 | 优先级 | 说明 |
+|---|---|---|
+| 品种表增量同步脚本 | 中 | 从天天基金 F10 拉「跟踪标的 / 基金类型」自动补条目 |
+| 表外 ETF 的 T+0 判定 | 中 | 需要更细的代码段 / 基金属性数据源,当前只能保守 |
+| ETF 折溢价 | 低 | 东财基金详情接口 |
+| 债券 / 货币 ETF | 低 | 规则另需确认,别顺手带过 |
+| 场外基金 | 低 | `.OF` 后缀 + 另一套数据源 |
+
+---
+
+## 附录 A:关键决策记录
+
+| # | 决策 | 依据 |
+|---|---|---|
+| D29 | 品种规则用静态 JSON 表(零数据库迁移) | 品种属性是**低频变化**的静态事实;迁移表 + 同步任务的成本不划算 |
+| D30 | 表外 ETF 保守按 T+1,且判定层必须明说「未在品种表内」 | 无据不判 T+0;「不知道」和「按保守口径」是两件事 |
+| D31 | T+0 正T 上限只受资金约束;反T 两类都受 M 约束 | T+0 卖出腿可用当日买入份额;反T 不能把仓位卖光 |
+| D32 | T+0 品种不卡「缺底仓比例」 | T+1 卖腿要预留老底仓,T+0 不需要 |
+| D33 | 费用适配只落试算与年报;判定层费用仍 `None` | 持仓成本链本就不含费;`cost_settings` 表与 API 契约零改动 |
+| D34 | 涨跌停阈值不分档,只改文案 | 9.5% 对 ETF 已是极端涨幅,分档反而更啰嗦 |
+| D35 | `resolve_industry` 把 ETF 分支提到新浪之前 | 否则每个 ETF 请求都白等一次网络超时 |
+| D36 | analysis 用纯本地 `resolve_industry_sync` 注入行业 | 零网络开销;缓存命中与未命中都注入 |
+| D37 | 前端持有品种表副本 + 后端测试逐项比对 | 徽章要出现在不返回品种属性的列表接口里;比对防漂移 |
+| D38 | 修前端 `stockCode.ts` 缺失的 `['5','SH']` 前缀 | 既有 bug:认不出沪市 ETF,前后端市场推断不一致 |
+| D39 | 行业 chip 落在 SignalPanel 标题行下方 | 现状 AnalysisPanel 没有行业 chip 位置 |
+| D40 | 徽章 amber;T+0 为徽章内深底小块;表外虚线灰 | 用户拍板(视觉稿 `docs/design/preview/etf-instrument-preview.html`) |

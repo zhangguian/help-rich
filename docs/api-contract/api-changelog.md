@@ -28,6 +28,38 @@
 
 ## 历史记录
 
+### 2026-10-25 | v0.6 | 场内 ETF 品种识别 + 交易规则适配(费用 / T+0 / 无涨跌停)
+
+#### Added(新增)
+- `GET /api/stock/{code}/analysis` 新增三个字段:`industry`、`industry_source`、`industry_note`
+  (节点缓存命中与未命中**两条路径都注入**;ETF → 「跟踪 {指数}」+ `source=etf_index`,股票 → baostock 行业名)
+- `GET /api/stock/{code}/industry` 的 `source` 新增取值 `etf_index`;ETF 返回「跟踪 {指数}」+ `note`「场内 ETF · {类别}」
+- 静态品种表 `backend/app/data/etf_instruments.json`(46 项,含 category / t0 / form 字段),
+  判定层 `backend/app/core/instrument.py`(`resolve_instrument` / `fees_for_instrument` / `degraded_note`)
+
+#### Changed(修改)
+- `POST /api/calculator` 与 `POST /api/calculator/review`:费用按品种选档 —— 场内 ETF/LOF **免印花税、免过户费**,佣金沿用
+- `POST /api/calculator/review`:`t_plus_one_note` 按品种分流;T+0 品种的**正T 上限只受资金约束**(不再受可动 T 仓 M 约束),反T 仍受 M 约束
+- `GET /api/annual-report/{year}`:逐笔按品种选费用档
+- 追高文案按品种分流:ETF 不再说「涨停」,改说「当日涨幅已达 X%,不追高(ETF 无涨跌停限制,涨幅可以更大)」
+- AI 风险清单 / PM 严重风险按品种分流(ETF → 折溢价 / 跟踪误差 / 汇率 / T+0 规则差异)
+
+#### Deprecated(弃用)
+- 无。请求体与响应结构**均未变**,品种差异只体现在取值与文案上。
+
+#### Fixed(修复)
+- 行业归属兜底顺序调整为 baostock → **ETF 本地表** → 新浪 → 降级:命中 ETF 是纯本地判定,
+  原顺序会让每个 ETF 请求白等一次新浪网络超时
+- 前端 `stockCode.ts` 缺失 `['5','SH']` 前缀 → 认不出沪市 ETF(前后端市场推断不一致)
+
+#### Test
+- 新增 56 条(`test_instrument.py` 24 / `test_trade_review_service.py` +12 / `test_industry_service.py` +14 /
+  `test_calculator_api.py` +5 / `test_decision_service.py` +1);全量 **1548 passed 零红**(基线 1492)
+- 真机实测(tabbit):自选/持仓/个股页徽章渲染正确、零 console 错误;T+0 正T 上限 16,500 股(资金约束)
+  vs T+1 上限 500 股(可动 T 仓约束);实测用临时持仓与账户资金测完已清理
+
+---
+
 ### 2026-08-02 | v0.4.4 | MiniMax 迁移新平台 minimaxi.com(适配 Token Plan 订阅 Key)
 
 #### Changed(修改)
