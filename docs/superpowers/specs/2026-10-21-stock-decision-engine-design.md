@@ -55,12 +55,32 @@
 
 ### 2.2 非目标（本轮明确不做）
 
-- 不增强 LLM schema、不新增 LLM 调用；现有「开始分析」保持原样，作为**可选的白话翻译层**。
 - 不接消息面（新闻 / 公告 / 事件因子 / 龙虎榜）。
 - 不接多智能体辩论结论。
 - 不做「条件命中 → 推送提醒」（价格提醒 / 微信通知）联动。
 - 不做模拟盘下单联动。
 - 不改 `ta_service` 现有指标算法，只消费其输出。
+- 不做**网格自动挂单 / 执行引擎**：网格只给配置建议（区间、格数、资金、失效条件），不下单、不回测收益。
+- 不做盘中复盘逐票建议的口径统一（本期只统一「操作决策卡 ↔ AI 解读」这一对）。
+
+### 2.3 目标补充（2026-10-25 增补：操作建议增强）
+
+> 本节为 v0.10「操作建议增强」增补。上文 §2.1 的目标仍然有效，以下为**同层新增**，
+> 与之冲突处以本节为准。
+
+1. **操作决策卡内新增「操作建议」区**：六格要素（价位 / 止损 / 仓位 / 触发 / 时间 / 不动）+ AI 白话 + **网格交易配置建议**。
+2. **决策引擎补 5 个维度**：成本锚点 / 时间窗口 / 费用影响 / 品种规则 / 集中度。**只增信息，不改既有 verdict 逻辑与阈值**（见 §6.8）。
+3. **新增网格交易配置建议**：判定器 `judge_grid_plan`（见 §6.9），产出独立子块 `grid_plan`。
+4. **口径统一（消除两套说法）**：把决策压成**事实包**（见 §5.4），`/analysis` 的提示词注入同一份事实包，
+   AI 只能引用、不得改写其中的数字；前端**以决策卡为准**，AI 解读区只保留白话。
+5. **AI 白话是增量增强，不是依赖**：
+   - `/decision` 端点**仍然零 LLM、纯算法、秒出**（本条不可动摇）；
+   - 白话默认复用既有 `/analysis` 结果（零额外成本），另提供**按钮触发**的 `GET /api/stock/{code}/decision-advice`；
+   - LLM 失败即退回规则文案，**决策卡永不空白**。
+
+> ⚠️ **与旧版 §2.2 首条的冲突说明**：旧版写「不增强 LLM schema、不新增 LLM 调用」。
+> 本轮**确实新增**了一个显式触发的端点（`/decision-advice`）与一个事实包注入（`/analysis` 提示词），
+> 故该条已被本节取代。**「决策端点不得依赖 LLM」这一条仍然成立且继续强制。**
 
 ---
 
@@ -184,6 +204,14 @@ effective_price = current_price if current_price is not None else indicators.lat
   "position_pct": str,
   "do_not": [str],
   "t_plan": TPlan | None,
+  "grid_plan": GridPlan | None,        # v0.10：网格交易配置建议（§6.9）
+  "suggestions": Suggestions | None,   # v0.10：操作建议六格（§6.10）
+  "advice": str | None,                # v0.10：规则白话兜底（零 LLM）
+  "cost_anchor": CostAnchor | None,        # v0.10：§6.8 成本锚点
+  "time_window": TimeWindow | None,        # v0.10：§6.8 时间窗口
+  "cost_effect": CostEffect | None,        # v0.10：§6.8 费用影响
+  "instrument_rule": InstrumentRule | None, # v0.10：§6.8 品种规则
+  "concentration": Concentration | None,    # v0.10：§6.8 集中度
   "trend_state": {"phase": str, "note": str},
   "market_env": MarketContext,
   "data_quality": {"degraded": [str]},
@@ -213,6 +241,73 @@ TPlan = {
   "base_position_pct": str,
   "unsuitable_signals": str,   # suitable=False 时写明原因
   "needs_position": bool,      # 空仓时 True：做 T 需先有底仓
+}
+
+# ---- v0.10 网格交易配置建议（§6.9）----
+GridPlan = {
+  "suitable": bool,
+  "mode": "add" | "base" | None,   # add=加仓网格（需额外现金）；base=底仓高抛低吸（零额外现金）
+  "reason": str,
+  "range_low": float | None,       # 区间下沿（保守边：max(近20日最低价, P20)）
+  "range_high": float | None,      # 区间上沿（保守边：min(近20日最高价, P80)）
+  "span_pct": float | None,        # 区间宽度 %（相对现价）
+  "grids": int | None,             # 网格档数（≤ GRID_MAX_GRIDS）
+  "step_pct": float | None,        # 每格步长 %
+  "step_price": float | None,      # 每格价差（元）
+  "shares_per_grid": int | None,   # 每格股数（A 股 / ETF 场内均为 100 股 1 手）
+  "capital_per_grid": float | None,   # 每格所需资金（元）
+  "cash_needed": float | None,     # 加仓网格最坏情况累计所需现金（元）
+  "cash_available": float | None,  # 账户可用资金（元）；None = 未填写
+  "net_step_pct": float | None,    # 单格净收益率 %（已扣往返费用率）
+  "roundtrip_fee_pct": float | None,   # 往返费用率 %（股票 0.102 / ETF 0.052 口径）
+  "fee_basis": "configured" | "default_estimate" | None,  # 费用口径标注（见 §6.8.3）
+  "net_profit_per_grid": float | None,   # 单格净收益金额（元，已扣最低佣金）
+  "replace_t_plan": bool,          # True = 建议用网格替代手动做 T（二者择一）
+  "risk": str,                     # 失效条件（跌破下沿 / 单边下行资金耗尽）
+  "unsuitable_signals": str,       # suitable=False 时写明原因
+}
+
+# ---- v0.10 操作建议六格（§6.10）----
+Suggestions = {
+  "price":     {"label": "价位", "value": str} | None,
+  "stop_loss": {"label": "止损", "value": str} | None,
+  "position":  {"label": "仓位", "value": str} | None,
+  "trigger":   {"label": "触发", "value": str} | None,
+  "timing":    {"label": "时间", "value": str} | None,
+  "avoid":     {"label": "不动", "value": str} | None,
+}
+
+# ---- v0.10 五个补维度（§6.8）----
+CostAnchor = {
+  "cost_basis": float | None,
+  "current_price": float | None,
+  "pnl_pct": float | None,          # 浮盈(+)/浮亏(-) %
+  "break_even_gap_pct": float | None,  # 回本还需涨幅 %（浮亏时）
+  "distance_to_stop_pct": float | None,  # 距止损位 %（负 = 已在止损下方）
+  "distance_to_target_pct": float | None,  # 到第一目标 P80 的空间 %
+  "risk_reward": float | None,      # 风险收益比 = 上行空间 / 下行空间
+}
+TimeWindow = {
+  "holding_days": int | None,       # 自然日
+  "overdue": bool | None,           # 是否超过 HOLD_DAYS_LIMIT
+  "note": str,                     # 口径说明（自纳入本系统起算）
+}
+CostEffect = {
+  "roundtrip_fee_pct": float | None,
+  "fee_basis": "configured" | "default_estimate" | None,
+  "spread_pct": float | None,       # 做 T 预期差价 %
+  "worth_it": bool | None,          # 差价 ≥ 2 × 往返费用率
+  "note": str,                     # ETF 免印花税 / 过户费说明
+}
+InstrumentRule = {
+  "kind": "stock" | "etf",
+  "t0": bool,
+  "notes": [str],                  # 无涨跌停 / 免印花税过户费 / 当日可回转
+}
+Concentration = {
+  "cost_share_pct": float | None,  # 该票持仓成本占比 %
+  "level": "low" | "warn" | "strong" | None,
+  "note": str,
 }
 ```
 
@@ -250,6 +345,47 @@ TPlan = {
   "degraded": [str],                 # 本层降级说明
 }
 ```
+
+### 5.4 事实包 `FactPack`（v0.10 · 单一真相源）
+
+**目的**：决策卡与 AI 解读对同一只票给出两套说法。事实包把决策压成**可序列化的确定性数字集合**，
+两端都只引用它 → 口径天然统一，不再事后校对。
+
+```python
+FactPack = {
+  "stock_code": str,
+  "as_of": str | None,              # K 线最新日（AI 解读的数据时间）
+  "verdict": str,
+  "headline": str,
+  "role": str,
+  "confidence": str,
+  "position_status": str,
+  "actions": [Action],              # 只保留 status ∈ {now, armed} 的可执行项
+  "suggestions": Suggestions | None, # 六格（确定性）
+  "t_plan": TPlan | None,
+  "grid_plan": GridPlan | None,
+  "cost_anchor": CostAnchor | None,
+  "time_window": TimeWindow | None,
+  "cost_effect": CostEffect | None,
+  "instrument_rule": InstrumentRule | None,
+  "concentration": Concentration | None,
+  "stop_loss": {"price": float, "basis": str} | None,
+  "position_pct": str,
+  "do_not": [str],
+  "degraded": [str],
+}
+```
+
+**铁律**：
+1. 事实包**只含确定性数字**，不得出现任何 LLM 生成的措辞或推算值。
+2. LLM 提示词里，事实包是**唯一真相源**：必须原样引用，不得改写、不得另算、不得补充未列出的价位。
+3. 事实包**不含**「预计赚多少 / 目标价 / 胜率」——沿用 §10.4 口径（胜率型概率提示，不承诺收益）。
+4. 任一字段为 `None` 时，LLM 必须写「暂无」，不得用 `0` 或空串顶替（零编造不变量，见 §11）。
+
+**落点**：
+- `backend/app/services/decision_advice_service.py::build_fact_pack(decision)`（纯函数）
+- `/analysis` 端点把事实包 JSON 追加进 `user_msg`（复用该端点已有的 klines/quote/position，**不增加网络 IO**）
+- `/decision-advice` 端点把事实包作为 LLM 输入，只输出白话
 
 ---
 
@@ -620,6 +756,181 @@ loss   → '解套参考'
 
 ---
 
+### 6.8 五个补维度（v0.10）
+
+> **只增信息，不改既有 verdict 逻辑与阈值。** 这五个维度不参与 `derive_verdict`，
+> 不改变任何 `now`/`armed`/`blocked` 判定，不改 §6.1~§6.7 的任何阈值。
+> 任一输入缺失 → 对应字段 `None` + 写进 `degraded`，**绝不编数字**。
+
+#### 6.8.1 `judge_cost_anchor` → 成本锚点
+
+```
+输入：ctx.cost_basis / effective_price(ctx) / indicators.position.p80 / indicators.position.stop_loss_price
+pnl_pct             = (ep - cost_basis) / cost_basis * 100          # 浮盈(+)/浮亏(-)
+break_even_gap_pct  = (cost_basis - ep) / ep * 100   仅浮亏时给；浮盈时 None
+distance_to_stop_pct= (stop_loss_price - ep) / ep * 100              # 负 = 已在止损下方
+distance_to_target_pct = (p80 - ep) / ep * 100                      # 浮盈时给
+risk_reward         = distance_to_target_pct / abs(distance_to_stop_pct)   # 分母为 0 → None
+```
+
+#### 6.8.2 `judge_time_window` → 时间窗口
+
+```
+输入：ctx.holding_days（自然日，由 IO 层算好注入；判定层不做日历计算）
+HOLD_DAYS_LIMIT = 20（自然日，约合 14 个交易日）
+overdue = holding_days > HOLD_DAYS_LIMIT
+note    = f'自纳入本系统起 {holding_days} 天（自然日）'
+```
+
+**取数口径（IO 层，优先级从高到低）**：
+1. `transactions` 表该票**最早 `trade_date`**（活链起点，最准）；
+2. `positions.created_at` 的日期（**快照导入日，不是真实建仓日**）；
+3. 都拿不到 → `holding_days = None` + degraded。
+
+> ⚠️ `Position` 数据类**没有** `base_date` 字段——`base_date` 只是导入接口的入参（决定吸收哪些流水），**从未落库**。
+> 实现不得假设 `position.base_date` 存在。
+
+#### 6.8.3 `judge_cost_effect` → 费用影响（含费用口径约定）
+
+**费用口径 `fee_basis`（三态，全项目统一）**：
+
+| 取值 | 条件 | 说明 |
+|---|---|---|
+| `'configured'` | 费用设置 `enabled=true` | 按用户自己的费率算 |
+| `'default_estimate'` | 费用设置 `enabled=false`（**当前默认态**） | 按**系统默认档**估算（佣金万 2.5 / 最低 5 元 / 印花税千 0.5 / 过户费万 0.1），并在 degraded 写明「费用设置未启用，费用按默认档估算」 |
+| `None` | 费用档读取失败 | 该维度整体 None + degraded |
+
+> 默认档是**系统常量、来源可追溯**，不属于「编造数字」。
+> 若不启用估算，费用维度与网格净收益将对当前用户**完全不显示数字**（网格会因此无法给出结论）。
+
+```
+roundtrip_fee_pct = 2×commission_rate + stamp_tax_rate + 2×transfer_fee_rate
+  股票口径 = 0.025%×2 + 0.05% + 0.001%×2 = 0.102%
+  ETF  口径 = 0.025%×2 + 0    + 0          = 0.05%
+spread_pct = t_plan.amplitude_pct（做 T 区间振幅 %）
+worth_it   = spread_pct >= T_SPREAD_MIN_MULTIPLE(2) × roundtrip_fee_pct
+```
+
+#### 6.8.4 `judge_instrument_rule` → 品种规则
+
+```
+ETF ：notes += 'ETF 无涨跌幅限制' + '免印花税、免过户费（只收佣金）'
+      t0=True  → notes += '当日可回转（T+0）'
+      t0=False → notes += 'T+1，当日买入当日不可卖出'
+股票：notes += '股票有涨跌幅限制（±10%）' + 'T+1，当日买入当日不可卖出'
+```
+
+#### 6.8.5 `judge_concentration` → 集中度
+
+```
+输入：ctx.position_share_pct（该票持仓成本 ÷ 全量持仓成本合计 × 100，IO 层算好）
+cost_share_pct <  CONCENTRATION_WARN_PCT(30)   → level='low'
+cost_share_pct >= CONCENTRATION_WARN_PCT(30)   → level='warn'
+cost_share_pct >= CONCENTRATION_STRONG_PCT(50) → level='strong'
+```
+
+> 口径取**成本占比**（而非市值占比）：只多 1 次本地 DB 查询，不额外拉全量行情。
+
+### 6.9 `judge_grid_plan` → 网格交易配置建议（v0.10）
+
+**定位**：网格是**长期挂单式策略**，与「做 T」（盘中手动来回）**互为替代关系**，不是叠加。
+判定必须比 `judge_t_plan` **更保守**——`judge_t_plan` 只看均线排列 + 3 日涨跌，
+而网格在单边市里会越买越多直到资金耗尽。
+
+**新增阈值常量**：
+
+```
+GRID_WINDOW = 20                  # 网格观察窗口（根）
+GRID_MIN_AMPLITUDE_PCT = 3.0      # 近 20 日平均振幅下限
+GRID_MIN_SPAN_PCT = 8.0           # 区间宽度下限（相对现价）
+GRID_TARGET_STEP_PCT = 2.0        # 目标步长
+GRID_MAX_GRIDS = 10               # 最多档数
+GRID_MIN_PROFIT_MULTIPLE = 2      # 单格净收益需 ≥ 2× 往返费用率
+GRID_LOT_SIZE = 100               # 1 手 = 100 股（A股 / 场内 ETF / LOF 均是）
+```
+
+**判定链（顺序即优先级，先否决）**：
+
+| # | 判据 | 不通过 → `unsuitable_signals` |
+|---|---|---|
+| G0 | K 线 ≥ `GRID_WINDOW` 根 且 `p20`/`p80` 齐备 且 现价可得 | `K 线不足，无法计算网格区间` |
+| G1 | `channel.state` 既不是 `'up'` 也不是 `'down'` | 下行 → `下跌通道中不要布网格：越买越套`；上行 → `上涨通道中布网格会卖飞底仓` |
+| G2 | 近 20 日平均振幅 ≥ `GRID_MIN_AMPLITUDE_PCT` | `近 20 日平均振幅 {x}% 不足 3%，网格抓不到差价` |
+| G3 | `span_pct ≥ GRID_MIN_SPAN_PCT` | `区间宽度 {x}% 不足 8%，放不下有意义的网格` |
+| G4 | 现价在区间内（容差 1 格） | `现价已跌破网格下沿 {x}，布网格等于接飞刀` |
+| G5 | 持仓 ≥ `GRID_LOT_SIZE` | `当前无底仓，网格需先建底仓` |
+| G6 | 步长与费用：费率口径 + **金额口径**（扣最低佣金后 > 0） | `每格毛收益 {x} 元，扣手续费 {y} 元后为负，网格不划算` |
+| G7 | 资金：`cash_available ≥ cash_needed` → `mode='add'`，否则 `mode='base'` | **不否决**，降级为底仓模式 + 注明「现金不足，只能做底仓高抛低吸」 |
+| G8 | 集中度：`position_share_pct ≥ CONCENTRATION_STRONG_PCT(50)` → 禁止 `mode='add'` | **不否决**，强制 `mode='base'` + 警示「该标的已占持仓成本 {x}%，加仓会放大单一暴露」 |
+
+**计算细节**：
+
+```
+lo20 / hi20   = 近 20 根 K 线的最低 low / 最高 high
+range_low     = max(lo20, p20)          # 保守边（与 t_plan 同思路）
+range_high    = min(hi20, p80)
+span_pct      = (range_high - range_low) / ep * 100
+step_pct      = max(GRID_TARGET_STEP_PCT, round(GRID_MIN_PROFIT_MULTIPLE × roundtrip_fee_pct, 2))
+                step_pct > span_pct → 不适合（区间放不下一个步长）
+grids         = min(GRID_MAX_GRIDS, floor(span_pct / step_pct))
+step_price    = ep × step_pct / 100
+shares_per_grid = GRID_LOT_SIZE（100 股）
+capital_per_grid = shares_per_grid × ep          # 每格涉及的资金（一手金额），**不是**每格利润
+cash_needed   = ceil(grids / 2) × capital_per_grid      # 最坏情况：跌到下沿时累计买入档数
+net_step_pct  = step_pct - roundtrip_fee_pct
+毛收益         = shares_per_grid × step_price           # 卖一档买回一档的价差 × 股数
+费用           = buy_fee(shares, price) + sell_fee(shares, price)      # 含最低佣金
+net_profit_per_grid = 毛收益 - 费用       # ≤ 0 → G6 不通过
+```
+
+> ⚠️ **口径提醒**：`capital_per_grid`（一手金额）与 `gross_profit`（每格利润）是两个数。
+> 把两者混为一谈会让「所需资金」和「每格净收益」同时算错 ——
+> 例如 25 元股价、2% 步长、100 股：一手金额 2516 元，每格毛收益 50.3 元，
+> 扣掉 10 元最低佣金后净赚 40.3 元；按「一手金额 = 毛收益」算会得出「净亏 9 元」的荒谬结论。
+
+**`mode` 语义**：
+- `'add'` = 加仓网格：每跌一档买一档，需要额外现金（`cash_needed`）；
+- `'base'` = 底仓高抛低吸：零额外现金，卖出档数 ≤ 底仓手数；
+- `None` = 不适用（`suitable=false`）。
+
+**`replace_t_plan` 与互斥文案**：
+
+```
+replace_t_plan = grid.suitable AND t_plan.suitable
+  → reason  = '震荡市建议以网格为主（不用盯盘），手动做 T 与网格互斥，择一执行'
+grid.suitable AND NOT t_plan.suitable
+  → reason  = '震荡市建议以网格为主（不用盯盘）；当前手动做 T 条件不满足'
+```
+
+**`risk` 文案（必须含失效条件与最坏风险）**：
+
+```
+跌破 {range_low} 元（区间下沿）网格失效，按止损离场，不要继续接；
+突破 {range_high} 元只是少赚，不损；
+单边下行时网格会越买越多直到资金耗尽 —— 这是网格最大的风险。
+```
+
+**不承诺收益**：只给「每格净收益 X 元 / 需要资金 Y 元 / 区间 Z~W 元」，
+不给目标价、不给「预计赚多少」（沿用 §10.4 口径）。
+
+### 6.10 「操作建议」六格 `suggestions`（v0.10）
+
+**六格固定、值可为 `None`**（`None` = 该维度数据不足，前端**不渲染该格**，不显示空框）。
+
+| 格 | 标签 | 取值来源（**全部来自既有判定结果，不新算价**） |
+|---|---|---|
+| `price` | 价位 | `actions` 中第一条 `status ∈ {now, armed}` 的 `condition` + `price` |
+| `stop_loss` | 止损 | 既有 `stop_loss.price` + §6.8.1 的 `distance_to_stop_pct` |
+| `position` | 仓位 | 既有 `position_pct` |
+| `trigger` | 触发 | 第一条 `status == 'armed'` 的 `condition` |
+| `timing` | 时间 | §6.8.2 `time_window` + §6.8.1 `break_even_gap_pct` |
+| `avoid` | 不动 | 既有 `do_not`（多条用 `·` 连接） |
+
+> 「建议」区与既有「行动清单」「做 T 块」「网格块」是**同一套数字的不同切面**，不得互相矛盾：
+> 六格里的价位/止损必须与 `actions`、`stop_loss`、`t_plan`、`grid_plan` 完全一致（同一事实源）。
+
+---
+
 ## 七、市场环境规格
 
 ### 7.1 大盘 `market`
@@ -732,6 +1043,53 @@ GET /api/stock/{stock_code}/decision
 - 纯确定性：**不调用 LLM**，不产生 LLM 费用。
 - 无副作用、不落库。
 - 可加 60s 进程内内存缓存（按 stock_code），首版可不加。
+- **v0.10 增补**：`/decision` 响应新增 §6.8 五个维度、§6.9 `grid_plan`、§6.10 `suggestions` 六格、
+  以及规则白话 `advice`（零 LLM）。**全部为纯增量，旧字段语义不变。**
+
+### 8.2 `GET /api/stock/{stock_code}/decision-advice`（v0.10 新增）
+
+**用途**：显式触发的 AI 白话生成（**按钮触发**，不在决策卡首屏自动烧 token）。
+
+```
+GET /api/stock/{stock_code}/decision-advice
+```
+
+**成功 200**
+
+```jsonc
+{
+  "advice": {
+    "headline": "一句话结论（≤120 字）",
+    "bullets": ["要点 1", "要点 2", "要点 3"],
+    "source": "llm" | "rule",     // LLM 不可用 → 'rule'（规则白话兜底）
+    "generated_at": "2026-10-25T16:00:00"
+  },
+  "degraded": []
+}
+```
+
+**失败语义**
+
+| 情况 | 行为 |
+| --- | --- |
+| LLM 未配置 / 超时 / 解析失败 | `source='rule'`，用规则文案，**仍返回 200** |
+| K 线不可用 | 502 `DATA_SOURCE_UNAVAILABLE`（沿用既有语义） |
+| 决策本身不可用 | 502 同上 |
+
+**缓存**：进程内**当日缓存**，key = `stock_code + 日期 + headline 摘要`，跨日自动失效。
+避免用户在多只票之间来回切换时反复烧 token。
+
+### 8.3 `GET /api/stock/{stock_code}/analysis`（v0.10 变更）
+
+- 响应结构**不变**；AI 不可用时 `ai=null` 行为不变。
+- **变更**：`user_msg` 追加 §5.4 事实包 JSON；`ANALYSIS_SYSTEM` 增加硬规则
+  「以下数字是唯一真相源，必须原样引用，不得改写 / 另算 / 补充未列出的价位；缺字段写『暂无』」。
+- 该端点已有 klines / quote / position，**复用即可，不增加网络 IO**。
+- **已知时间差**：analysis 有当日缓存（`daily_analyses`），缓存里的白话对应**当时**的决策数字，
+  盘中价格变了会与实时决策卡不一致 →
+  - 六格与网格块**永远以实时决策为准**；
+  - AI 白话行标注「AI 解读 · 数据时间 {latest_kline_date}」；
+  - 规则兜底文案永远与当前决策一致。
 
 ---
 
@@ -789,6 +1147,62 @@ GET /api/stock/{stock_code}/decision
 - 选中股票时**并发**请求 `/stock/{code}/decision`，与现有 analysis 请求并行，互不阻塞。
 - 决策卡**不依赖**「开始分析」按钮；LLM 解读仍是可选的白话层。
 - 若两者结论冲突，**以决策卡为准**，LLM 区域标注「AI 白话参考」。
+
+### 9.3 「操作建议」区（v0.10）
+
+**位置**：决策卡内，**「结论头」之下、「行动清单」之上**。
+读卡顺序是「先结论 → 再建议 → 再细节」。
+
+```
+┌───────────────────────────────────────────────┐
+│ 操作建议  [解套参考]        确定性引擎 · 实时   │
+├───────────────────────────────────────────────┤
+│ 价位   涨到 19.16 元可解套(需涨 5.1%)         │
+│ 止损   13.20 元(距现价 -18.5%)                │
+│ 仓位   解套优先,减仓不追补                     │
+│ 触发   涨到 19.16 元(P80 分位)                │
+│ 时间   已持有 23 天,回本还需 +5.1%            │
+│ 不动   下跌通道中不要抄底                      │
+├───────────────────────────────────────────────┤
+│ 网格   [不建议]                                │
+│   下跌通道中不要布网格:越买越套                │
+├───────────────────────────────────────────────┤
+│ AI 解读 · 数据时间 2026-10-24                  │
+│   现价 16.19 元,离回本还差 5.1%,别急着补仓…    │
+│                              [AI 写白话]       │
+├───────────────────────────────────────────────┤
+│ ▸ 更多维度(成本锚点/时间窗口/费用影响/…)        │
+└───────────────────────────────────────────────┘
+```
+
+**渲染规则**
+
+- 六格：`suggestions` 中值为 `None` 的格子**不渲染**（不显示空框）；有值才显示。
+- **网格子块**：紧跟六格之下、**做 T 块之上**（先看"要不要布网格"，再看"要不要手动做 T"）。
+  - `suitable=true` → 徽章「可配置」，并标出模式（`加仓模式` / `底仓模式`）、区间、格数、
+    每格净收益、需资金、失效条件；
+  - `suitable=false` → 徽章「不建议」+ `unsuitable_signals` 原文，**不隐藏、不空白**。
+  - `replace_t_plan=true` → 做 T 块追加一行「已建议配置网格，二者择一，勿同时执行」。
+- 白话行：优先 `analysis.ai.advice.rationale`（标注来源与「数据时间」），
+  否则用 `decision.advice`（规则文案，零延迟）。
+- 「AI 写白话」按钮：调 `/decision-advice`（**按钮触发，显式烧 token**）；
+  失败则 toast 提示并保留规则文案。
+- 五个新维度放在**默认收起的折叠区**，避免决策卡变啰嗦。
+
+### 9.4 AI 解读区收敛（v0.10）
+
+`frontend/src/components/advice/AnalysisPanel.tsx` 的 `OperationAdviceBlock`：
+
+- **移除**六格（价位/止损/仓位/触发/时间/不动）与 `t_strategy` 区块 → 已上移到决策卡，
+  避免同一屏出现**两套说法**。
+- **保留** `rationale`（AI 白话）与风险提示；`rationale` 标注「与操作决策同源」。
+
+### 9.5 并发与降级（v0.10）
+
+- `/decision-advice` 是独立请求 → 必须复用 `page.tsx` 现有的**请求序号守卫**
+  （切票时旧响应不得贴到新票）。
+- 降级链：LLM 白话 → 规则白话 → 空（仅当决策本身不可用，此时卡片显示既有错误态）。
+- **不做**：不改 `ta_service` 指标算法；不改 `derive_verdict` 判定顺序；不改既有阈值。
 
 ---
 

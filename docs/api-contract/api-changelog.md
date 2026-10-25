@@ -28,6 +28,41 @@
 
 ## 历史记录
 
+### 2026-10-25 | v0.10 | 操作建议增强:六格 + 网格交易配置建议 + 口径统一
+
+#### Added(新增)
+- `GET /api/stock/{code}/decision-advice`:把决策事实包翻译成大白话
+  (**按钮触发**,不在首屏自动烧 token;LLM 未配置/超时 → `source='rule'` 退回规则文案,仍 200;
+  进程内当日缓存,key = 代码 + 日期 + headline 摘要)
+- `GET /api/stock/{code}/decision` 响应新增(v0.10,**纯增量**,旧字段语义不变):
+  - `suggestions`:操作建议六格(价位 / 止损 / 仓位 / 触发 / 时间 / 不动),**值可为 null**(= 数据不足,前端整格不渲染)
+  - `grid_plan`:网格交易配置建议(区间 / 格数 / 步长 / 每格净收益 / 需资金 / 失效条件 / `mode` 加仓|底仓)
+  - `advice`:规则白话兜底(零 LLM,`source` 恒为 `rule`)
+  - `cost_anchor` / `time_window` / `cost_effect` / `instrument_rule` / `concentration`:五个补维度
+- 新增 `backend/app/services/decision_advice_service.py`(事实包 + 规则白话 + LLM 白话)
+- 新增 `backend/app/services/decision_context_service.py`(**共享装配口**):
+  决策卡与计算器 T 卡共用同一份新输入(费用档 / 账户现金 / 集中度 / 持有天数)→ 两处口径必然一致
+
+#### Changed(修改)
+- `GET /api/stock/{code}/analysis`:**提示词注入决策事实包**,并加硬规则「数字必须原样引用,冲突时以事实包为准」
+  —— AI 解读的价位 / 止损 / 仓位与决策卡**同源**,不再两套说法;
+  响应结构不变,`ai=null` 行为不变,**不增加网络 IO**(复用该端点已有的 klines / quote / position)
+- `GET /api/stock/{code}/decision` 新增 4 项 IO 输入(全部本地 DB 查询,零网络):
+  费用档(按品种选档,ETF 免印花税/过户费)、账户可用资金、持仓成本占比、持有自然日
+- 费用口径新增 `fee_basis` 标记:`configured`(用户已启用费用设置)/ `default_estimate`(未启用,按费率档估算)
+
+#### Fixed(修复)
+- 「持有天数」原计划取 `Position.base_date` —— 该字段**从未落库**(只是导入接口入参),
+  改为「最早流水日期 → 持仓行落库日」两级取数,并在文案里如实标注口径
+- 网格每格资金与每格利润原被混为一谈(会让「所需资金」与「每格净收益」同时算错),
+  已拆为 `capital_per_grid`(一手金额)与 `net_profit_per_grid`(毛收益 − 往返费用)
+
+#### Test(测试)
+- 新增 `tests/test_decision_grid.py`(网格 9 条判据)、`tests/test_decision_advice_service.py`、
+  `tests/test_decision_context_service.py`;扩写 `tests/test_decision_service.py`(五维度 + 六格 + 零回归)
+- `tests/test_decision_api.py`:`/decision` 零 LLM 守卫改为「LLM 字段一律不得出现 + `advice.source` 必须是 `rule`」,
+  新增 `/decision-advice` 降级断言与「analysis 收到事实包」断言
+
 ### 2026-10-25 | v0.6 | 场内 ETF 品种识别 + 交易规则适配(费用 / T+0 / 无涨跌停)
 
 #### Added(新增)

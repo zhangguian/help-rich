@@ -27,6 +27,8 @@
 | POST | /calculator | 计算器 | 计算新成本 + 21 档 |
 | POST | /calculator/review | 计算器 | 交易复核(做 T 方向 / 上限,按品种分流) |
 | GET | /stock/{code}/analysis | 个股分析 | 技术指标 + AI 解读 + 行业标签 |
+| GET | /stock/{code}/decision | 个股分析 | 确定性决策卡(零 LLM)+ 操作建议六格 + 网格建议 |
+| GET | /stock/{code}/decision-advice | 个股分析 | 操作建议白话(按钮触发,LLM 失败退回规则文案) |
 | GET | /stock/{code}/industry | 个股分析 | 行业归属(ETF 返回跟踪指数) |
 | POST | /diagnose/{trade_id} | 诊断 | 触发评分 + 评语 |
 | GET | /diagnose/{trade_id} | 诊断 | 获取评分(轮询降级) |
@@ -665,6 +667,111 @@ data: {"event":"ping","ts":1690890000}   ← 前端过滤
 ### 13.5 错误码
 
 本次**无新增错误码**。表外 ETF 不报错 —— 按保守口径降级 + 明说降级原因。
+
+---
+
+## 13.6 操作决策与操作建议(v0.10 新增)
+
+### 13.6.1 GET /api/stock/{code}/decision
+
+**目的**:确定性决策卡(零 LLM、纯算法、秒出)+ 卡内「操作建议」区。
+
+**响应 200**:
+```jsonc
+{
+  "decision": {
+    // —— 既有字段(语义不变)——
+    "stock_code": "002185.SZ",
+    "verdict": "hold",
+    "headline": "现价 16.19 元,等触发:涨到 19.16 元可解套(需涨 5.1%)",
+    "role": "解套参考",
+    "confidence": "medium",
+    "position_status": "loss",
+    "actions": [ /* Action[] */ ],
+    "stop_loss": { "price": 13.2, "basis": "跌破即止损" },
+    "position_pct": "解套优先,减仓不追补",
+    "do_not": ["下跌通道中不要抄底"],
+    "t_plan": { /* TPlan */ },
+    "trend_state": { "phase": "下跌通道·延续", "note": "..." },
+    "market_env": { /* MarketContext */ },
+
+    // —— v0.10 新增(纯增量)——
+    "grid_plan": {
+      "suitable": false,
+      "mode": null,
+      "reason": "",
+      "range_low": null, "range_high": null, "span_pct": null,
+      "grids": null, "step_pct": null, "step_price": null,
+      "shares_per_grid": null, "capital_per_grid": null,
+      "cash_needed": null, "cash_available": null,
+      "net_step_pct": null, "roundtrip_fee_pct": null, "fee_basis": null,
+      "net_profit_per_grid": null,
+      "replace_t_plan": false,
+      "risk": "",
+      "unsuitable_signals": "下跌通道中不要布网格:越买越套"
+    },
+    "suggestions": {
+      "price":     { "label": "价位", "value": "涨到 19.16 元可解套(需涨 5.1%)" },
+      "stop_loss": { "label": "止损", "value": "13.20 元(距现价 -18.5%)" },
+      "position":  { "label": "仓位", "value": "解套优先,减仓不追补" },
+      "trigger":   { "label": "触发", "value": "涨到 19.16 元(P80 分位)" },
+      "timing":    { "label": "时间", "value": "已持有 23 天,回本还需 +5.1%" },
+      "avoid":     { "label": "不动", "value": "下跌通道中不要抄底" }
+    },
+    "advice": {
+      "headline": "现价 16.19 元,等触发:涨到 19.16 元可解套(需涨 5.1%)",
+      "bullets": ["价位:...", "网格不建议:...", "止损 ... · 仓位 ..."],
+      "source": "rule"
+    },
+    "cost_anchor":    { "cost_basis": 17.02, "current_price": 16.19, "pnl_pct": -4.88,
+                        "break_even_gap_pct": 5.12, "distance_to_stop_pct": -18.47,
+                        "distance_to_target_pct": null, "risk_reward": null },
+    "time_window":    { "holding_days": 23, "overdue": true,
+                        "note": "自纳入本系统起 23 天(自然日)" },
+    "cost_effect":    { "roundtrip_fee_pct": 0.102, "fee_basis": "default_estimate",
+                        "spread_pct": 9.7, "worth_it": true, "note": "..." },
+    "instrument_rule":{ "kind": "stock", "t0": false, "notes": ["股票有涨跌幅限制(±10%)", "T+1,..."] },
+    "concentration":  { "cost_share_pct": 12.0, "level": "low", "note": "..." },
+
+    "data_quality": { "degraded": ["费用设置未启用,费用按默认档估算"] }
+  }
+}
+```
+
+**约定**:
+- `suggestions` 六格**值可为 `null`**(= 该维度数据不足,前端整格不渲染,不显示空框);
+- `grid_plan` **始终存在**;不适适时配置类字段一律 `null`,原因写在 `unsuitable_signals`;
+- `advice.source` 恒为 `"rule"` —— 决策端点**零 LLM**,白话是规则拼的,不是模型写的;
+- 五个维度**只增信息**,不改变 `verdict` / `actions` / `t_plan` 的既有判定。
+
+### 13.6.2 GET /api/stock/{code}/decision-advice
+
+**目的**:把决策事实包翻译成大白话(**按钮触发**,不在首屏自动烧 token)。
+
+**响应 200**:
+```json
+{
+  "advice": {
+    "headline": "离回本还差 5.1%,别急着补仓",
+    "bullets": ["跌破 13.20 元止损", "涨到 19.16 元再减"],
+    "source": "llm",
+    "generated_at": "2026-10-25T18:20:31"
+  },
+  "degraded": []
+}
+```
+
+**降级**:
+- LLM 未配置 / 超时 / 解析失败 → `source="rule"`(退回规则文案),**仍 200**,卡片永不空白;
+- K 线完全不可用 → 502 `DATA_SOURCE_UNAVAILABLE`(与 `/decision` 一致);
+- 进程内**当日缓存**(key = 代码 + 日期 + headline 摘要),跨日自动失效。
+
+### 13.6.3 GET /api/stock/{code}/analysis(v0.10 变更)
+
+- 响应结构**不变**;AI 不可用时 `ai=null` 行为不变;
+- **变更**:提示词追加「决策事实包」(JSON),并加硬规则「数字必须原样引用,冲突时以事实包为准」;
+- **不增加网络 IO**:事实包复用本端点已有的 klines / quote / position;
+  市场环境**不纳入**事实包(那是 4~5 次外部 HTTP),「大盘普跌时不要加仓」由决策卡承担。
 
 ---
 

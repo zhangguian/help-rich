@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" href="data:," />
+<title>操作建议区 · 六格 + 网格交易配置建议(视觉稿)</title>
+<style>
+  :root {
+    --canvas:#070b12; --surface:#0d131d; --surface-2:#121a26; --surface-3:#18212f;
+    --border:#1e2836; --border-strong:#2a3648;
+    --text-primary:#e2e8f2; --text-secondary:#8fa0b8; --text-tertiary:#5c6b84;
+    --text-disabled:#3d4a5e;
+    --accent:#22d3ee; --accent-subtle:rgba(34,211,238,.12);
+    --up:#f6465d; --down:#0ecb81; --warn:#f5a524;
+    --up-bg:rgba(246,70,93,.14); --down-bg:rgba(14,235,129,.12); --warn-bg:rgba(245,165,36,.14);
+    --r-xs:3px; --r-sm:4px; --r-md:6px; --r-lg:8px; --r-xl:10px;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--canvas); color:var(--text-primary);
+    font-family:"Jakarta Sans",-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    font-size:14px; line-height:1.55;
+  }
+  .mono { font-family:"JetBrains Mono","SF Mono",Consolas,monospace; }
+  .wrap { max-width:1460px; margin:0 auto; padding:30px 22px 90px; }
+  h1 { font-size:21px; font-weight:700; margin:0 0 8px; }
+  .sub { color:var(--text-secondary); font-size:13px; margin:0 0 4px; max-width:1000px; }
+  .sub b { color:var(--text-primary); font-weight:600; }
+  .legend {
+    display:flex; gap:14px; flex-wrap:wrap; margin:14px 0 26px;
+    padding:11px 14px; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg);
+  }
+  .legend div { font-size:12px; color:var(--text-tertiary); }
+  .legend b { color:var(--text-secondary); font-weight:600; }
+  h2 { font-size:15px; font-weight:600; margin:34px 0 4px; }
+  h2 .idx { color:var(--accent); font-family:"JetBrains Mono",monospace; margin-right:8px; }
+  .note { color:var(--text-tertiary); font-size:12px; margin:0 0 14px; max-width:1080px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(470px,1fr)); gap:16px; }
+
+  /* ============ 场景外壳 ============ */
+  .scene {
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg);
+    padding:13px 14px 12px;
+  }
+  .scene-label {
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    font-size:11.5px; color:var(--text-tertiary); margin:0 0 9px;
+  }
+  .scene-label .req {
+    background:var(--surface-3); border:1px solid var(--border); border-radius:var(--r-xs);
+    padding:1px 7px; color:var(--text-secondary);
+    font-family:"JetBrains Mono","SF Mono",Consolas,monospace; font-size:10.5px;
+  }
+  .scene-label .code { color:var(--text-secondary); font-family:"JetBrains Mono",monospace; }
+
+  /* ============ 决策卡内的「操作建议」区 ============ */
+  .advice-zone {
+    background:var(--surface-3); border:1px solid var(--border); border-radius:var(--r-md);
+    padding:9px 10px;
+  }
+  .az-head {
+    display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin-bottom:8px;
+  }
+  .az-title { font-size:11px; font-weight:600; color:var(--text-primary); }
+  .role {
+    font-size:9.5px; padding:1px 6px; border-radius:var(--r-sm);
+    border:1px solid var(--border-strong); color:var(--text-secondary); background:var(--surface-2);
+  }
+  .role.loss { border-color:var(--warn); color:var(--warn); background:var(--warn-bg); }
+  .role.profit { border-color:var(--up); color:var(--up); background:var(--up-bg); }
+  .role.empty { border-color:var(--accent); color:var(--accent); background:var(--accent-subtle); }
+  .az-src { margin-left:auto; font-size:9.5px; color:var(--text-tertiary); }
+
+  /* 六格 */
+  .cells { display:grid; grid-template-columns:repeat(2,1fr); gap:5px; }
+  .cell { background:var(--surface-2); border-radius:var(--r-sm); padding:5px 7px; }
+  .cell .k { font-size:9px; color:var(--text-tertiary); }
+  .cell .v { margin-top:1px; font-size:10.5px; line-height:1.4; color:var(--text-secondary); }
+  .cell .v b { color:var(--text-primary); font-weight:600; }
+  .cell.missing { background:transparent; border:1px dashed var(--border); }
+  .cell.missing .k { color:var(--text-disabled); }
+  .cell.missing .v { color:var(--text-disabled); font-size:9.5px; }
+
+  /* 网格子块 */
+  .gridblk {
+    margin-top:7px; background:var(--surface-2); border-radius:var(--r-sm);
+    padding:6px 8px; border-left:2px solid var(--border-strong);
+  }
+  .gridblk.ok { border-left-color:var(--accent); }
+  .gridblk.no { border-left-color:var(--warn); }
+  .gb-head { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .gb-name { font-size:9px; color:var(--text-tertiary); }
+  .gb-badge {
+    font-size:9.5px; font-weight:600; padding:1px 6px; border-radius:var(--r-sm);
+    border:1px solid var(--border-strong); color:var(--text-tertiary);
+  }
+  .gridblk.ok .gb-badge { border-color:var(--accent); color:var(--accent); background:var(--accent-subtle); }
+  .gridblk.no .gb-badge { border-color:var(--warn); color:var(--warn); background:var(--warn-bg); }
+  .gb-mode {
+    font-size:9px; padding:0 5px; border-radius:999px; border:1px solid var(--border);
+    color:var(--text-tertiary);
+  }
+  .gb-nums {
+    margin-left:auto; font-size:10px; color:var(--text-secondary);
+    font-family:"JetBrains Mono","SF Mono",Consolas,monospace;
+  }
+  .gb-nums b { color:var(--text-primary); }
+  .gb-body { margin-top:3px; font-size:10px; line-height:1.45; color:var(--text-secondary); }
+  .gb-body .warn { color:var(--warn); }
+  .gb-body .ok { color:var(--down); }
+  .gb-risk {
+    margin-top:3px; font-size:9.5px; line-height:1.45; color:var(--text-tertiary);
+    padding-top:3px; border-top:1px dashed var(--border);
+  }
+  .gb-risk b { color:var(--warn); font-weight:600; }
+
+  /* 白话行 */
+  .voice {
+    margin-top:7px; padding:6px 8px; border-radius:var(--r-sm);
+    background:var(--surface-2); border:1px solid var(--border);
+  }
+  .voice-top { display:flex; align-items:center; gap:6px; margin-bottom:3px; }
+  .voice-src { font-size:9px; color:var(--text-tertiary); }
+  .voice-time { font-size:9px; color:var(--text-disabled); }
+  .voice-btn {
+    margin-left:auto; font-size:9.5px; padding:1px 8px; border-radius:var(--r-sm);
+    border:1px solid var(--border-strong); color:var(--text-secondary); background:var(--surface-3);
+  }
+  .voice-txt { font-size:10.5px; line-height:1.5; color:var(--text-primary); }
+  .voice-bullets { margin:3px 0 0; padding:0; list-style:none; }
+  .voice-bullets li { font-size:10px; line-height:1.45; color:var(--text-secondary); padding-left:9px; position:relative; }
+  .voice-bullets li::before { content:"·"; position:absolute; left:2px; color:var(--text-tertiary); }
+
+  /* 折叠维度 */
+  .more {
+    margin-top:6px; font-size:9.5px; color:var(--text-tertiary);
+    display:flex; align-items:center; gap:5px;
+  }
+  .more .caret { color:var(--text-disabled); }
+  .dims { margin-top:5px; display:none; }
+  .dims.open { display:block; }
+  .dim {
+    display:flex; gap:8px; font-size:9.5px; line-height:1.45;
+    padding:2px 0; border-bottom:1px dashed var(--border);
+  }
+  .dim .dk { flex:none; width:62px; color:var(--text-tertiary); }
+  .dim .dv { color:var(--text-secondary); }
+  .dim .dv .num { font-family:"JetBrains Mono",monospace; color:var(--text-primary); }
+
+  .tagrow { display:flex; gap:5px; flex-wrap:wrap; margin-top:8px; }
+  .tag {
+    font-size:9px; padding:1px 6px; border-radius:999px;
+    border:1px solid var(--border); color:var(--text-tertiary);
+  }
+  .tag.warn { border-color:var(--warn); color:var(--warn); background:var(--warn-bg); }
+  .tag.ok { border-color:var(--accent); color:var(--accent); background:var(--accent-subtle); }
+  .foot { margin-top:40px; padding-top:16px; border-top:1px solid var(--border); color:var(--text-tertiary); font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>操作建议区 · 六格 + 网格交易配置建议</h1>
+  <p class="sub">
+    位置:<b>操作决策卡内部</b>(结论头之下、行动清单之上)。六格要素全部来自<b>确定性决策引擎</b>,
+    网格是<b>独立子块</b>(与「做 T」并列,不是六格之一),AI 白话只翻译、不改数字。
+  </p>
+  <p class="sub">
+    本稿的<b>所有数字都来自真实接口响应</b>(<code>GET /api/stock/{code}/decision</code>),
+    网格「可配置」场景取自 <code>judge_grid_plan</code> 的真实输出。
+  </p>
+
+  <div class="legend">
+    <div><b>红</b> = 看多/买/涨 · <b>绿</b> = 看空/卖/跌(A 股红涨绿跌)</div>
+    <div><b>青</b> = 网格可配置 · <b>琥珀</b> = 不建议/警示</div>
+    <div>值为 <b>None</b> 的格子<b>整格不渲染</b>,不留空框</div>
+    <div>网格与做 T <b>互斥</b>:二者择一,勿同时执行</div>
+  </div>
+
+  <h2><span class="idx">A</span>持仓三种角色 × 网格判定</h2>
+  <p class="note">A1/A2/A3 对应真实持仓;A4 是网格唯一会判「可配置」的形态(震荡 + 有底仓 + 振幅够)。</p>
+  <div class="grid">
+
+    <!-- ============ A1 浮盈 · 网格不建议 ============ -->
+    <div class="scene">
+      <div class="scene-label">
+        <span class="req">A1 浮盈 · 止盈参考</span>
+        <span class="code">000807.SZ 云铝股份</span>
+      </div>
+      <div class="advice-zone">
+        <div class="az-head">
+          <span class="az-title">操作建议</span>
+          <span class="role profit">止盈参考</span>
+          <span class="az-src">确定性引擎 · 实时</span>
+        </div>
+        <div class="cells">
+          <div class="cell"><div class="k">价位</div><div class="v">涨到 <b>28.77 元</b>(P80 分位)先减 1/3</div></div>
+          <div class="cell"><div class="k">止损</div><div class="v"><b>23.43 元</b>(距现价 -6.9%)</div></div>
+          <div class="cell"><div class="k">仓位</div><div class="v">分批止盈,每次减 1/3,保留底仓 ≥50%</div></div>
+          <div class="cell"><div class="k">触发</div><div class="v">涨到 28.77 元(P80 分位)先减 1/3</div></div>
+          <div class="cell"><div class="k">时间</div><div class="v">已持有 <b>80 天</b></div></div>
+          <div class="cell missing"><div class="k">不动</div><div class="v">暂无别动信号</div></div>
+        </div>
+
+        <div class="gridblk no">
+          <div class="gb-head">
+            <span class="gb-name">网格</span>
+            <span class="gb-badge">不建议</span>
+            <span class="gb-nums">—</span>
+          </div>
+          <div class="gb-body">
+            近 20 日平均振幅 <span class="warn">2.99%</span> 不足 3%,网格抓不到差价
+          </div>
+        </div>
+
+        <div class="voice">
+          <div class="voice-top">
+            <span class="voice-src">AI 解读</span>
+            <span class="voice-time">数据时间 2026-10-24</span>
+            <span class="voice-btn">AI 写白话</span>
+          </div>
+          <div class="voice-txt">已经赚了不少,涨到 28.77 元(P80 分位)先减三分之一,剩下的用移动止盈跟着走。</div>
+          <ul class="voice-bullets">
+            <li>止损 23.43 元(距现价 -6.9%),跌破就走</li>
+            <li>近 20 日振幅不够,这票现在不适合布网格</li>
+          </ul>
+        </div>
+
+        <div class="more"><span class="caret">▸</span> 更多维度(成本锚点 / 时间窗口 / 费用影响 / 品种规则 / 集中度)</div>
+        <div class="dims">
+          <div class="dim"><span class="dk">成本锚点</span><span class="dv">浮盈 <span class="num">+180.3%</span> · 到 P80 还有 <span class="num">+14.4%</span> · 风险收益比 <span class="num">2.09</span></span></div>
+          <div class="dim"><span class="dk">时间窗口</span><span class="dv">自纳入本系统起 <span class="num">80</span> 天(自然日)· 已超期(阈值 20 天)</span></div>
+          <div class="dim"><span class="dk">费用影响</span><span class="dv">往返费率 <span class="num">0.102%</span> · 费用设置未启用,按默认档估算</span></div>
+          <div class="dim"><span class="dk">品种规则</span><span class="dv">股票有涨跌幅限制(±10%) · T+1,当日买入当日不可卖出</span></div>
+          <div class="dim"><span class="dk">集中度</span><span class="dv">该标的占持仓成本 <span class="num">1.3%</span>,集中度可接受</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ A2 浮亏 · 网格不建议 ============ -->
+    <div class="scene">
+      <div class="scene-label">
+        <span class="req">A2 浮亏 · 解套参考</span>
+        <span class="code">002185.SZ 华天科技</span>
+      </div>
+      <div class="advice-zone">
+        <div class="az-head">
+          <span class="az-title">操作建议</span>
+          <span class="role loss">解套参考</span>
+          <span class="az-src">确定性引擎 · 实时</span>
+        </div>
+        <div class="cells">
+          <div class="cell"><div class="k">价位</div><div class="v">涨到 <b>19.16 元</b>可解套(需涨 5.1%)</div></div>
+          <div class="cell"><div class="k">止损</div><div class="v"><b>13.20 元</b>(距现价 -18.5%)</div></div>
+          <div class="cell"><div class="k">仓位</div><div class="v">解套优先,减仓不追补</div></div>
+          <div class="cell"><div class="k">触发</div><div class="v">涨到 19.16 元(P80 分位)</div></div>
+          <div class="cell"><div class="k">时间</div><div class="v">已持有 <b>23 天</b>,回本还需 <b>+5.1%</b></div></div>
+          <div class="cell"><div class="k">不动</div><div class="v">下跌通道中不要抄底</div></div>
+        </div>
+
+        <div class="gridblk no">
+          <div class="gb-head">
+            <span class="gb-name">网格</span>
+            <span class="gb-badge">不建议</span>
+            <span class="gb-nums">—</span>
+          </div>
+          <div class="gb-body">
+            <span class="warn">下跌通道中不要布网格:越买越套</span>
+          </div>
+        </div>
+
+        <div class="voice">
+          <div class="voice-top">
+            <span class="voice-src">AI 解读</span>
+            <span class="voice-time">数据时间 2026-10-24</span>
+            <span class="voice-btn">AI 写白话</span>
+          </div>
+          <div class="voice-txt">离回本还差 5.1%,但趋势还没修复,别急着补仓摊薄。</div>
+          <ul class="voice-bullets">
+            <li>涨到 19.16 元(P80 分位)才算解套</li>
+            <li>跌破 13.20 元止损,别硬扛</li>
+          </ul>
+        </div>
+
+        <div class="more"><span class="caret">▸</span> 更多维度(成本锚点 / 时间窗口 / 费用影响 / 品种规则 / 集中度)</div>
+        <div class="dims">
+          <div class="dim"><span class="dk">成本锚点</span><span class="dv">浮亏 <span class="num">-4.9%</span> · 回本还需 <span class="num">+5.1%</span> · 距止损 <span class="num">-18.5%</span></span></div>
+          <div class="dim"><span class="dk">时间窗口</span><span class="dv">自纳入本系统起 <span class="num">23</span> 天(自然日)· 未超期</span></div>
+          <div class="dim"><span class="dk">费用影响</span><span class="dv">做 T 差价 <span class="num">9.7%</span> · 往返费率 <span class="num">0.102%</span> · 划算</span></div>
+          <div class="dim"><span class="dk">品种规则</span><span class="dv">股票有涨跌幅限制(±10%) · T+1</span></div>
+          <div class="dim"><span class="dk">集中度</span><span class="dv">该标的占持仓成本 <span class="num">12.0%</span>,集中度可接受</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ A3 空仓 ============ -->
+    <div class="scene">
+      <div class="scene-label">
+        <span class="req">A3 空仓 · 建仓参考</span>
+        <span class="code">000938.SZ 紫光股份</span>
+      </div>
+      <div class="advice-zone">
+        <div class="az-head">
+          <span class="az-title">操作建议</span>
+          <span class="role empty">建仓参考</span>
+          <span class="az-src">确定性引擎 · 实时</span>
+        </div>
+        <div class="cells">
+          <div class="cell"><div class="k">价位</div><div class="v">回落 <b>27.87 元</b>(P20 低位带)且 KDJ 出金叉时</div></div>
+          <div class="cell missing"><div class="k">止损</div><div class="v">暂无止损位</div></div>
+          <div class="cell"><div class="k">仓位</div><div class="v">首仓 20%,站稳 MA20 后加至 40%</div></div>
+          <div class="cell"><div class="k">触发</div><div class="v">回落 27.87 元(P20 低位带)且 KDJ 出金叉</div></div>
+          <div class="cell missing"><div class="k">时间</div><div class="v">未持仓,无持有天数</div></div>
+          <div class="cell"><div class="k">不动</div><div class="v">下跌通道中不要抄底</div></div>
+        </div>
+
+        <div class="gridblk no">
+          <div class="gb-head">
+            <span class="gb-name">网格</span>
+            <span class="gb-badge">不建议</span>
+            <span class="gb-nums">—</span>
+          </div>
+          <div class="gb-body">下跌通道中不要布网格:越买越套</div>
+        </div>
+
+        <div class="voice">
+          <div class="voice-top">
+            <span class="voice-src">AI 解读</span>
+            <span class="voice-time">数据时间 2026-10-24</span>
+            <span class="voice-btn">AI 写白话</span>
+          </div>
+          <div class="voice-txt">现在没有底仓,先别急着买;等回落到 27.87 元一带并且 KDJ 金叉再说。</div>
+          <ul class="voice-bullets">
+            <li>首仓 20%,站稳 MA20 再加</li>
+            <li>下跌通道里不抄底</li>
+          </ul>
+        </div>
+
+        <div class="more"><span class="caret">▸</span> 更多维度(成本锚点 / 时间窗口 / 费用影响 / 品种规则 / 集中度)</div>
+        <div class="dims">
+          <div class="dim"><span class="dk">成本锚点</span><span class="dv">暂无(未持仓)</span></div>
+          <div class="dim"><span class="dk">时间窗口</span><span class="dv">暂无(未持仓)</span></div>
+          <div class="dim"><span class="dk">费用影响</span><span class="dv">往返费率 <span class="num">0.102%</span> · 费用设置未启用,按默认档估算</span></div>
+          <div class="dim"><span class="dk">品种规则</span><span class="dv">股票有涨跌幅限制(±10%) · T+1</span></div>
+          <div class="dim"><span class="dk">集中度</span><span class="dv">暂无(未持仓)</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ A4 网格可配置 ============ -->
+    <div class="scene">
+      <div class="scene-label">
+        <span class="req">A4 网格可配置 · 震荡 + 有底仓</span>
+        <span class="code">000807.SZ 云铝股份(示意数据)</span>
+      </div>
+      <div class="advice-zone">
+        <div class="az-head">
+          <span class="az-title">操作建议</span>
+          <span class="role profit">止盈参考</span>
+          <span class="az-src">确定性引擎 · 实时</span>
+        </div>
+        <div class="cells">
+          <div class="cell"><div class="k">价位</div><div class="v">涨到 <b>28.77 元</b>(P80 分位)先减 1/3</div></div>
+          <div class="cell"><div class="k">止损</div><div class="v"><b>22.80 元</b>(距现价 -9.0%)</div></div>
+          <div class="cell"><div class="k">仓位</div><div class="v">分批止盈,每次减 1/3,保留底仓 ≥50%</div></div>
+          <div class="cell"><div class="k">触发</div><div class="v">回落 24.50 元(网格下沿)分批买回</div></div>
+          <div class="cell"><div class="k">时间</div><div class="v">已持有 <b>80 天</b></div></div>
+          <div class="cell missing"><div class="k">不动</div><div class="v">暂无别动信号</div></div>
+        </div>
+
+        <div class="gridblk ok">
+          <div class="gb-head">
+            <span class="gb-name">网格</span>
+            <span class="gb-badge">可配置</span>
+            <span class="gb-mode">底仓模式</span>
+            <span class="gb-nums"><b>24.50</b>~<b>26.78</b> · <b>4</b> 格</span>
+          </div>
+          <div class="gb-body">
+            每格 100 股 / 需 <span class="num">2500</span> 元,加仓网格共需 <span class="num">5000</span> 元,
+            账户可用 <span class="warn">375</span> 元 —— 现金不足,只能做底仓高抛低吸;
+            步长 <span class="num">2.0%</span>(<span class="num">0.50</span> 元),
+            单格净收益 <span class="ok">+39.97 元</span>(往返费率 <span class="num">0.102%</span>)
+          </div>
+          <div class="gb-risk">
+            <b>失效条件</b>:跌破 24.50 元(区间下沿)网格失效,按止损离场,不要继续接;
+            突破 26.78 元只是少赚,不损;单边下行时网格会越买越多直到资金耗尽 —— 这是网格最大的风险。
+          </div>
+        </div>
+
+        <div class="voice">
+          <div class="voice-top">
+            <span class="voice-src">AI 解读</span>
+            <span class="voice-time">数据时间 2026-10-24</span>
+            <span class="voice-btn">AI 写白话</span>
+          </div>
+          <div class="voice-txt">这票在震荡,可以挂网格:24.50 到 26.78 之间分 4 档,每档 100 股,一格大约赚 40 元。</div>
+          <ul class="voice-bullets">
+            <li>现金不够加仓,只能用底仓高抛低吸</li>
+            <li>跌破 24.50 元这套网格就不成立,按止损走</li>
+            <li>网格和手动做 T 选一个,别同时干</li>
+          </ul>
+        </div>
+
+        <div class="more"><span class="caret">▸</span> 更多维度(成本锚点 / 时间窗口 / 费用影响 / 品种规则 / 集中度)</div>
+        <div class="dims">
+          <div class="dim"><span class="dk">成本锚点</span><span class="dv">浮盈 <span class="num">+180.3%</span> · 到 P80 <span class="num">+14.4%</span></span></div>
+          <div class="dim"><span class="dk">时间窗口</span><span class="dv">自纳入本系统起 <span class="num">80</span> 天(自然日)· 已超期</span></div>
+          <div class="dim"><span class="dk">费用影响</span><span class="dv">往返费率 <span class="num">0.102%</span> · 每格净收益 <span class="num">39.97</span> 元</span></div>
+          <div class="dim"><span class="dk">品种规则</span><span class="dv">股票有涨跌幅限制(±10%) · T+1</span></div>
+          <div class="dim"><span class="dk">集中度</span><span class="dv">该标的占持仓成本 <span class="num">1.3%</span>,集中度可接受</span></div>
+        </div>
+      </div>
+      <div class="tagrow">
+        <span class="tag ok">网格 = 与做 T 互斥</span>
+        <span class="tag">不承诺收益</span>
+        <span class="tag">不自动下单</span>
+      </div>
+    </div>
+  </div>
+
+  <h2><span class="idx">B</span>品种差异 · 高集中度 · 降级</h2>
+  <p class="note">B1 ETF(T+0 / 免印花税)与股票的网格费用差异;B2 高集中度禁止加仓网格;B3 数据缺失时模块完整渲染但不编数字。</p>
+  <div class="grid">
+
+    <!-- ============ B1 ETF T+0 ============ -->
+    <div class="scene">
+      <div class="scene-label">
+        <span class="req">B1 ETF · T+0 · 免印花税</span>
+        <span class="code">513120.SH 港股创新药ETF</span>
+      </div>
+      <div class="advice-zone">
+        <div class="az-head">
+          <span class="az-title">操作建议</span>
+          <span class="role loss">解套参考</span>
+          <span class="az-src">确定性引擎 · 实时</span>
+        </div>
+        <div class="cells">
+          <div class="cell"><div class="k">价位</div><div class="v">涨到 <b>1.42 元</b>可解套(需涨 6.3%)</div></div>
+          <div class="cell"><div class="k">止损</div><div class="v"><b>1.31 元</b>(距现价 -4.9%)</div></div>
+          <div class="cell"><div class="k">仓位</div><div class="v">解套优先,减仓不追补</div></div>
+          <div class="cell"><div class="k">触发</div><div class="v">涨到 1.42 元(P80 分位)</div></div>
+          <div class="cell"><div class="k">时间</div><div class="v">已持有 <b>12 天</b>,回本还需 <b>+6.3%</b></div></div>
+          <div class="cell"><div class="k">不动</div><div class="v">下跌通道中不要抄底</div></div>
+        </div>
+
+        <div class="gridblk no">
+          <div class="gb-head">
+            <span class="gb-name">网格</span>
+            <span class="gb-badge">不建议</span>
+            <span class="gb-nums">—</span>
+          </div>
+          <div class="gb-body">
+            下跌通道中不要布网格:越买越套
+            <div style="margin-top:3px;color:var(--text-tertiary)">
+              ETF 往返费率 <span class="num">0.05%</span>(免印花税、免过户费),比股票的 0.102% 低一半 —— 震荡时 ETF 更适合网格
+            </div>
+          </div>
+        </div>
+
+        <div class="voice">
+          <div class="voice-top">
+            <span class="voice-src">AI 解读</span>
+            <span class="voice-time">数据时间 2026-10-24</span>
+            <span class="voice-btn">AI 写白话</span>
+          </div>
+          <div class="voice-txt">这只 ETF 当天可以来回买卖,成本也比股票低,但现在还在下跌通道,不适合挂网格。</div>
+          <ul class="voice-bullets">
+            <li>涨到 1.42 元才算解套</li>
+            <li>ETF 免印花税,来回成本比股票低一半</li>
+          </ul>
+        </div>
+
+        <div class="more"><span class="caret">▸</span> 更多维度(成本锚点 / 时间窗口 / 费用影响 / 品种规则 / 集中度)</div>
+        <div class="dims">
+          <div class="dim"><span class="dk">成本锚点</span><span class="dv">浮亏 <span class="num">-5.9%</span> · 回本还需 <span class="num">+6.3%</span></span></div>
+          <div class="dim"><span class="dk">时间窗口</span><span class="dv">自纳入本系统起 <span class="num">12</span> 天(自然日)</span></div>
+          <div class="dim"><span class="dk">费用影响</span><span class="dv">ETF 往返费率 <span class="num">0.05%</span> · 免印花税、免过户费</span></div>
+          <div class="dim"><span class="dk">品种规则</span><span class="dv">ETF 无涨跌幅限制 · 当日可回转(T+0) · 免印花税、免过户费</span></div>
+          <div class="dim"><span class="dk">集中度</span><span class="dv">该标的占持仓成本 <span class="num">8.4%</span>,集中度可接受</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ B2 高集中度 ============ -->
+    <div class="scene">
+      <div class="scene-label">
+        <span class="req">B2 高集中度 ≥ 50%</span>
+        <span class="code">禁止加仓网格 · 只给底仓模式</span>
+      </div>
+      <div class="advice-zone">
+        <div class="az-head">
+          <span class="az-title">操作建议</span>
+          <span class="role profit">止盈参考</span>
+          <span class="az-src">确定性引擎 · 实时</span>
+        </div>
+        <div class="cells">
+          <div class="cell"><div class="k">价位</div><div class="v">涨到 <b>28.77 元</b>(P80 分位)先减 1/3</div></div>
+          <div class="cell"><div class="k">止损</div><div class="v"><b>23.43 元</b>(距现价 -6.9%)</div></div>
+          <div class="cell"><div class="k">仓位</div><div class="v">分批止盈,每次减 1/3,保留底仓 ≥50%</div></div>
+          <div class="cell"><div class="k">触发</div><div class="v">涨到 28.77 元(P80 分位)先减 1/3</div></div>
+          <div class="cell"><div class="k">时间</div><div class="v">已持有 <b>80 天</b></div></div>
+          <div class="cell missing"><div class="k">不动</div><div class="v">暂无别动信号</div></div>
+        </div>
+
+        <div class="gridblk ok">
+          <div class="gb-head">
+            <span class="gb-name">网格</span>
+            <span class="gb-badge">可配置</span>
+            <span class="gb-mode">底仓模式</span>
+            <span class="gb-nums"><b>24.50</b>~<b>26.78</b> · <b>4</b> 格</span>
+          </div>
+          <div class="gb-body">
+            每格 100 股 / 需 <span class="num">2500</span> 元,加仓网格共需 <span class="num">5000</span> 元,
+            账户可用 <span class="num">8000</span> 元 —— <b>现金够</b>,但该标的已占持仓成本
+            <span class="warn">62.4%</span>,加仓会放大单一暴露,<span class="warn">不给加仓模式</span>
+          </div>
+          <div class="gb-risk">
+            <b>失效条件</b>:跌破 24.50 元(区间下沿)网格失效,按止损离场,不要继续接;
+            突破 26.78 元只是少赚,不损;单边下行时网格会越买越多直到资金耗尽 —— 这是网格最大的风险。
+          </div>
+        </div>
+
+        <div class="voice">
+          <div class="voice-top">
+            <span class="voice-src">AI 解读</span>
+            <span class="voice-time">数据时间 2026-10-24</span>
+            <span class="voice-btn">AI 写白话</span>
+          </div>
+          <div class="voice-txt">这只已经占了你六成多的持仓成本,别再往上加钱,只能用底仓做高抛低吸。</div>
+          <ul class="voice-bullets">
+            <li>网格区间 24.50~26.78,分 4 档</li>
+            <li>不加仓:集中度已经 62.4%</li>
+          </ul>
+        </div>
+
+        <div class="more"><span class="caret">▸</span> 更多维度(成本锚点 / 时间窗口 / 费用影响 / 品种规则 / 集中度)</div>
+        <div class="dims">
+          <div class="dim"><span class="dk">成本锚点</span><span class="dv">浮盈 <span class="num">+180.3%</span></span></div>
+          <div class="dim"><span class="dk">时间窗口</span><span class="dv">自纳入本系统起 <span class="num">80</span> 天(自然日)</span></div>
+          <div class="dim"><span class="dk">费用影响</span><span class="dv">往返费率 <span class="num">0.102%</span></span></div>
+          <div class="dim"><span class="dk">品种规则</span><span class="dv">股票 · T+1</span></div>
+          <div class="dim"><span class="dk">集中度</span><span class="dv"><span class="num">62.4%</span> · 集中度过高,加仓会放大单一暴露</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ B3 降级 ============ -->
+    <div class="scene">
+      <div class="scene-label">
+        <span class="req">B3 数据缺失 · 降级</span>
+        <span class="code">费用档读不到 / 现金未填 / 起始日缺失</span>
+      </div>
+      <div class="advice-zone">
+        <div class="az-head">
+          <span class="az-title">操作建议</span>
+          <span class="role loss">解套参考</span>
+          <span class="az-src">确定性引擎 · 实时</span>
+        </div>
+        <div class="cells">
+          <div class="cell"><div class="k">价位</div><div class="v">涨到 <b>19.16 元</b>可解套(需涨 5.1%)</div></div>
+          <div class="cell"><div class="k">止损</div><div class="v"><b>13.20 元</b>(距现价 -18.5%)</div></div>
+          <div class="cell"><div class="k">仓位</div><div class="v">解套优先,减仓不追补</div></div>
+          <div class="cell"><div class="k">触发</div><div class="v">涨到 19.16 元(P80 分位)</div></div>
+          <div class="cell missing"><div class="k">时间</div><div class="v">持有天数不可用</div></div>
+          <div class="cell"><div class="k">不动</div><div class="v">下跌通道中不要抄底</div></div>
+        </div>
+
+        <div class="gridblk no">
+          <div class="gb-head">
+            <span class="gb-name">网格</span>
+            <span class="gb-badge">无法核算</span>
+            <span class="gb-nums">—</span>
+          </div>
+          <div class="gb-body">
+            下跌通道中不要布网格:越买越套
+            <div style="margin-top:3px;color:var(--text-tertiary)">
+              费用档不可用 → 单格净收益无法核算(不编数字)
+            </div>
+          </div>
+        </div>
+
+        <div class="voice">
+          <div class="voice-top">
+            <span class="voice-src">AI 解读</span>
+            <span class="voice-time">数据时间 2026-10-24</span>
+            <span class="voice-btn">AI 写白话</span>
+          </div>
+          <div class="voice-txt">离回本还差 5.1%,等涨到 19.16 元再说,现在别补仓。</div>
+          <ul class="voice-bullets">
+            <li>跌破 13.20 元止损</li>
+          </ul>
+        </div>
+
+        <div class="more"><span class="caret">▸</span> 更多维度(成本锚点 / 时间窗口 / 费用影响 / 品种规则 / 集中度)</div>
+        <div class="dims">
+          <div class="dim"><span class="dk">成本锚点</span><span class="dv">浮亏 <span class="num">-4.9%</span> · 回本还需 <span class="num">+5.1%</span></span></div>
+          <div class="dim"><span class="dk">时间窗口</span><span class="dv">暂无(缺持仓起始日)</span></div>
+          <div class="dim"><span class="dk">费用影响</span><span class="dv">暂无(费用档读取失败)</span></div>
+          <div class="dim"><span class="dk">品种规则</span><span class="dv">股票 · T+1</span></div>
+          <div class="dim"><span class="dk">集中度</span><span class="dv">暂无(全量持仓读取失败)</span></div>
+        </div>
+        <div style="margin-top:6px;font-size:9.5px;color:var(--text-disabled)">
+          降级:费用档读取失败 · 账户可用资金未填写 · 持仓起始日不可用 · 全量持仓读取失败
+        </div>
+      </div>
+      <div class="tagrow">
+        <span class="tag warn">模块完整渲染,不整块隐藏</span>
+        <span class="tag">缺失即 None,不拿 0 顶替</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    拍板点:① 六格是否够用 / 顺序对不对;② 网格块的位置(现在放在做 T 块之上)与信息密度;
+    ③ 「可配置」徽章 + 模式标签是否够直白;④ 折叠区默认收起是否合适;⑤ 降级时的写法。
+  </div>
+
+</div>
+</body>
+</html>
