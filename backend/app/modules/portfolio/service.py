@@ -21,7 +21,7 @@ v0.4.0 旧模型(已作废):
 - `recalc_position` / `upsert_position`:落库路径
 """
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -40,6 +40,11 @@ class Position:
     shares: int = 0
     total_cost: Decimal = field(default_factory=lambda: Decimal("0"))
     realized_pnl: Decimal = field(default_factory=lambda: Decimal("0"))
+    # 持仓行落库时间(v0.10:决策层「持有天数」的兜底起点口径)
+    #
+    # ⚠️ 这**不是**真实建仓日:截图导入的票,created_at = 快照导入日。
+    # 精确起点见 `get_position_start_date()`(优先取最早流水日期)。
+    created_at: datetime | None = None
 
     @property
     def avg_cost(self) -> Decimal:
@@ -243,6 +248,7 @@ def _row_to_position(row: PositionRow) -> Position:
         shares=row.shares,
         total_cost=Decimal(row.total_cost),
         realized_pnl=Decimal(row.realized_pnl),
+        created_at=row.created_at,
     )
 
 
@@ -726,6 +732,51 @@ async def set_cash_available(
     )
 
 
+# ============================================================
+# 持仓起点日期(v0.10:决策层「持有天数」的取数口)
+# ============================================================
+
+async def get_position_start_date(
+    stock_code: str, account_id: int | None = None
+) -> date | None:
+    """持仓起点日期。优先级:最早流水日期 → 持仓行落库日。
+
+    给决策层「持有天数」用。口径必须如实标注:
+    - 有流水 → 最早一笔流水的 `trade_date`(活链起点,最准);
+    - 无流水 → `positions.created_at` 的日期(**快照导入日,不是真实建仓日**);
+    - 都没有 → None(调用方降级,不编数字)。
+
+    ⚠️ `Position` **没有** `base_date` 字段——`base_date` 只是导入接口的入参
+    (决定吸收哪些流水),从未落库,不得当作持仓起点使用。
+    """
+    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
+
+    acct = account_id or DEFAULT_ACCOUNT_ID
+    async with async_session() as session:
+        earliest = await session.execute(
+            select(Transaction.trade_date)
+            .where(
+                Transaction.account_id == acct,
+                Transaction.stock_code == stock_code,
+            )
+            .order_by(Transaction.trade_date)
+            .limit(1)
+        )
+        trade_day = earliest.scalar_one_or_none()
+        if trade_day is not None:
+            return trade_day
+        created = await session.execute(
+            select(PositionRow.created_at)
+            .where(
+                PositionRow.account_id == acct,
+                PositionRow.stock_code == stock_code,
+            )
+            .limit(1)
+        )
+        created_at = created.scalar_one_or_none()
+        return created_at.date() if created_at is not None else None
+
+
 __all__ = [
     "Position",
     "ChainState",
@@ -744,4 +795,5 @@ __all__ = [
     "is_absorbed",
     "get_cash_available",
     "set_cash_available",
+    "get_position_start_date",
 ]

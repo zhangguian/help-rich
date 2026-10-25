@@ -29,6 +29,16 @@ from app.services.stock_advice_service import (
 )
 from app.services.industry_service import resolve_industry, resolve_industry_sync
 from app.services.decision_service import DecisionContext, MarketContext, build_decision
+from app.services.decision_advice_service import (
+    build_advice,
+    build_fact_pack,
+    compose_rule_advice,
+)
+from app.services.decision_context_service import (
+    enrich_decision_context,
+    load_decision_extras,
+    parse_date,
+)
 from app.services.market_context_service import get_market_context
 from app.services.position_status import (
     kline_fallback_price as _kline_fallback_price,
@@ -105,22 +115,30 @@ def _check_question(question: str) -> str:
     return q
 
 
-@router.get("/{code}/decision")
-async def decision(code: str) -> dict:
-    """确定性决策卡(零 LLM):现在该做什么 + 价位 + 触发条件 + 止损 + 别动清单
+async def _compute_decision(
+    code: str,
+    klines: list[dict] | None = None,
+    quote=None,
+    _provided: bool = False,
+    include_env: bool = True,
+) -> dict:
+    """装配决策上下文并算出决策(零 LLM)。
 
-    与 /analysis 的分工:
-    - /decision  **纯算法**,秒出、无费用、无 LLM 依赖,回答「该买/该卖/做T/走势/市场情况」
-    - /analysis  LLM 白话解读(可选),是 /decision 的解释层
+    `/decision` 与 `/decision-advice` 共用这一条路径 → 两处口径必然一致。
+    `klines`/`quote` 可由调用方传入(analysis 端点已有,复用即可,不重复拉取)。
 
-    任何一个数据源失败都只降级对应项(字段为 null + data_quality.degraded),
-    只有 K 线完全不可用才返回 502。
+    ⚠️ `_provided=True` 表示「klines/quote 已由调用方给出」—— 即使 quote 为 None
+    (拿不到报价)也不重复拉取。否则 analysis 端点会多打一次 K 线接口。
+    ⚠️ `include_env=False` 表示**不取市场环境**(analysis 端点用):
+    市场环境是 4~5 次外部 HTTP,带进来会让 analysis 端点平白多打一轮网络。
+    事实包只用确定性数字(价位/止损/仓位/网格),不需要市场环境;
+    「大盘普跌时不要加仓」这条全局规则由决策卡自己承担。
     """
-    await _check_code(code)
-    klines, quote = await asyncio.gather(
-        _load_klines(code),
-        _load_quote(code),
-    )
+    if not _provided:
+        klines, quote = await asyncio.gather(
+            _load_klines(code),
+            _load_quote(code),
+        )
     current_price, _ = _sanitize_current_price(quote, klines)
     # 持仓读取降级:SQLite 在并发写(如选股落库)时可能抛 database is locked,
     # 不能让整张决策卡 500 —— 按空仓继续,并在 degraded 里如实标注。
@@ -162,16 +180,19 @@ async def decision(code: str) -> dict:
         except (TypeError, ValueError):
             change_pct = None
 
-    try:
-        env = await get_market_context(code, stock_change_pct=change_pct)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("决策端点市场环境聚合失败(%s): %s", code, e)
-        env = None
-    if env is None:
-        env = MarketContext(degraded=["市场环境不可用"])
-    if position_failed:
-        env = replace(env, degraded=[*env.degraded, "持仓读取失败,按空仓给出建仓参考"])
-
+    if include_env:
+        try:
+            env = await get_market_context(code, stock_change_pct=change_pct)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("决策端点市场环境聚合失败(%s): %s", code, e)
+            env = None
+        if env is None:
+            env = MarketContext(degraded=["市场环境不可用"])
+        if position_failed:
+            env = replace(env, degraded=[*env.degraded, "持仓读取失败,按空仓给出建仓参考"])
+    else:
+        # analysis 端点的事实包:不取市场环境(省掉 4~5 次外部 HTTP)
+        env = MarketContext(degraded=["市场环境未纳入事实包"])
     inst = resolve_instrument(code)
     ctx = DecisionContext(
         stock_code=code,
@@ -193,7 +214,84 @@ async def decision(code: str) -> dict:
         instrument_kind=inst.kind,
         t0=inst.t0,
     )
-    return {"decision": build_decision(ctx)}
+
+    # v0.10:新增输入(费用档 / 现金 / 集中度 / 持有天数)—— 与计算器 T 卡共用同一装配口
+    latest_kline_date = klines[-1]["date"] if klines else None
+    extras = await load_decision_extras(code, as_of=parse_date(latest_kline_date))
+    ctx = enrich_decision_context(ctx, extras)
+
+    decision = build_decision(ctx)
+    degraded = decision.setdefault("data_quality", {}).setdefault("degraded", [])
+    for note in extras.degraded:
+        if note not in degraded:
+            degraded.append(note)
+
+    # 规则白话兜底(零 LLM、零延迟):决策卡永不空白
+    decision["advice"] = {
+        **compose_rule_advice(build_fact_pack(decision, as_of=latest_kline_date)),
+        "source": "rule",
+    }
+
+    return {
+        "decision": decision,
+        "klines": klines,
+        "latest_kline_date": latest_kline_date,
+    }
+
+
+async def _build_fact_pack(
+    code: str,
+    klines: list[dict],
+    quote,
+    latest_kline_date: str | None,
+) -> dict | None:
+    """决策事实包(供 analysis 提示词注入)。
+
+    决策算不出来时返回 None —— **不得让事实包拖垮分析端点**:
+    analysis 有自己的降级链(纯指标),事实包只是让数字同源的增强。
+    """
+    try:
+        result = await _compute_decision(
+            code, klines=klines, quote=quote, _provided=True, include_env=False
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("生成决策事实包失败(%s,降级为无事实包): %s", code, e)
+        return None
+    return build_fact_pack(result["decision"], as_of=latest_kline_date)
+
+
+@router.get("/{code}/decision")
+async def decision(code: str) -> dict:
+    """确定性决策卡(零 LLM):现在该做什么 + 价位 + 触发条件 + 止损 + 别动清单
+
+    与 /analysis 的分工:
+    - /decision  **纯算法**,秒出、无费用、无 LLM 依赖,回答「该买/该卖/做T/走势/市场情况」
+    - /analysis  LLM 白话解读(可选),是 /decision 的解释层
+
+    任何一个数据源失败都只降级对应项(字段为 null + data_quality.degraded),
+    只有 K 线完全不可用才返回 502。
+    """
+    await _check_code(code)
+    result = await _compute_decision(code)
+    return {"decision": result["decision"]}
+
+
+@router.get("/{code}/decision-advice")
+async def decision_advice(code: str) -> dict:
+    """操作建议白话(v0.10):把决策事实包翻译成大白话。
+
+    **显式触发**(前端按钮),不在决策卡首屏自动烧 token。
+    LLM 不可用 / 超时 → 自动退回规则文案,仍返回 200,卡片永不空白。
+    """
+    await _check_code(code)
+    result = await _compute_decision(code)
+    payload = await build_advice(
+        code,
+        result["decision"],
+        use_llm=True,
+        as_of=result["latest_kline_date"],
+    )
+    return payload
 
 
 @router.get("/{code}/analysis")
@@ -225,6 +323,10 @@ async def analysis(code: str, force: bool = False) -> dict:
         position, current_price, _kline_fallback_price(klines)
     )
     latest_kline_date = klines[-1]["date"] if klines else None
+
+    # v0.10 口径统一:把决策事实包注入 AI 提示词(数字与决策卡同源)。
+    # 复用本端点已取到的 klines/quote,不重复拉行情。
+    fact_pack = await _build_fact_pack(code, klines, quote, latest_kline_date)
 
     # 行业标签(纯本地表,零网络开销):
     #   股票 → baostock 行业名;ETF → 「跟踪{指数}」(ETF 不在个股行业表里)
@@ -269,6 +371,7 @@ async def analysis(code: str, force: bool = False) -> dict:
         current_price=current_price,
         position=position,
         position_status=position_status,
+        fact_pack=fact_pack,
     )
     result["latest_kline_date"] = latest_kline_date
     result["current_price"] = current_price
@@ -320,6 +423,10 @@ async def analysis_stream(code: str, force: bool = False) -> StreamingResponse:
         position, current_price, _kline_fallback_price(klines)
     )
 
+    # v0.10 口径统一:流式分析同样注入决策事实包
+    latest_kline_date = klines[-1]["date"] if klines else None
+    fact_pack = await _build_fact_pack(code, klines, quote, latest_kline_date)
+
     async def gen():
         try:
             async for evt in stream_stock_analysis(
@@ -328,6 +435,7 @@ async def analysis_stream(code: str, force: bool = False) -> StreamingResponse:
                 position=position,
                 position_status=position_status,
                 force=force,
+                fact_pack=fact_pack,
             ):
                 yield await _sse_event(evt)
         except asyncio.CancelledError:

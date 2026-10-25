@@ -97,6 +97,13 @@ advice 内字段硬约束:
   当 position_status=empty 时,完全省略 t_strategy 字段。
 
 t_strategy 数值同样必须从 key_levels / ma / current_price 取,不允许编造。
+
+【事实包】(v0.10)—— 决策引擎算出的确定性结论,是**唯一真相源**:
+当输入里出现「【事实包】」时:
+- 事实包里的价位 / 止损 / 仓位 / 触发 / 网格参数等数字,**必须原样引用**;
+- 不得改写、不得另算、不得补充事实包里没有的价位;
+- 事实包里为 null 的字段,写「暂无」,不得用 0 或空串顶替;
+- 事实包与「开始分析」的其他指标冲突时,**以事实包为准**(它是确定性引擎的结论)。
 """
 
 def build_question_system(
@@ -567,6 +574,26 @@ def _build_context(
     }
 
 
+def _append_fact_pack(
+    user_msg: str,
+    fact_pack: dict[str, Any] | None,
+) -> str:
+    """把决策事实包追加进提示词(v0.10 口径统一)
+
+    事实包是**唯一真相源**:AI 解读的价位 / 止损 / 仓位与决策卡同源,
+    不再出现「两处两套说法」。该端点已有 klines / quote / position,
+    复用即可,**不增加网络 IO**。
+    """
+    if not fact_pack:
+        return user_msg
+    return (
+        user_msg
+        + "\n\n【事实包】(决策引擎的确定性结论,唯一真相源;数字必须原样引用,"
+        "null 字段写「暂无」,冲突时以事实包为准):\n"
+        + json.dumps(fact_pack, ensure_ascii=False)
+    )
+
+
 def _log_raw_on_parse_fail(tag: str, stock_code: str, raw: str, err: Exception) -> None:
     """解析失败时把**原始 LLM 输出**落日志(截断 4000 字)
 
@@ -589,6 +616,7 @@ async def get_stock_analysis(
     current_price: str | None = None,
     position: Any | None = None,
     position_status: str = "empty",
+    fact_pack: dict[str, Any] | None = None,
 ) -> dict:
     """指标 + AI 解读;LLM 失败 / K 线不足 → ai=None / signal_winrate=None(纯指标降级)
 
@@ -601,6 +629,7 @@ async def get_stock_analysis(
     current_price: 实时盘中价(None 时 LLM 仅看 K 线 latest_close)
     position: 当前用户持仓(position_service.Position 或 None);供 LLM 感知用户成本
     position_status: "empty"|"profit"|"loss" — 决定 advice 输出的角色段
+    fact_pack: 决策事实包(v0.10);非 None 时注入提示词,AI 数字与决策卡同源
     """
     indicators = compute_indicators(klines)
     result: dict[str, Any] = {
@@ -631,6 +660,7 @@ async def get_stock_analysis(
             user_msg += f"\n用户持仓:{shares}股 @成本{avg_cost}元(若 position_status 已给定则仅作交叉校验,不要复述精确成本数字)"
         except Exception:
             pass
+    user_msg = _append_fact_pack(user_msg, fact_pack)
     try:
         raw = await asyncio.wait_for(
             llm.chat(ANALYSIS_SYSTEM, user_msg, max_tokens=LLM_ANALYSIS_MAX_TOKENS),
@@ -850,6 +880,7 @@ async def stream_stock_analysis(
     position: Any | None = None,
     position_status: str = "empty",
     force: bool = False,
+    fact_pack: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """流式个股分析:先吐 indicators/cache_check,再吐 ai 进度,最后 done。
 
@@ -903,6 +934,7 @@ async def stream_stock_analysis(
             user_msg += f"\n用户持仓:{shares}股 @成本{avg_cost}元(若 position_status 已给定则仅作交叉校验,不要复述精确成本数字)"
         except Exception:
             pass
+    user_msg = _append_fact_pack(user_msg, fact_pack)
 
     yield {"event": "ai_started", "at": int(time.time())}
 

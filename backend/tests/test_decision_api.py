@@ -184,7 +184,35 @@ def test_endpoint_never_calls_llm():
 
     assert r.status_code == 200
     keys = _all_keys(r.json())
-    assert not keys & {"ai", "ai_source", "llm", "advice", "chat", "stream", "tokens"}
+    # LLM 相关字段一律不得出现
+    assert not keys & {"ai", "ai_source", "llm", "chat", "stream", "tokens"}
+    # v0.10:decision 里的 advice 是**规则白话**(零 LLM),不是 AI 解读
+    advice = r.json()["decision"].get("advice")
+    if advice is not None:
+        assert advice["source"] == "rule", "决策端点的建议必须是规则文案,不得是 LLM 产物"
+        assert advice["headline"]
+
+
+def test_decision_advice_is_deterministic():
+    """规则白话必须可复现(同一份决策 → 同一段文案)"""
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch("app.api.stock.get_market_context", AsyncMock(return_value=MarketContext()))
+        )
+        stack.enter_context(
+            patch("app.api.stock.fetch_klines", AsyncMock(return_value=_klines()))
+        )
+        stack.enter_context(
+            patch("app.api.stock.QuoteService.get_quotes", AsyncMock(return_value=[]))
+        )
+        stack.enter_context(
+            patch("app.api.stock.get_position", AsyncMock(return_value=None))
+        )
+        a = client.get(f"/api/stock/{CODE}/decision").json()["decision"]["advice"]
+        b = client.get(f"/api/stock/{CODE}/decision").json()["decision"]["advice"]
+
+    assert a["headline"] == b["headline"]
+    assert a["bullets"] == b["bullets"]
 
 
 def test_llm_functions_not_invoked():
@@ -381,3 +409,99 @@ def test_resolve_position_status_empty_stays_empty():
     pos = Position(stock_code=CODE, stock_name="x", shares=0, total_cost=Decimal("0"))
     assert stock_api._resolve_position_status(pos, None, "10.2")[0] == "empty"
     assert stock_api._resolve_position_status(None, "10.2", None)[0] == "empty"
+
+
+# ==================================================================
+# v0.10 操作建议增强(六格 / 网格 / 五个维度 / 白话端点)
+# ==================================================================
+
+
+def _extras():
+    from app.core.cost_engine import TradeFees
+    from app.services.decision_context_service import DecisionExtras
+
+    return DecisionExtras(
+        fees=TradeFees(enabled=True),
+        cash_available=374.63,
+        position_share_pct=42.0,
+        holding_days=23,
+    )
+
+
+def _patch_v010(stack):
+    stack.enter_context(
+        patch("app.api.stock.load_decision_extras", AsyncMock(return_value=_extras()))
+    )
+    stack.enter_context(
+        patch("app.api.stock.get_market_context", AsyncMock(return_value=MarketContext()))
+    )
+    stack.enter_context(
+        patch("app.api.stock.fetch_klines", AsyncMock(return_value=_klines()))
+    )
+    stack.enter_context(
+        patch("app.api.stock.QuoteService.get_quotes", AsyncMock(return_value=[]))
+    )
+    stack.enter_context(
+        patch("app.api.stock.get_position", AsyncMock(return_value=None))
+    )
+
+
+def test_decision_response_contains_v010_fields():
+    with ExitStack() as stack:
+        _patch_v010(stack)
+        r = client.get(f"/api/stock/{CODE}/decision")
+
+    assert r.status_code == 200
+    d = r.json()["decision"]
+    for key in (
+        "suggestions", "grid_plan", "advice",
+        "cost_anchor", "time_window", "cost_effect",
+        "instrument_rule", "concentration",
+    ):
+        assert key in d, f"/decision 缺少 {key}"
+    assert set(d["suggestions"].keys()) == {
+        "price", "stop_loss", "position", "trigger", "timing", "avoid",
+    }
+    assert d["grid_plan"]["suitable"] in (True, False)
+
+
+def test_decision_advice_endpoint_falls_back_to_rule_when_llm_unavailable():
+    """LLM 不可用 → 仍 200 + source='rule'(卡片永不空白)"""
+    with ExitStack() as stack:
+        _patch_v010(stack)
+        stack.enter_context(
+            patch(
+                "app.services.decision_advice_service._get_llm",
+                AsyncMock(return_value=None),
+            )
+        )
+        r = client.get(f"/api/stock/{CODE}/decision-advice")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["advice"]["source"] == "rule"
+    assert body["advice"]["headline"]
+    assert isinstance(body["advice"]["bullets"], list)
+
+
+def test_analysis_prompt_receives_fact_pack():
+    """口径统一:analysis 的提示词里必须带上决策事实包"""
+    captured = {}
+
+    async def _fake_analysis(code, klines, **kwargs):
+        captured.update(kwargs)
+        return {"stock_code": code, "ai": None, "ai_error": "unconfigured"}
+
+    with ExitStack() as stack:
+        _patch_v010(stack)
+        stack.enter_context(
+            patch("app.api.stock.get_stock_analysis", _fake_analysis)
+        )
+        r = client.get(f"/api/stock/{CODE}/analysis")
+
+    assert r.status_code == 200
+    pack = captured.get("fact_pack")
+    assert pack is not None, "analysis 未收到事实包"
+    assert pack["stock_code"] == CODE
+    assert "suggestions" in pack
+    assert "grid_plan" in pack

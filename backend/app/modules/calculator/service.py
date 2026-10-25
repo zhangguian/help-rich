@@ -26,6 +26,11 @@ from typing import Any
 
 from app.core.instrument import resolve_instrument
 from app.services.decision_service import DecisionContext, MarketContext, build_decision
+from app.services.decision_context_service import (
+    enrich_decision_context,
+    load_decision_extras,
+    parse_date,
+)
 from app.services.kline_service import KLineSourceUnavailable, fetch_klines
 from app.services.market_context_service import get_market_context
 from app.services.position_status import (
@@ -178,6 +183,12 @@ async def build_decision_context(code: str) -> tuple[DecisionContext, Any]:
         instrument_kind=inst.kind,
         t0=inst.t0,
     )
+    # v0.10:新增输入与决策卡共用同一装配口(费用档/现金/集中度/持有天数),
+    # 否则决策卡与计算器 T 卡会给出两套口径。
+    extras = await load_decision_extras(
+        code, as_of=parse_date(klines[-1]["date"] if klines else None)
+    )
+    ctx = enrich_decision_context(ctx, extras)
     return ctx, position
 
 

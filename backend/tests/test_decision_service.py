@@ -1,16 +1,24 @@
 """确定性决策引擎单测(decision_service 纯函数)"""
 import pytest
 
+from app.core.cost_engine import TradeFees
 from app.services.decision_service import (
     DecisionContext,
     MarketContext,
     build_decision,
+    build_suggestions,
     derive_verdict,
     effective_price,
+    judge_concentration,
+    judge_cost_anchor,
+    judge_cost_effect,
     judge_do_not,
     judge_entry,
     judge_exit,
+    judge_grid_plan,
+    judge_instrument_rule,
     judge_loss_plan,
+    judge_time_window,
     judge_trend,
     judge_t_plan,
 )
@@ -500,4 +508,230 @@ def test_do_not_near_limit_up_wording_differs_for_etf():
     etf_out = judge_do_not(DecisionContext(**{**base, "instrument_kind": "etf"}))
     assert not any("涨停" in s for s in etf_out), f"ETF 无涨跌停,不能说涨停:{etf_out}"
     assert any("不追高" in s for s in etf_out), f"ETF 也要提醒别追高:{etf_out}"
+
+
+# ==================================================================
+# v0.10 补维度 + 操作建议六格(设计文档 §6.8 / §6.10)
+#
+# 纪律:这五个维度**只增信息**,不改既有 verdict 逻辑与阈值。
+# ==================================================================
+
+
+def _ctx_v010(**kw) -> DecisionContext:
+    """带 v0.10 新输入的上下文(费用档 / 现金 / 持有天数 / 集中度)"""
+    ind = _ind()
+    price = kw.get("price", 16.19)
+    klines = kw.get("klines") or _kline([price] * 60)
+    return DecisionContext(
+        stock_code="002185.SZ", stock_name="华天科技",
+        indicators=ind, klines=klines,
+        current_price=price,
+        prev_close=price,
+        cost_basis=kw.get("cost_basis"),
+        shares=kw.get("shares", 0),
+        position_status=kw.get("position_status", "loss"),
+        env=MarketContext(),
+        instrument_kind=kw.get("instrument_kind", "stock"),
+        t0=kw.get("t0", False),
+        fees=kw.get("fees"),
+        cash_available=kw.get("cash_available"),
+        holding_days=kw.get("holding_days"),
+        position_share_pct=kw.get("position_share_pct"),
+    )
+
+
+# ---------------------------------------------------------------- 成本锚点
+
+def test_cost_anchor_reports_loss_and_break_even_gap():
+    ctx = _ctx_v010(price=16.19, cost_basis=17.02, shares=1000)
+    anchor = judge_cost_anchor(ctx)
+    assert anchor is not None
+    assert anchor["pnl_pct"] < 0
+    assert anchor["break_even_gap_pct"] > 0
+    assert anchor["distance_to_stop_pct"] < 0
+
+
+def test_cost_anchor_reports_target_space_when_profit():
+    ctx = _ctx_v010(price=19.0, cost_basis=17.02, shares=1000, position_status="profit")
+    anchor = judge_cost_anchor(ctx)
+    assert anchor["pnl_pct"] > 0
+    assert anchor["break_even_gap_pct"] is None
+    assert anchor["distance_to_target_pct"] is not None
+
+
+def test_cost_anchor_none_without_cost_basis():
+    """缺持仓成本 → None(不拿 0 冒充)"""
+    assert judge_cost_anchor(_ctx_v010(price=16.19, cost_basis=None, shares=1000)) is None
+
+
+def test_cost_anchor_falls_back_to_latest_close():
+    """无实时价 → 用最新收盘价(既有 effective_price 约定),不是 None"""
+    ctx = _ctx_v010(price=None, cost_basis=17.02, shares=1000, klines=_kline([16.19] * 60))
+    anchor = judge_cost_anchor(ctx)
+    assert anchor is not None
+    assert anchor["current_price"] == 14.35   # _ind() 的 latest_close
+
+
+def test_cost_anchor_none_without_any_price():
+    """既无实时价也无最新收盘 → None(不拿 0 冒充)"""
+    ind = _ind()
+    ind.pop("latest_close", None)
+    ctx = DecisionContext(
+        stock_code="002185.SZ", stock_name="华天科技",
+        indicators=ind, klines=_kline([16.19] * 60),
+        current_price=None, prev_close=None,
+        cost_basis=17.02, shares=1000, position_status="loss",
+    )
+    assert judge_cost_anchor(ctx) is None
+
+
+# ---------------------------------------------------------------- 时间窗口
+
+def test_time_window_flags_overdue():
+    tw = judge_time_window(_ctx_v010(holding_days=23))
+    assert tw is not None
+    assert tw["overdue"] is True
+    assert "23" in tw["note"]
+
+
+def test_time_window_not_overdue_within_limit():
+    tw = judge_time_window(_ctx_v010(holding_days=10))
+    assert tw["overdue"] is False
+
+
+def test_time_window_none_when_unknown():
+    assert judge_time_window(_ctx_v010(holding_days=None)) is None
+
+
+# ---------------------------------------------------------------- 费用影响
+
+def test_cost_effect_stock_roundtrip_fee():
+    fees = TradeFees(enabled=True)
+    ctx = _ctx_v010(fees=fees)
+    effect = judge_cost_effect(ctx, {"amplitude_pct": 5.0})
+    assert effect is not None
+    assert effect["fee_basis"] == "configured"
+    assert effect["roundtrip_fee_pct"] == pytest.approx(0.102, abs=0.001)
+    assert effect["worth_it"] is True
+
+
+def test_cost_effect_etf_has_lower_fee():
+    fees = TradeFees.etf_variant(TradeFees(enabled=True))
+    ctx = _ctx_v010(fees=fees, instrument_kind="etf")
+    effect = judge_cost_effect(ctx, {"amplitude_pct": 5.0})
+    assert effect["roundtrip_fee_pct"] == pytest.approx(0.05, abs=0.001)
+    assert "ETF" in effect["note"]
+
+
+def test_cost_effect_default_estimate_when_fees_disabled():
+    ctx = _ctx_v010(fees=TradeFees(enabled=False))
+    effect = judge_cost_effect(ctx, {"amplitude_pct": 5.0})
+    assert effect["fee_basis"] == "default_estimate"
+    assert "未启用" in effect["note"]
+
+
+def test_cost_effect_none_when_fees_missing():
+    assert judge_cost_effect(_ctx_v010(fees=None), {"amplitude_pct": 5.0}) is None
+
+
+def test_cost_effect_not_worth_when_spread_below_twice_fee():
+    fees = TradeFees(enabled=True)
+    ctx = _ctx_v010(fees=fees)
+    effect = judge_cost_effect(ctx, {"amplitude_pct": 0.1})
+    assert effect["worth_it"] is False
+
+
+# ---------------------------------------------------------------- 品种规则
+
+def test_instrument_rule_etf_t0():
+    rule = judge_instrument_rule(_ctx_v010(instrument_kind="etf", t0=True))
+    assert rule["kind"] == "etf"
+    assert any("T+0" in n for n in rule["notes"])
+    assert any("免印花税" in n for n in rule["notes"])
+
+
+def test_instrument_rule_stock():
+    rule = judge_instrument_rule(_ctx_v010(instrument_kind="stock"))
+    assert rule["kind"] == "stock"
+    assert any("涨跌幅限制" in n for n in rule["notes"])
+
+
+# ---------------------------------------------------------------- 集中度
+
+def test_concentration_levels():
+    assert judge_concentration(_ctx_v010(position_share_pct=10.0))["level"] == "low"
+    assert judge_concentration(_ctx_v010(position_share_pct=35.0))["level"] == "warn"
+    assert judge_concentration(_ctx_v010(position_share_pct=55.0))["level"] == "strong"
+
+
+def test_concentration_none_when_unknown():
+    assert judge_concentration(_ctx_v010(position_share_pct=None)) is None
+
+
+# ---------------------------------------------------------------- 操作建议六格
+
+def test_suggestions_has_all_six_slots():
+    ctx = _ctx_v010(price=16.19, cost_basis=17.02, shares=1000, holding_days=23)
+    d = build_decision(ctx)
+    sug = d["suggestions"]
+    assert set(sug.keys()) == {"price", "stop_loss", "position", "trigger", "timing", "avoid"}
+    assert sug["price"]["label"] == "价位"
+    assert sug["position"]["value"]
+    assert "23" in sug["timing"]["value"]
+
+
+def test_suggestions_missing_data_is_none_not_zero():
+    """数据不足 → 该格为 None(前端不渲染),不许拿 0 / 空串顶替"""
+    ctx = _ctx_v010(price=16.19, cost_basis=None, shares=1000, holding_days=None)
+    d = build_decision(ctx)
+    sug = d["suggestions"]
+    assert sug["timing"] is None
+    assert sug["stop_loss"] is None or sug["stop_loss"]["value"]
+
+
+def test_suggestions_avoid_joins_do_not():
+    ctx = _ctx_v010(price=16.19, cost_basis=17.02, shares=1000)
+    d = build_decision(ctx)
+    if d["do_not"]:
+        assert d["suggestions"]["avoid"]["value"] == " · ".join(d["do_not"])
+
+
+def test_suggestions_price_does_not_repeat_price_twice():
+    """condition 里已带价位时不重复前缀"""
+    ctx = _ctx_v010(price=16.19, cost_basis=17.02, shares=1000)
+    d = build_decision(ctx)
+    price_cell = d["suggestions"]["price"]
+    if price_cell:
+        assert price_cell["value"].count("元") <= 2
+
+
+# ---------------------------------------------------------------- 零回归
+
+def test_existing_verdict_logic_unchanged_by_new_dimensions():
+    """新增维度不得改变既有 verdict / headline / actions / t_plan"""
+    from dataclasses import replace as dc_replace
+
+    closes = [10.0 + i * 0.1 for i in range(60)]
+    base_ctx = _ctx(closes, shares=0, position_status="empty")
+    base = build_decision(base_ctx)
+
+    rich_ctx = dc_replace(
+        base_ctx,
+        fees=TradeFees(enabled=True),
+        cash_available=100000.0,
+        holding_days=100,
+        position_share_pct=80.0,
+    )
+    rich = build_decision(rich_ctx)
+
+    assert rich["verdict"] == base["verdict"]
+    assert rich["headline"] == base["headline"]
+    assert rich["actions"] == base["actions"]
+    assert rich["t_plan"] == base["t_plan"]
+
+
+def test_degraded_mentions_missing_new_inputs():
+    ctx = _ctx_v010(price=16.19, cost_basis=17.02, shares=1000, holding_days=None)
+    d = build_decision(ctx)
+    assert any("持有天数" in x for x in d["data_quality"]["degraded"])
 
