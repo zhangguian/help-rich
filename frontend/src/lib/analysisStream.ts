@@ -16,6 +16,16 @@ export type AnalysisStreamEvent =
   | { event: 'ai_progress'; elapsed_s: number }
   | { event: 'ai_complete'; ai: unknown; ai_source: 'live'; latest_kline_date: string | null }
   | { event: 'ai_error'; code: string; message: string }
+  /**
+   * 命中当日缓存(同日同 K 线)—— `data` 是与 /analysis 端点兼容的完整结果
+   * (含 indicators / ai / position_status / latest_kline_date …)。
+   *
+   * ⚠️ 之前前端**不认识这个事件**:命中缓存时只收到 indicators + done,
+   * 于是 ai 永远为空 → 点了「开始分析」却看不到 AI 解读,
+   * 决策卡的「AI 解读」白话来源也就永远拿不到。
+   */
+  | { event: 'cache_hit'; data: unknown }
+  | { event: 'cache_miss' }
   | { event: 'done' };
 
 export interface ConsumeOptions {

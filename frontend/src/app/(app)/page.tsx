@@ -12,6 +12,8 @@ import { pctClass, chipColor } from '@/lib/format';
 import type {
   AmountTrendResponse,
   AnalysisResult,
+  DecisionAdviceResponse,
+  DecisionAdviceText,
   MarketIndex,
   MarketMover,
   MarketOverview,
@@ -220,6 +222,12 @@ export default function Workbench() {
   const [decisionError, setDecisionError] = useState<string | null>(null);
   // 请求序号守卫:快速切票时,A 的慢响应不得覆盖 B 的结果(否则会显示另一只票的价位)
   const decisionSeq = useRef(0);
+  // v0.10「AI 写白话」:按钮触发的现场白话(显式烧 token,不自动调)
+  const [decisionAdvice, setDecisionAdvice] = useState<DecisionAdviceText | null>(null);
+  const [decisionAdviceNote, setDecisionAdviceNote] = useState<string | null>(null);
+  const [decisionAdviceLoading, setDecisionAdviceLoading] = useState(false);
+  // 白话请求的序号守卫(与决策卡分开计数:点「写白话」不能影响决策卡自己的请求序号)
+  const adviceSeq = useRef(0);
   // 当前选中股票(异步回调防串:分析/缓存返回时比对,避免贴到别的股票面板)
   const activeCodeRef = useRef<string | null>(null);
   const [showCalc, setShowCalc] = useState(false);
@@ -569,6 +577,40 @@ export default function Workbench() {
     }
   }, []);
 
+  /**
+   * 「AI 写白话」:按钮触发,现场把决策事实包翻译成大白话。
+   *
+   * - **不自动调**:首屏不烧 token,用户点了才发请求;
+   * - **序号守卫**:与决策卡同款 —— 慢响应不得贴到已经切走的票上;
+   * - **失败即兜底**:LLM 不可用 → 后端退回规则文案(source='rule'),前端照常显示。
+   */
+  const fetchDecisionAdvice = useCallback(async (code: string) => {
+    const seq = ++adviceSeq.current;
+    setDecisionAdviceLoading(true);
+    try {
+      const r = await apiGet<DecisionAdviceResponse>(
+        `/stock/${encodeURIComponent(code)}/decision-advice`,
+        { timeout: 60000 },
+      );
+      if (seq !== adviceSeq.current) return;
+      setDecisionAdvice(r.advice ?? null);
+      setDecisionAdviceNote(
+        r.advice?.source === 'rule' ? 'AI 白话不可用,已退回规则文案' : null,
+      );
+    } catch {
+      if (seq !== adviceSeq.current) return;
+      setDecisionAdvice(null);
+      setDecisionAdviceNote('白话生成失败,已保留规则文案');
+    } finally {
+      if (seq === adviceSeq.current) setDecisionAdviceLoading(false);
+    }
+  }, []);
+
+  const writeDecisionAdvice = useCallback(() => {
+    if (!activeCode) return;
+    void fetchDecisionAdvice(activeCode);
+  }, [activeCode, fetchDecisionAdvice]);
+
   const selectStock = useCallback(
     (code: string) => {
       setActiveCode(code);
@@ -576,6 +618,11 @@ export default function Workbench() {
       setAnalysis(null);
       setAnalysisStarted(false);
       setSelectedQuote(null);
+      // 切票 → 作废上一只票的现场白话(否则会把 A 的白话贴到 B 上)
+      adviceSeq.current += 1;
+      setDecisionAdvice(null);
+      setDecisionAdviceNote(null);
+      setDecisionAdviceLoading(false);
       // 记住这次盯的票,刷新后直接回到它(见上方 LAST_SELECTED_KEY 注释)
       try {
         localStorage.setItem(LAST_SELECTED_KEY, code);
@@ -656,6 +703,31 @@ export default function Workbench() {
             const code = evt.code as 'unconfigured' | 'timeout' | 'failed';
             return { ...prev, aiError: code, aiSource: null };
           });
+        } else if (evt.event === 'cache_hit') {
+          // 命中当日缓存:后端把**完整**分析结果(含 ai)放在 data 里。
+          // ⚠️ 之前这里什么都不做 → 缓存命中时 ai 永远为空,
+          //    点了「开始分析」却看不到 AI 解读,决策卡的「AI 解读」白话也拿不到。
+          const cached = snakeToCamel((evt.data ?? {}) as Record<string, unknown>) as Partial<
+            AnalysisResult & Record<string, unknown>
+          >;
+          setAnalysis((prev) => ({
+            ...(prev ?? ({} as AnalysisResult)),
+            stockCode: code,
+            indicators: (cached.indicators ?? prev?.indicators) as AnalysisResult['indicators'],
+            ai: (cached.ai ?? null) as AnalysisResult['ai'],
+            aiSource: 'live',
+            aiError: null,
+            latestKlineDate:
+              (cached.latestKlineDate as string | null) ?? prev?.latestKlineDate ?? null,
+            positionStatus: cached.positionStatus ?? prev?.positionStatus,
+            costBasisPct: cached.costBasisPct ?? prev?.costBasisPct,
+            signalWinrate: cached.signalWinrate ?? prev?.signalWinrate,
+            industry: cached.industry ?? prev?.industry,
+            industrySource: cached.industrySource ?? prev?.industrySource,
+            industryNote: cached.industryNote ?? prev?.industryNote,
+            currentPrice: cached.currentPrice ?? prev?.currentPrice,
+            quoteChangePct: cached.quoteChangePct ?? prev?.quoteChangePct,
+          } as AnalysisResult));
         } else if (evt.event === 'done') {
           // 流结束,分析结果由后端 ai_source=="live" 时落库,前端无需缓存
           setAnalysis((prev) => prev);
@@ -968,6 +1040,10 @@ export default function Workbench() {
               decision={decision}
               decisionLoading={decisionLoading}
               decisionError={decisionError}
+              decisionAdvice={decisionAdvice}
+              decisionAdviceNote={decisionAdviceNote}
+              decisionAdviceLoading={decisionAdviceLoading}
+              onWriteDecisionAdvice={writeDecisionAdvice}
               chat={{
                 stockCode: activeCode,
                 stockName: selectedQuote?.name ?? null,

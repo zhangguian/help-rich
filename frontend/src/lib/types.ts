@@ -958,4 +958,120 @@ export interface StockDecision {
   trendState: { phase: string; note: string };
   marketEnv: DecisionMarketEnv;
   dataQuality: { degraded: string[] };
+  /* ---------- v0.10 操作建议区(设计文档 §6.8~§6.10) ---------- */
+  /** 操作建议六格;单格为 null = 该维度数据不足(前端置灰占位,不编数字) */
+  suggestions: DecisionSuggestions | null;
+  /** 规则白话兜底(零 LLM,source 恒为 'rule');AI 不可用时的兜底文案 */
+  advice: DecisionAdviceText | null;
+  /** 网格交易配置建议;不适用时配置类字段全为 null(不给半截配置) */
+  gridPlan: DecisionGridPlan | null;
+  /** 成本锚点:浮盈亏 / 回本所需 / 距止损 / 到 P80 空间 / 风险收益比 */
+  costAnchor: DecisionCostAnchor | null;
+  /** 时间窗口:持有天数 / 起点来源 / 是否超期 / 超期文案 */
+  timeWindow: DecisionTimeWindow | null;
+  /** 费用影响:往返费率 / 费用档 / 做 T 差价是否划算 */
+  costEffect: DecisionCostEffect | null;
+  /** 品种规则:涨跌停 / 印花税 / T+0 */
+  instrumentRule: DecisionInstrumentRule | null;
+  /** 集中度:该票持仓成本占比 */
+  concentration: DecisionConcentration | null;
+}
+
+/** 操作建议六格的一格(设计文档 §6.10) */
+export interface DecisionSuggestionCell {
+  label: string;
+  value: string;
+}
+
+/** 操作建议六格:价位 / 止损 / 仓位 / 触发 / 时间 / 不动 */
+export interface DecisionSuggestions {
+  price: DecisionSuggestionCell | null;
+  stopLoss: DecisionSuggestionCell | null;
+  position: DecisionSuggestionCell | null;
+  trigger: DecisionSuggestionCell | null;
+  timing: DecisionSuggestionCell | null;
+  avoid: DecisionSuggestionCell | null;
+}
+
+/** 网格交易配置建议(设计文档 §6.9);`mode`: add = 加仓网格 / base = 底仓高抛低吸 */
+export interface DecisionGridPlan {
+  suitable: boolean;
+  mode: 'add' | 'base' | null;
+  reason: string;
+  rangeLow: number | null;
+  rangeHigh: number | null;
+  spanPct: number | null;
+  grids: number | null;
+  stepPct: number | null;
+  stepPrice: number | null;
+  sharesPerGrid: number | null;
+  capitalPerGrid: number | null;
+  cashNeeded: number | null;
+  cashAvailable: number | null;
+  netStepPct: number | null;
+  roundtripFeePct: number | null;
+  feeBasis: 'configured' | 'default_estimate' | null;
+  netProfitPerGrid: number | null;
+  /** 与做 T 互斥:两者都可行时为 true(择一,勿同时执行) */
+  replaceTPlan: boolean;
+  risk: string;
+  unsuitableSignals: string;
+}
+
+/** 白话(规则兜底或 LLM 现场生成) */
+export interface DecisionAdviceText {
+  headline: string;
+  bullets: string[];
+  source: 'rule' | 'llm';
+  generatedAt?: string;
+}
+
+/** `GET /api/stock/{code}/decision-advice` 响应 */
+export interface DecisionAdviceResponse {
+  advice: DecisionAdviceText;
+  degraded: string[];
+}
+
+/** 成本锚点(设计文档 §6.8.1) */
+export interface DecisionCostAnchor {
+  costBasis: number | null;
+  currentPrice: number | null;
+  pnlPct: number | null;
+  breakEvenGapPct: number | null;
+  distanceToStopPct: number | null;
+  distanceToTargetPct: number | null;
+  riskReward: number | null;
+}
+
+/** 时间窗口(设计文档 §6.8.2) */
+export interface DecisionTimeWindow {
+  holdingDays: number | null;
+  /** 'transactions' = 最早一笔流水(真实起点) / 'snapshot' = 快照导入日(建仓日未知) */
+  source: 'transactions' | 'snapshot' | null;
+  overdue: boolean | null;
+  overdueText: string | null;
+  note: string;
+}
+
+/** 费用影响(设计文档 §6.8.3) */
+export interface DecisionCostEffect {
+  roundtripFeePct: number | null;
+  feeBasis: 'configured' | 'default_estimate' | null;
+  spreadPct: number | null;
+  worthIt: boolean | null;
+  note: string;
+}
+
+/** 品种规则(设计文档 §6.8.4) */
+export interface DecisionInstrumentRule {
+  kind: string;
+  t0: boolean;
+  notes: string[];
+}
+
+/** 集中度(设计文档 §6.8.5) */
+export interface DecisionConcentration {
+  costSharePct: number | null;
+  level: string;
+  note: string;
 }

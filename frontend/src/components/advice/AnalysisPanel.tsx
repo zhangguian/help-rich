@@ -1115,7 +1115,11 @@ function Mini({ label, value, suffix }: { label: string; value: number | null; s
   );
 }
 
-// === v2.5 操作参考结构化区块(rationale + 6 字段网格 + 可选 T 区块) ===
+// === v0.10 操作参考区块(只留白话) ===
+//
+// ⚠️ v0.10 起**六格(价位/止损/仓位/触发/时间/不动)与做 T 块已上移到决策卡的
+// 「操作建议」区** —— 同一屏出现两套说法(而且数字可能不一致)是本轮要消灭的问题。
+// 这里只保留 AI 写的一行白话(rationale),数字一律以决策卡为准。
 
 type RoleColor = {
   cardCls: string;
@@ -1137,9 +1141,6 @@ const ROLE_COLOR: Record<'empty' | 'profit' | 'loss', RoleColor> = {
   },
 };
 
-const T_CARD_UNSUITABLE_CLS =
-  'rounded-xl bg-warn-bg/30 border border-warn/20 p-3';
-
 function OperationAdviceBlock({ analysis }: { analysis: AnalysisResult }) {
   const ai = analysis.ai;
   if (!ai) return null;
@@ -1158,23 +1159,10 @@ function OperationAdviceBlock({ analysis }: { analysis: AnalysisResult }) {
     trigger: '',
     holdingWindow: '',
     notAction: '',
-    tStrategy: null,
   };
-  const cells: Array<{ icon: string; label: string; value: string }> = [
-    { icon: '💰', label: '价位', value: a.price?.entryOrExitRange ?? '' },
-    { icon: '🛑', label: '止损', value: a.price?.stopLoss ?? '' },
-    { icon: '📊', label: '仓位', value: a.positionPct ?? '' },
-    { icon: '⚡', label: '触发', value: a.trigger ?? '' },
-    { icon: '⏰', label: '时间', value: a.holdingWindow ?? '' },
-    { icon: '🚫', label: '不动', value: a.notAction ?? '' },
-  ];
-  const visibleCells = cells.filter((c) => c.value);
-  const t = a.tStrategy;
-  const showT = (ps === 'profit' || ps === 'loss') && t != null;
   return (
     <div className="space-y-2">
-      {/* 头部:rationale(整行)+ 角色 + 浮盈/浮亏 */}
-      <div className={palette.cardCls}>
+      <div className={palette.cardCls} data-testid="analysis-advice-block">
         <div className="flex items-baseline justify-between mb-2">
           <div className={palette.labelCls}>{ai.adviceRole || '操作参考'}</div>
           {pctTxt && <div className={palette.labelCls}>{pctTxt}</div>}
@@ -1184,66 +1172,10 @@ function OperationAdviceBlock({ analysis }: { analysis: AnalysisResult }) {
             {a.rationale}
           </p>
         )}
+        <p className="mt-2 text-[10.5px] leading-[1.5] text-text-ter">
+          具体操作数字与网格、做 T 参考见上方「操作建议」区 —— 两处同源,以决策卡为准。
+        </p>
       </div>
-      {/* 6 字段网格 */}
-      {visibleCells.length > 0 && (
-        <div className="grid grid-cols-1 ">
-          {visibleCells.map((c) => (
-            <div key={c.label} className={palette.cardCls}>
-              <div className={palette.labelCls}>
-                {c.icon} {c.label}
-              </div>
-              <p className="text-sm text-text-pri leading-relaxed whitespace-pre-wrap">
-                {c.value}
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
-      {/* 做 T 区块(仅 profit/loss 渲染) */}
-      {showT && t && (
-        <div
-          className={
-            t.suitable
-              ? 'rounded-xl bg-accent-subtle/60 border border-accent/20 p-3'
-              : T_CARD_UNSUITABLE_CLS
-          }
-        >
-          <div className="flex items-baseline justify-between mb-2">
-            <div className={palette.labelCls}>🔄 做 T 参考</div>
-            <div className={palette.labelCls}>
-              {t.suitable ? '适合 ✓' : '不适合'}
-            </div>
-          </div>
-          {t.suitable ? (
-            <div className="grid grid-cols-1  gap-2">
-              {[
-                { icon: '📏', label: 'T 区间', value: t.tRange },
-                { icon: '🛡️', label: '底仓', value: t.basePositionPct },
-                { icon: '📤', label: '卖出触发', value: t.sellTrigger },
-                { icon: '📥', label: '买回触发', value: t.buybackTrigger },
-                { icon: '🛑', label: '底仓止损', value: t.stopLoss },
-                { icon: '🚫', label: '不做 T', value: t.unsuitableSignals },
-              ]
-                .filter((c) => c.value)
-                .map((c) => (
-                  <div key={c.label} className={palette.cardCls}>
-                    <div className={palette.labelCls}>
-                      {c.icon} {c.label}
-                    </div>
-                    <p className="text-sm text-text-pri leading-relaxed whitespace-pre-wrap">
-                      {c.value}
-                    </p>
-                  </div>
-                ))}
-            </div>
-          ) : (
-            <p className="text-sm text-text-sec leading-relaxed whitespace-pre-wrap">
-              {t.unsuitableSignals || '当前行情不适合做 T'}
-            </p>
-          )}
-        </div>
-      )}
     </div>
   );
 }

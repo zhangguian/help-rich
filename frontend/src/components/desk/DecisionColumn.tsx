@@ -5,6 +5,7 @@ import clsx from 'clsx';
 import type {
   AmountTrendResponse,
   AnalysisResult,
+  DecisionAdviceText,
   MarketMover,
   Position,
   StockDecision,
@@ -63,6 +64,10 @@ export function DecisionColumn({
   decision,
   decisionLoading,
   decisionError,
+  decisionAdvice,
+  decisionAdviceNote,
+  decisionAdviceLoading,
+  onWriteDecisionAdvice,
 }: {
   positions: Position[];
   analysis: AnalysisResult | null;
@@ -79,6 +84,12 @@ export function DecisionColumn({
   decision: StockDecision | null;
   decisionLoading: boolean;
   decisionError: string | null;
+  /** 决策卡「操作建议」区的现场生成白话(「AI 写白话」按钮触发) */
+  decisionAdvice: DecisionAdviceText | null;
+  /** 现场生成白话时的降级说明(LLM 不可用 → 退回规则文案) */
+  decisionAdviceNote: string | null;
+  decisionAdviceLoading: boolean;
+  onWriteDecisionAdvice: () => void;
   /** AI 问一问(ChatPanel)所需的当前标的上下文 */
   chat: {
     stockCode: string | null;
@@ -109,7 +120,16 @@ export function DecisionColumn({
     <div className="flex flex-col min-h-0">
       {/* 0. 操作决策卡(确定性引擎,置顶 —— 用户问的第一个问题是「我现在该干什么」) */}
       <section className="px-3 py-2.5 border-b border-border-def">
-        <DecisionCard decision={decision} loading={decisionLoading} error={decisionError} />
+        <DecisionCard
+          decision={decision}
+          loading={decisionLoading}
+          error={decisionError}
+          analysis={analysis}
+          advice={decisionAdvice}
+          adviceNote={decisionAdviceNote}
+          adviceLoading={decisionAdviceLoading}
+          onWriteAdvice={onWriteDecisionAdvice}
+        />
       </section>
 
       {/* 1. 持仓概览 */}
