@@ -536,6 +536,7 @@ def _ctx_v010(**kw) -> DecisionContext:
         fees=kw.get("fees"),
         cash_available=kw.get("cash_available"),
         holding_days=kw.get("holding_days"),
+        holding_days_source=kw.get("holding_days_source"),
         position_share_pct=kw.get("position_share_pct"),
     )
 
@@ -601,6 +602,82 @@ def test_time_window_not_overdue_within_limit():
 
 def test_time_window_none_when_unknown():
     assert judge_time_window(_ctx_v010(holding_days=None)) is None
+
+
+def test_time_window_overdue_text_states_how_much_over():
+    """超期必须有**文案**(设计文档 §6.8.2:是否超期 + 超期文案)—— 只有布尔值等于没提示"""
+    tw = judge_time_window(_ctx_v010(holding_days=80, holding_days_source="transactions"))
+    assert tw["overdue"] is True
+    assert tw["overdue_text"] is not None
+    assert "20" in tw["overdue_text"]      # 阈值
+    assert "60" in tw["overdue_text"]      # 超出 80-20=60 天
+
+
+def test_time_window_overdue_text_none_within_limit():
+    tw = judge_time_window(_ctx_v010(holding_days=10, holding_days_source="transactions"))
+    assert tw["overdue_text"] is None
+
+
+def test_time_window_traceable_source_says_held():
+    """起点可追溯(最早一笔流水)→ 可以说「已持有 N 天」"""
+    tw = judge_time_window(_ctx_v010(holding_days=80, holding_days_source="transactions"))
+    assert tw["source"] == "transactions"
+    assert tw["note"].startswith("已持有 80 天")
+
+
+def test_time_window_snapshot_source_must_not_claim_held():
+    """快照导入的票真实建仓日未知 → **不得**写成「已持有 N 天」(把不知道说成知道)"""
+    tw = judge_time_window(_ctx_v010(holding_days=0, holding_days_source="snapshot"))
+    assert tw["source"] == "snapshot"
+    assert "已持有" not in tw["note"]
+    assert "自纳入本系统起 0 天" in tw["note"]
+    assert "建仓日未知" in tw["note"]
+
+
+def test_time_window_unknown_source_falls_back_to_conservative_wording():
+    """来源不明 → 取保守口径(宁可说不知道)"""
+    tw = judge_time_window(_ctx_v010(holding_days=30))
+    assert "已持有" not in tw["note"]
+    assert "自纳入本系统起 30 天" in tw["note"]
+
+
+# ---------------------------------------------------------------- 六格·时间格文案
+
+def test_suggestions_timing_cell_uses_source_wording():
+    """六格「时间」格的口径必须跟起点来源一致"""
+    snap = build_suggestions(
+        _ctx_v010(holding_days=0, holding_days_source="snapshot", cost_basis=3.741, shares=1000),
+        actions=[],
+        stop_loss=None,
+        position_pct="解套优先,减仓不追补",
+        do_not=["下跌通道中不要抄底"],
+        cost_anchor=judge_cost_anchor(
+            _ctx_v010(holding_days=0, holding_days_source="snapshot", cost_basis=3.741, shares=1000)
+        ),
+        time_window=judge_time_window(
+            _ctx_v010(holding_days=0, holding_days_source="snapshot", cost_basis=3.741, shares=1000)
+        ),
+    )
+    assert snap["timing"] is not None
+    assert "自纳入本系统起 0 天" in snap["timing"]["value"]
+    assert "已持有" not in snap["timing"]["value"]
+
+
+def test_suggestions_timing_cell_carries_overdue_signal():
+    """超期是行动信息 → 必须出现在六格里,而不是只躺在折叠区"""
+    ctx = _ctx_v010(holding_days=80, holding_days_source="transactions")
+    cell = build_suggestions(
+        ctx,
+        actions=[],
+        stop_loss=None,
+        position_pct="分批止盈",
+        do_not=[],
+        cost_anchor=judge_cost_anchor(ctx),
+        time_window=judge_time_window(ctx),
+    )
+    assert cell["timing"] is not None
+    assert "已持有 80 天" in cell["timing"]["value"]
+    assert "已超 20 天阈值" in cell["timing"]["value"]
 
 
 # ---------------------------------------------------------------- 费用影响

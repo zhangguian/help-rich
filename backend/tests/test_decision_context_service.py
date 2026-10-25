@@ -13,6 +13,7 @@ from decimal import Decimal
 import pytest
 
 from app.core.cost_engine import TradeFees
+from app.modules.portfolio.service import PositionStart
 from app.services import decision_context_service as svc
 from app.services.decision_context_service import (
     DecisionExtras,
@@ -38,6 +39,7 @@ def _stub_sources(monkeypatch):
         "cash": Decimal("374.63"),
         "positions": [_Pos("002185.SZ", 1000, "17020.00"), _Pos("000807.SZ", 500, "12580.00")],
         "start_date": date(2026, 8, 1),
+        "start_source": "transactions",
         "fail": set(),
     }
 
@@ -64,12 +66,12 @@ def _stub_sources(monkeypatch):
     async def _start(code):
         if "start" in state["fail"]:
             raise RuntimeError("db down")
-        return state["start_date"]
+        return PositionStart(date=state["start_date"], source=state["start_source"])
 
     monkeypatch.setattr(svc, "fees_for_instrument", _fees)
     monkeypatch.setattr(svc, "get_cash_available", _cash)
     monkeypatch.setattr(svc, "get_all_positions", _positions)
-    monkeypatch.setattr(svc, "get_position_start_date", _start)
+    monkeypatch.setattr(svc, "get_position_start", _start)
     monkeypatch.setattr(svc.cost_settings_repo, "get", _repo_get)
     return state
 
@@ -84,6 +86,21 @@ async def test_load_extras_returns_all_four_inputs(_stub_sources):
     assert extras.position_share_pct == pytest.approx(17020 / (17020 + 12580) * 100, abs=0.01)
     assert extras.holding_days == 85
     assert extras.degraded == []
+
+
+@pytest.mark.asyncio
+async def test_load_extras_carries_start_source(_stub_sources):
+    """起点来源必须一起带上来 —— 判定层要靠它决定文案口径(能不能说「已持有」)"""
+    extras = await load_decision_extras("002185.SZ", as_of=date(2026, 10, 25))
+    assert extras.holding_days_source == "transactions"
+
+
+@pytest.mark.asyncio
+async def test_load_extras_snapshot_source_is_reported(_stub_sources):
+    """快照导入(无流水)的票 → 来源 = snapshot,真实建仓日未知"""
+    _stub_sources["start_source"] = "snapshot"
+    extras = await load_decision_extras("002185.SZ", as_of=date(2026, 10, 25))
+    assert extras.holding_days_source == "snapshot"
 
 
 @pytest.mark.asyncio
@@ -171,12 +188,14 @@ def test_enrich_injects_new_fields_only():
         cash_available=374.63,
         position_share_pct=42.0,
         holding_days=23,
+        holding_days_source="transactions",
     )
     enriched = enrich_decision_context(ctx, extras)
     assert enriched.fees is extras.fees
     assert enriched.cash_available == 374.63
     assert enriched.position_share_pct == 42.0
     assert enriched.holding_days == 23
+    assert enriched.holding_days_source == "transactions"
     # 既有字段不得被动
     assert enriched.current_price == 16.19
     assert enriched.cost_basis == 17.02

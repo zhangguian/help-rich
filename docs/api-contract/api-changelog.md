@@ -50,12 +50,19 @@
 - `GET /api/stock/{code}/decision` 新增 4 项 IO 输入(全部本地 DB 查询,零网络):
   费用档(按品种选档,ETF 免印花税/过户费)、账户可用资金、持仓成本占比、持有自然日
 - 费用口径新增 `fee_basis` 标记:`configured`(用户已启用费用设置)/ `default_estimate`(未启用,按费率档估算)
+- `time_window` 新增 `source`(起点来源:`transactions` = 最早一笔流水 / `snapshot` = 快照导入日)
+  与 `overdue_text`(超期文案);`note` 与六格「时间」格的措辞随来源变化 ——
+  快照导入的票真实建仓日未知,只说「自纳入本系统起 N 天(建仓日未知)」,**不写「已持有 N 天」**
 
 #### Fixed(修复)
 - 「持有天数」原计划取 `Position.base_date` —— 该字段**从未落库**(只是导入接口入参),
   改为「最早流水日期 → 持仓行落库日」两级取数,并在文案里如实标注口径
 - 网格每格资金与每格利润原被混为一谈(会让「所需资金」与「每格净收益」同时算错),
   已拆为 `capital_per_grid`(一手金额)与 `net_profit_per_grid`(毛收益 − 往返费用)
+- 「持有天数」原只输出 `overdue` 布尔值(超期了但卡上看不出超期多少天),
+  已补 `overdue_text`,并让六格「时间」格带上超期信号
+- 快照导入的持仓原显示「已持有 0 天」(把"不知道真实建仓日"说成了"今天刚买"),
+  已按起点来源改为「自纳入本系统起 0 天(建仓日未知)」
 
 #### Test(测试)
 - 新增 `tests/test_decision_grid.py`(网格 9 条判据)、`tests/test_decision_advice_service.py`、

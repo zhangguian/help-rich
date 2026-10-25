@@ -425,6 +425,7 @@ def _extras():
         cash_available=374.63,
         position_share_pct=42.0,
         holding_days=23,
+        holding_days_source="transactions",
     )
 
 
@@ -463,6 +464,24 @@ def test_decision_response_contains_v010_fields():
         "price", "stop_loss", "position", "trigger", "timing", "avoid",
     }
     assert d["grid_plan"]["suitable"] in (True, False)
+
+
+def test_decision_response_time_window_carries_source_and_overdue_text():
+    """时间窗口要把「起点来源」与「超期文案」一起端出来(不只是布尔值)"""
+    with ExitStack() as stack:
+        _patch_v010(stack)
+        r = client.get(f"/api/stock/{CODE}/decision")
+
+    assert r.status_code == 200
+    tw = r.json()["decision"]["time_window"]
+    assert tw["holding_days"] == 23
+    assert tw["source"] == "transactions"
+    assert tw["overdue"] is True
+    assert tw["overdue_text"]
+    # 六格「时间」格必须带出超期信号
+    timing = r.json()["decision"]["suggestions"]["timing"]
+    assert timing is not None
+    assert "已超 20 天阈值" in timing["value"]
 
 
 def test_decision_advice_endpoint_falls_back_to_rule_when_llm_unavailable():

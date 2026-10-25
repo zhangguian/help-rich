@@ -23,7 +23,7 @@ v0.4.0 旧模型(已作废):
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from sqlalchemy import select
 
@@ -43,7 +43,7 @@ class Position:
     # 持仓行落库时间(v0.10:决策层「持有天数」的兜底起点口径)
     #
     # ⚠️ 这**不是**真实建仓日:截图导入的票,created_at = 快照导入日。
-    # 精确起点见 `get_position_start_date()`(优先取最早流水日期)。
+    # 精确起点见 `get_position_start()`(优先取最早流水日期)。
     created_at: datetime | None = None
 
     @property
@@ -733,13 +733,25 @@ async def set_cash_available(
 
 
 # ============================================================
-# 持仓起点日期(v0.10:决策层「持有天数」的取数口)
+# 持仓起点(v0.10:决策层「持有天数」的取数口)
 # ============================================================
 
-async def get_position_start_date(
+# 起点来源:两种口径的文案必须不同,不能混为一谈
+START_SOURCE_TRANSACTIONS = "transactions"  # 最早一笔流水 → 真实起点可追溯
+START_SOURCE_SNAPSHOT = "snapshot"        # 持仓行落库日 → 快照导入日,真实建仓日未知
+
+
+class PositionStart(NamedTuple):
+    """持仓起点 + 其来源(来源决定文案口径)"""
+
+    date: date
+    source: str  # START_SOURCE_TRANSACTIONS | START_SOURCE_SNAPSHOT
+
+
+async def get_position_start(
     stock_code: str, account_id: int | None = None
-) -> date | None:
-    """持仓起点日期。优先级:最早流水日期 → 持仓行落库日。
+) -> PositionStart | None:
+    """持仓起点 + 来源。优先级:最早流水日期 → 持仓行落库日。
 
     给决策层「持有天数」用。口径必须如实标注:
     - 有流水 → 最早一笔流水的 `trade_date`(活链起点,最准);
@@ -764,7 +776,7 @@ async def get_position_start_date(
         )
         trade_day = earliest.scalar_one_or_none()
         if trade_day is not None:
-            return trade_day
+            return PositionStart(date=trade_day, source=START_SOURCE_TRANSACTIONS)
         created = await session.execute(
             select(PositionRow.created_at)
             .where(
@@ -774,7 +786,9 @@ async def get_position_start_date(
             .limit(1)
         )
         created_at = created.scalar_one_or_none()
-        return created_at.date() if created_at is not None else None
+        if created_at is None:
+            return None
+        return PositionStart(date=created_at.date(), source=START_SOURCE_SNAPSHOT)
 
 
 __all__ = [
@@ -795,5 +809,8 @@ __all__ = [
     "is_absorbed",
     "get_cash_available",
     "set_cash_available",
-    "get_position_start_date",
+    "get_position_start",
+    "PositionStart",
+    "START_SOURCE_TRANSACTIONS",
+    "START_SOURCE_SNAPSHOT",
 ]

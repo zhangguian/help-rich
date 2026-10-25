@@ -289,8 +289,10 @@ CostAnchor = {
 }
 TimeWindow = {
   "holding_days": int | None,       # 自然日
+  "source": "transactions" | "snapshot" | None,  # 起点来源(决定文案口径,见 §6.8.2)
   "overdue": bool | None,           # 是否超过 HOLD_DAYS_LIMIT
-  "note": str,                     # 口径说明（自纳入本系统起算）
+  "overdue_text": str | None,       # 超期文案(未超期为 None)
+  "note": str,                     # 口径说明(随 source 变化)
 }
 CostEffect = {
   "roundtrip_fee_pct": float | None,
@@ -777,14 +779,27 @@ risk_reward         = distance_to_target_pct / abs(distance_to_stop_pct)   # 分
 
 ```
 输入：ctx.holding_days（自然日，由 IO 层算好注入；判定层不做日历计算）
+      ctx.holding_days_source（'transactions' | 'snapshot'，IO 层一并注入）
 HOLD_DAYS_LIMIT = 20（自然日，约合 14 个交易日）
-overdue = holding_days > HOLD_DAYS_LIMIT
-note    = f'自纳入本系统起 {holding_days} 天（自然日）'
+overdue     = holding_days > HOLD_DAYS_LIMIT
+overdue_text= f'已超 {HOLD_DAYS_LIMIT} 天阈值 {holding_days - HOLD_DAYS_LIMIT} 天' if overdue else None
 ```
 
+**起点来源决定文案措辞（不得含糊）**：
+
+| `source` | 起点含义 | `note` 文案 | 六格「时间」格文案 |
+|---|---|---|---|
+| `'transactions'` | 该票**最早一笔流水**的 `trade_date`（真实起点可追溯） | `已持有 N 天（自然日，起点=最早一笔流水）` | `已持有 N 天` |
+| `'snapshot'` | `positions.created_at`（**快照导入日，真实建仓日未知**） | `自纳入本系统起 N 天（自然日，真实建仓日未知）` | `自纳入本系统起 N 天（建仓日未知）` |
+
+> 来源缺失（`None`）时**按保守口径处理**（等同 `snapshot`）：宁可说"不知道"，不得把"不知道"说成"已持有 N 天"。
+
+**超期必须出文案**：`overdue` 只是布尔值，真正要提示的是 `overdue_text`；
+六格「时间」格要带上超期信号（超期是行动信息，不能只躺在折叠区）。
+
 **取数口径（IO 层，优先级从高到低）**：
-1. `transactions` 表该票**最早 `trade_date`**（活链起点，最准）；
-2. `positions.created_at` 的日期（**快照导入日，不是真实建仓日**）；
+1. `transactions` 表该票**最早 `trade_date`**（活链起点，最准）→ `source='transactions'`；
+2. `positions.created_at` 的日期（**快照导入日，不是真实建仓日**）→ `source='snapshot'`；
 3. 都拿不到 → `holding_days = None` + degraded。
 
 > ⚠️ `Position` 数据类**没有** `base_date` 字段——`base_date` 只是导入接口的入参（决定吸收哪些流水），**从未落库**。

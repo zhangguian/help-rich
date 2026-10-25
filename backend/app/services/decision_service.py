@@ -36,6 +36,12 @@ CONCENTRATION_WARN_PCT = 30      # 持仓成本占比 ≥ 此值 → 集中度�
 CONCENTRATION_STRONG_PCT = 50    # 持仓成本占比 ≥ 此值 → 集中度过高
 T_SPREAD_MIN_MULTIPLE = 2        # 做 T 预期差价需 ≥ 2× 往返费用率才算划算
 
+# 持有天数的起点来源(IO 层注入;取值与 portfolio 层的取数口一致):
+# - transactions:起点 = 该票最早一笔流水 → 真实起点可追溯,可写「已持有 N 天」
+# - snapshot:起点 = 持仓行落库日(快照导入日)→ 真实建仓日未知,只能写「自纳入本系统起 N 天」
+HOLD_DAYS_SOURCE_TRANSACTIONS = "transactions"
+HOLD_DAYS_SOURCE_SNAPSHOT = "snapshot"
+
 # ---- v0.10 网格建议阈值(设计文档 §6.9) ----
 GRID_WINDOW = 20                 # 网格观察窗口(根)
 GRID_MIN_AMPLITUDE_PCT = 3.0     # 近 20 日平均振幅下限
@@ -76,6 +82,7 @@ class DecisionContext:
     fees: TradeFees | None = None            # 已按品种选档(ETF 免印花税/过户费)
     cash_available: float | None = None      # 账户可用资金(元);None = 未填写
     holding_days: int | None = None          # 持有自然日(IO 层算好注入)
+    holding_days_source: str | None = None   # 起点来源:'transactions' | 'snapshot'(IO 层注入)
     position_share_pct: float | None = None  # 该票持仓成本占比 %
 
 
@@ -658,14 +665,34 @@ def judge_cost_anchor(ctx: DecisionContext) -> dict[str, Any] | None:
 
 
 def judge_time_window(ctx: DecisionContext) -> dict[str, Any] | None:
-    """时间窗口:持有天数与是否超期(口径:自纳入本系统起算)"""
+    """时间窗口:持有天数、是否超期、超期文案(口径如实标注起点来源)
+
+    起点来源决定文案措辞:
+    - `transactions`(最早一笔流水)→ 真实起点可追溯,写「已持有 N 天」;
+    - `snapshot`(快照导入日)→ 真实建仓日未知,写「自纳入本系统起 N 天」,
+      **不得**写成「已持有 N 天」(那会把"不知道"说成"知道")。
+    """
     days = ctx.holding_days
     if days is None:
         return None
+    days = int(days)
+    traceable = ctx.holding_days_source == HOLD_DAYS_SOURCE_TRANSACTIONS
+    if traceable:
+        note = f"已持有 {days} 天(自然日,起点=最早一笔流水)"
+    else:
+        note = f"自纳入本系统起 {days} 天(自然日,真实建仓日未知)"
+    overdue = days > HOLD_DAYS_LIMIT
+    overdue_text = (
+        f"已超 {HOLD_DAYS_LIMIT} 天阈值 {days - HOLD_DAYS_LIMIT} 天"
+        if overdue
+        else None
+    )
     return {
-        "holding_days": int(days),
-        "overdue": bool(days > HOLD_DAYS_LIMIT),
-        "note": f"自纳入本系统起 {int(days)} 天(自然日)",
+        "holding_days": days,
+        "source": ctx.holding_days_source,
+        "overdue": overdue,
+        "note": note,
+        "overdue_text": overdue_text,
     }
 
 
@@ -1008,14 +1035,21 @@ def build_suggestions(
         if cond:
             trigger_cell = {"label": "触发", "value": cond}
 
-    # 时间:持有天数 + 回本还差多少
+    # 时间:持有天数(口径随起点来源)+ 超期提示 + 回本还差多少
     timing_cell: dict[str, Any] | None = None
     if time_window is not None:
         days = time_window.get("holding_days")
         gap = (cost_anchor or {}).get("break_even_gap_pct")
         bits: list[str] = []
         if days is not None:
-            bits.append(f"已持有 {int(days)} 天")
+            if time_window.get("source") == HOLD_DAYS_SOURCE_TRANSACTIONS:
+                bits.append(f"已持有 {int(days)} 天")
+            else:
+                # 起点不可追溯 → 只说纳入本系统多久,不说"已持有"
+                bits.append(f"自纳入本系统起 {int(days)} 天(建仓日未知)")
+            overdue_text = time_window.get("overdue_text")
+            if overdue_text:
+                bits.append(overdue_text)
         if gap is not None:
             bits.append(f"回本还需 +{gap:.1f}%")
         if bits:

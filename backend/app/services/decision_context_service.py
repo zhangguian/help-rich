@@ -33,7 +33,7 @@ from app.services.decision_service import DecisionContext
 from app.modules.portfolio.service import (
     get_all_positions,
     get_cash_available,
-    get_position_start_date,
+    get_position_start,
 )
 
 
@@ -45,6 +45,9 @@ class DecisionExtras:
     cash_available: float | None = None
     position_share_pct: float | None = None
     holding_days: int | None = None
+    # 持有天数的起点来源('transactions' = 最早流水 / 'snapshot' = 快照导入日)。
+    # 来源决定文案口径:快照导入的票真实建仓日未知,不得写成「已持有 N 天」。
+    holding_days_source: str | None = None
     degraded: list[str] = field(default_factory=list)
 
 
@@ -115,13 +118,15 @@ async def load_decision_extras(
 
     # --- 持有天数 ---
     holding_days: int | None = None
+    holding_days_source: str | None = None
     try:
-        start = await get_position_start_date(code)
+        start = await get_position_start(code)
         if start is None:
             degraded.append("持仓起始日不可用,持有天数未知")
         else:
             end = as_of or date.today()
-            holding_days = max((end - start).days, 0)
+            holding_days = max((end - start.date).days, 0)
+            holding_days_source = start.source
     except Exception as exc:  # noqa: BLE001
         degraded.append(f"持仓起始日读取失败,持有天数未知({exc})")
 
@@ -130,6 +135,7 @@ async def load_decision_extras(
         cash_available=cash,
         position_share_pct=share_pct,
         holding_days=holding_days,
+        holding_days_source=holding_days_source,
         degraded=degraded,
     )
 
@@ -148,6 +154,7 @@ def enrich_decision_context(
         cash_available=extras.cash_available,
         position_share_pct=extras.position_share_pct,
         holding_days=extras.holding_days,
+        holding_days_source=extras.holding_days_source,
     )
 
 
