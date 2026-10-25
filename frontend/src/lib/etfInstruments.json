@@ -1,0 +1,381 @@
+{
+  "version": "2026-10-25",
+  "categories": {
+    "broad": "宽基",
+    "industry": "行业",
+    "qdii": "QDII",
+    "commodity": "商品",
+    "bond": "债券",
+    "money": "货币"
+  },
+  "items": [
+    {
+      "code": "510050.SH",
+      "name": "上证50ETF华夏",
+      "index": "上证 50",
+      "category": "broad",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "510300.SH",
+      "name": "沪深300ETF华泰柏瑞",
+      "index": "沪深 300",
+      "category": "broad",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "510500.SH",
+      "name": "中证500ETF南方",
+      "index": "中证 500",
+      "category": "broad",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "159915.SZ",
+      "name": "创业板",
+      "index": "创业板指",
+      "category": "broad",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "588000.SH",
+      "name": "科创50ETF华夏",
+      "index": "科创 50",
+      "category": "broad",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "588080.SH",
+      "name": "科创50ETF易方达",
+      "index": "科创 50",
+      "category": "broad",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "512480.SH",
+      "name": "半导体ETF国联安",
+      "index": "中证全指半导体",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "515790.SH",
+      "name": "光伏ETF华泰柏瑞",
+      "index": "中证光伏产业",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "512760.SH",
+      "name": "芯片ETF国泰",
+      "index": "CES 半导体芯片",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "159995.SZ",
+      "name": "芯片ETF",
+      "index": "国证半导体芯片",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "512660.SH",
+      "name": "军工ETF国泰",
+      "index": "中证军工",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "159825.SZ",
+      "name": "农业ETF",
+      "index": "中证农业主题",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "515030.SH",
+      "name": "新能源车ETF华夏",
+      "index": "中证新能源汽车",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "159806.SZ",
+      "name": "新能车",
+      "index": "中证新能源汽车",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "512170.SH",
+      "name": "医疗ETF华宝",
+      "index": "中证医疗",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "159992.SZ",
+      "name": "创新药",
+      "index": "中证创新药",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "159801.SZ",
+      "name": "芯片基金",
+      "index": "国证半导体芯片",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "512880.SH",
+      "name": "证券ETF国泰",
+      "index": "中证全指证券公司",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "512000.SH",
+      "name": "券商ETF华宝",
+      "index": "中证全指证券公司",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "515220.SH",
+      "name": "煤炭ETF国泰",
+      "index": "中证煤炭",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "515210.SH",
+      "name": "钢铁ETF国泰",
+      "index": "中证钢铁",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "516970.SH",
+      "name": "基建ETF广发",
+      "index": "中证基建",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "159996.SZ",
+      "name": "家电ETF",
+      "index": "中证家电",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "159732.SZ",
+      "name": "消费电子",
+      "index": "国证消费电子主题",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "588160.SH",
+      "name": "科创新材料ETF南方",
+      "index": "科创新材料",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "561380.SH",
+      "name": "电网设备ETF国泰",
+      "index": "恒生A股电网设备",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "159796.SZ",
+      "name": "电池",
+      "index": "中证电池主题",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "561980.SH",
+      "name": "半导体设备ETF招商",
+      "index": "中证半导体产业",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "513050.SH",
+      "name": "中概互联网ETF易方达",
+      "index": "中概互联网",
+      "category": "qdii",
+      "t0": true,
+      "form": "etf"
+    },
+    {
+      "code": "513100.SH",
+      "name": "纳指ETF国泰",
+      "index": "纳斯达克 100",
+      "category": "qdii",
+      "t0": true,
+      "form": "etf"
+    },
+    {
+      "code": "513300.SH",
+      "name": "纳斯达克ETF华夏",
+      "index": "纳斯达克 100",
+      "category": "qdii",
+      "t0": true,
+      "form": "etf"
+    },
+    {
+      "code": "513500.SH",
+      "name": "标普500ETF博时",
+      "index": "标普 500",
+      "category": "qdii",
+      "t0": true,
+      "form": "etf"
+    },
+    {
+      "code": "513880.SH",
+      "name": "日经225ETF华安",
+      "index": "日经 225",
+      "category": "qdii",
+      "t0": true,
+      "form": "etf"
+    },
+    {
+      "code": "513730.SH",
+      "name": "东南亚科技ETF华泰柏瑞",
+      "index": "东南亚科技",
+      "category": "qdii",
+      "t0": true,
+      "form": "etf"
+    },
+    {
+      "code": "159941.SZ",
+      "name": "纳指ETF",
+      "index": "纳斯达克 100",
+      "category": "qdii",
+      "t0": true,
+      "form": "etf"
+    },
+    {
+      "code": "513870.SH",
+      "name": "纳指ETF富国",
+      "index": "纳斯达克 100",
+      "category": "qdii",
+      "t0": true,
+      "form": "etf"
+    },
+    {
+      "code": "513180.SH",
+      "name": "恒生科技ETF华夏",
+      "index": "恒生科技指数",
+      "category": "qdii",
+      "t0": true,
+      "form": "etf"
+    },
+    {
+      "code": "513120.SH",
+      "name": "港股创新药ETF广发",
+      "index": "中证香港创新药",
+      "category": "qdii",
+      "t0": true,
+      "form": "etf"
+    },
+    {
+      "code": "518880.SH",
+      "name": "黄金ETF华安",
+      "index": "黄金现货",
+      "category": "commodity",
+      "t0": true,
+      "form": "etf"
+    },
+    {
+      "code": "518800.SH",
+      "name": "黄金ETF国泰",
+      "index": "黄金 9999",
+      "category": "commodity",
+      "t0": true,
+      "form": "etf"
+    },
+    {
+      "code": "159981.SZ",
+      "name": "能源化工",
+      "index": "易盛郑商所能源化工指数",
+      "category": "commodity",
+      "t0": true,
+      "form": "etf"
+    },
+    {
+      "code": "162411.SZ",
+      "name": "华宝油气",
+      "index": "标普石油天然气上游",
+      "category": "commodity",
+      "t0": true,
+      "form": "lof"
+    },
+    {
+      "code": "501018.SH",
+      "name": "南方原油LOF",
+      "index": "原油",
+      "category": "commodity",
+      "t0": true,
+      "form": "lof"
+    },
+    {
+      "code": "160723.SZ",
+      "name": "嘉实原油",
+      "index": "原油",
+      "category": "commodity",
+      "t0": true,
+      "form": "lof"
+    },
+    {
+      "code": "160216.SZ",
+      "name": "国泰商品",
+      "index": "国泰大宗商品",
+      "category": "commodity",
+      "t0": true,
+      "form": "lof"
+    },
+    {
+      "code": "501099.SH",
+      "name": "平安新兴产业LOF",
+      "index": "中国战略新兴产业",
+      "category": "industry",
+      "t0": false,
+      "form": "lof"
+    }
+  ]
+}

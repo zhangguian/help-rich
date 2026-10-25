@@ -8,6 +8,7 @@ import clsx from 'clsx';
 
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
+import { EtfBadge } from '@/components/ui/EtfBadge';
 import { decimalFormat } from '@/lib/decimalFormat';
 import { useStopLossChecker } from '@/hooks/useStopLossChecker';
 import type { Position } from '@/lib/types';
@@ -66,6 +67,8 @@ export function PositionsList({
                 <div className="flex-1 min-w-0">
                   <div className="font-semibold truncate">
                     {p.stockName ?? p.stockCode}
+                    {/* 场内 ETF 品种徽章(跨境/商品类带 T+0) */}
+                    <EtfBadge code={p.stockCode} className="ml-2 align-middle" />
                     <span className="text-text-ter text-sm ml-2 font-mono">
                       {p.stockCode}
                     </span>

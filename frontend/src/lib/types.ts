@@ -822,6 +822,12 @@ export interface AnalysisResult {
   positionStatus?: 'empty' | 'profit' | 'loss';
   /** v2.5:基于持仓成本的盈亏百分比(0.05=+5%);空仓或成本缺失时 null */
   costBasisPct?: number | null;
+  /** 行业标签:股票 = 行业名(如「白酒」);ETF = 「跟踪{指数}」;未覆盖 = null */
+  industry?: string | null;
+  /** 行业标签来源:baostock / etf_index / sina / null */
+  industrySource?: string | null;
+  /** 行业标签的补充说明(如「场内 ETF · 宽基」) */
+  industryNote?: string | null;
 }
 
 /** 自选股(P2.2) */

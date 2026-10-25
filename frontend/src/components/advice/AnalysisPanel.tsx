@@ -105,6 +105,9 @@ export function AnalysisPanel({
           liar={ind.liar}
           position={ind.position}
           patterns={ind.patterns}
+          industry={analysis?.industry ?? null}
+          industrySource={analysis?.industrySource ?? null}
+          industryNote={analysis?.industryNote ?? null}
         />
       )}
       {/* M1.2 买卖位置参考卡:近 120 日 P20/P80 风险带 + 参考支撑 + 建议止损 */}
@@ -446,6 +449,9 @@ function SignalPanel({
   liar,
   position,
   patterns,
+  industry,
+  industrySource,
+  industryNote,
 }: {
   signal: SignalFusion | undefined;
   winrate: SignalWinrate | undefined;
@@ -453,6 +459,12 @@ function SignalPanel({
   liar: LiarIndicator;
   position: PositionIndicator;
   patterns: PatternMatch[];
+  /** 行业标签:股票 = 行业名;ETF = 「跟踪{指数}」 */
+  industry?: string | null;
+  /** 行业标签来源(etf_index = 场内 ETF 的跟踪指数) */
+  industrySource?: string | null;
+  /** 行业标签补充说明(如「场内 ETF · 宽基」) */
+  industryNote?: string | null;
 }) {
   // 旧缓存(24h IndexedDB)可能不含 signal 字段,降级显示而不崩溃
   if (!signal) {
@@ -474,6 +486,26 @@ function SignalPanel({
         <span className="text-sm font-semibold text-text-pri">🤖 机械信号 · 确定性引擎</span>
         <span className={clsx('text-xs', conf.cls)}>{conf.label}</span>
       </div>
+
+      {/* 行业标签:股票 = 行业名;ETF = 「跟踪{指数}」(ETF 不在个股行业表里) */}
+      {industry && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-text-ter">行业</span>
+          <span
+            className={clsx(
+              'text-xs px-2 py-0.5 rounded border',
+              industrySource === 'etf_index'
+                ? 'border-warn/30 bg-warn-bg text-warn'
+                : 'border-border-def bg-bg-subtle text-text-sec',
+            )}
+          >
+            {industry}
+          </span>
+          {industrySource === 'etf_index' && industryNote && (
+            <span className="text-[10px] text-text-ter">{industryNote}</span>
+          )}
+        </div>
+      )}
 
       <div className="flex items-center gap-2">
         <span

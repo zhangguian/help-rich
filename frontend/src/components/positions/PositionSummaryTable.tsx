@@ -3,6 +3,7 @@
 import clsx from 'clsx';
 
 import { TermHint } from '@/components/ui/TermHint';
+import { EtfBadge } from '@/components/ui/EtfBadge';
 import { decimalFormat } from '@/lib/decimalFormat';
 import { pctClass } from '@/lib/format';
 import type { Position } from '@/lib/types';
@@ -76,8 +77,12 @@ export function PositionSummaryTable({
                   className="border-t border-border-def hover:bg-bg-subtle cursor-pointer"
                 >
                   <td className="py-2 px-2">
-                    <div className="text-text-pri font-semibold font-sans truncate max-w-[10rem]">
-                      {p.stockName ?? p.stockCode}
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-text-pri font-semibold font-sans truncate max-w-[10rem]">
+                        {p.stockName ?? p.stockCode}
+                      </span>
+                      {/* 场内 ETF 品种徽章(跨境/商品类带 T+0) */}
+                      <EtfBadge code={p.stockCode} />
                     </div>
                     <div className="text-text-ter text-xs">{p.stockCode}</div>
                   </td>

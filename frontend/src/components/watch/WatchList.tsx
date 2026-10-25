@@ -14,6 +14,7 @@ import type { Quote } from '@/lib/types';
 import { GlassCard } from '@/components/ui/GlassCard';
 import { LiquidModal } from '@/components/ui/LiquidModal';
 import { Button } from '@/components/ui/Button';
+import { EtfBadge } from '@/components/ui/EtfBadge';
 import { TransactionForm } from '@/components/transaction/TransactionForm';
 import { pctClass, chipColor } from '@/lib/format';
 
@@ -136,6 +137,8 @@ const WatchRow = memo(function WatchRow({
               <span className="text-[12.5px] text-text-pri truncate leading-tight">
                 {it.name ?? it.code}
               </span>
+              {/* 场内 ETF 品种徽章(跨境/商品类带 T+0) */}
+              <EtfBadge code={it.code} />
               {it.inPosition &&
                 (mode === 'position' ? (
                   /* 持仓视角:每一行都是持仓,「持」徽标没有信息量 —— 换成浮盈比例。
@@ -240,6 +243,8 @@ const WatchRow = memo(function WatchRow({
           <span className="text-sm font-medium text-text-pri truncate">
             {it.name ?? it.code}
           </span>
+          {/* 场内 ETF 品种徽章(跨境/商品类带 T+0) */}
+          <EtfBadge code={it.code} />
           {it.inPosition && (
             <>
               <span className="text-[10px] px-1.5 py-px rounded-full bg-accent-subtle text-accent border border-accent/25 shrink-0">

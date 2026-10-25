@@ -10,6 +10,7 @@ import { IntradayChart } from '@/components/charts/IntradayChart';
 import { WinrateCard } from '@/components/positions/WinrateCard';
 import { DailyAnalysisList } from '@/components/positions/DailyAnalysisList';
 import { Card } from '@/components/ui/Card';
+import { EtfBadge } from '@/components/ui/EtfBadge';
 import { ErrorState, SkeletonState } from '@/components/ui/States';
 import { apiGet } from '@/lib/api';
 import type { AnalysisResult } from '@/lib/types';
@@ -58,7 +59,11 @@ export default function StockDetailPage() {
         <Link href="/" className="text-sm text-text-ter hover:text-accent">
           ← 返回盯盘
         </Link>
-        <h1 className="font-mono text-2xl font-semibold text-text-pri mt-2">{stockCode}</h1>
+        <h1 className="font-mono text-2xl font-semibold text-text-pri mt-2">
+          {stockCode}
+          {/* 场内 ETF 品种徽章(跨境/商品类带 T+0) */}
+          <EtfBadge code={stockCode} className="ml-2 align-middle" />
+        </h1>
         <p className="text-xs text-text-ter mt-1">个股详情 · 技术分析 / 胜率 / 历史复盘</p>
       </header>
 
