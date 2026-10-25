@@ -71,8 +71,12 @@ async def _resolve_sina(code: str) -> str | None:
 async def resolve_industry(code: str) -> dict:
     """四级兜底;返回 {code, industry, source, note}
 
-    1. baostock 离线行业表 → 2. 新浪行业排行反查
-    3. **ETF 跟踪指数**(品种表)→ 4. 降级
+    顺序:baostock 离线表 → **ETF 跟踪指数**(品种表)→ 新浪行业排行 → 降级
+
+    **为什么 ETF 排在新浪前面**:ETF 不在个股行业表里,若先走新浪就要为一个
+    「注定不命中」的结果付一次网络往返(行业反查还会超时)。品种表是本地静态
+    文件,命中即返回 —— 股票路径完全不受影响(baostock 命中照旧走 baostock,
+    baostock 未命中的股票照旧走新浪)。
     """
     name = _resolve_local(code)
     if name:
@@ -81,6 +85,16 @@ async def resolve_industry(code: str) -> dict:
             "industry": name,
             "source": "baostock",
             "note": None,
+        }
+
+    # ETF 不在个股行业表里 → 用「跟踪指数」作为行业语义的替代表达
+    inst = resolve_instrument(code)
+    if inst.is_etf and inst.index_name:
+        return {
+            "code": code,
+            "industry": f"跟踪{inst.index_name}",
+            "source": "etf_index",
+            "note": f"场内 ETF · {inst.category_label or '其他'}",
         }
 
     name = await _resolve_sina(code)
@@ -92,7 +106,33 @@ async def resolve_industry(code: str) -> dict:
             "note": "新浪行业排行领涨股命中(离线表未覆盖)",
         }
 
-    # ETF 不在个股行业表里 → 用「跟踪指数」作为行业语义的替代表达
+    return {
+        "code": code,
+        "industry": None,
+        "source": None,
+        "note": "未获得行业归属(离线表外/北交所),行业走势暂不可用",
+    }
+
+
+def resolve_industry_sync(code: str) -> dict:
+    """只查本地表(baostock 离线表 + ETF 品种表),**不打网络**
+
+    给「只想挂一个行业标签、不值得为它付一次网络往返」的场景用
+    (如 analysis 端点往响应里注入行业 chip)。
+
+    股票走 baostock 离线表;ETF 走品种表的跟踪指数;
+    表外 ETF 与未覆盖标的 → industry=None(不编、不猜)。
+    返回结构与 `resolve_industry` 一致。
+    """
+    name = _resolve_local(code)
+    if name:
+        return {
+            "code": code,
+            "industry": name,
+            "source": "baostock",
+            "note": None,
+        }
+
     inst = resolve_instrument(code)
     if inst.is_etf and inst.index_name:
         return {
@@ -106,8 +146,13 @@ async def resolve_industry(code: str) -> dict:
         "code": code,
         "industry": None,
         "source": None,
-        "note": "未获得行业归属(离线表外/北交所),行业走势暂不可用",
+        "note": "未获得行业归属(离线表外),行业走势暂不可用",
     }
 
 
-__all__ = ["resolve_industry", "match_sina_industry_rank", "_load_industry_map"]
+__all__ = [
+    "resolve_industry",
+    "resolve_industry_sync",
+    "match_sina_industry_rank",
+    "_load_industry_map",
+]

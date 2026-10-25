@@ -27,7 +27,7 @@ from app.services.stock_advice_service import (
     get_stock_analysis,
     stream_stock_analysis,
 )
-from app.services.industry_service import resolve_industry
+from app.services.industry_service import resolve_industry, resolve_industry_sync
 from app.services.decision_service import DecisionContext, MarketContext, build_decision
 from app.services.market_context_service import get_market_context
 from app.services.position_status import (
@@ -226,6 +226,10 @@ async def analysis(code: str, force: bool = False) -> dict:
     )
     latest_kline_date = klines[-1]["date"] if klines else None
 
+    # 行业标签(纯本地表,零网络开销):
+    #   股票 → baostock 行业名;ETF → 「跟踪{指数}」(ETF 不在个股行业表里)
+    ind = resolve_industry_sync(code)
+
     # v2.5.3:节点缓存命中(仅当 force=false 且 K 线日期有效)
     if not force and latest_kline_date:
         from app.services.daily_analysis_service import get_cached_analysis
@@ -234,6 +238,9 @@ async def analysis(code: str, force: bool = False) -> dict:
             # 注入本次实时的 current_price / quote_change_pct / position 字段
             cached["latest_kline_date"] = latest_kline_date
             cached["current_price"] = current_price
+            cached["industry"] = ind.get("industry")
+            cached["industry_source"] = ind.get("source")
+            cached["industry_note"] = ind.get("note")
             cached["quote_change_pct"] = (
                 float(quote.change_pct)
                 if quote is not None and quote.change_pct is not None
@@ -265,6 +272,9 @@ async def analysis(code: str, force: bool = False) -> dict:
     )
     result["latest_kline_date"] = latest_kline_date
     result["current_price"] = current_price
+    result["industry"] = ind.get("industry")
+    result["industry_source"] = ind.get("source")
+    result["industry_note"] = ind.get("note")
     result["quote_change_pct"] = (
         float(quote.change_pct) if quote is not None and quote.change_pct is not None else None
     )

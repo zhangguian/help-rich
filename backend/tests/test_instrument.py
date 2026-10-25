@@ -7,7 +7,11 @@
 2. 表外 ETF **保守按 T+1**(无据不判 T+0 —— 513100 与 510300 前缀分不开)
 3. 表缺失时降级而不抛错
 """
+import json
 from decimal import Decimal
+from pathlib import Path
+
+import pytest
 
 from app.core.cost_engine import TradeFees
 from app.core.instrument import (
@@ -18,6 +22,22 @@ from app.core.instrument import (
     fees_for_instrument,
     resolve_instrument,
 )
+
+_BACKEND_TABLE = (
+    Path(__file__).resolve().parents[1] / "app" / "data" / "etf_instruments.json"
+)
+
+
+def _backend_table() -> dict:
+    return json.loads(_BACKEND_TABLE.read_text(encoding="utf-8"))
+
+
+def _backend_items() -> list[dict]:
+    return list(_backend_table().get("items") or [])
+
+
+def _backend_categories() -> dict:
+    return dict(_backend_table().get("categories") or {})
 
 
 class TestResolveInstrument:
@@ -121,6 +141,105 @@ class TestFees:
     def test_none_base_stays_none(self):
         """费用被禁用时保持 None(不构造一个 enabled=False 的替身)"""
         assert fees_for_instrument("510300.SH", None) is None
+
+
+class TestTableIntegrity:
+    """表本身的完整性 —— 品种表是手工维护的数据文件,最容易出的错是「重复/写错」"""
+
+    def test_codes_are_unique(self):
+        codes = [i["code"] for i in _backend_items()]
+        assert len(codes) == len(set(codes)), "品种表存在重复代码"
+
+    def test_every_item_has_required_fields(self):
+        for it in _backend_items():
+            assert it.get("code"), it
+            assert it.get("name"), it
+            assert it.get("index"), it
+            assert it.get("category") in _backend_categories(), it
+            assert isinstance(it.get("t0"), bool), it
+
+    def test_t0_only_for_cross_border_or_commodity(self):
+        """T+0 只对跨境(QDII)/商品成立 —— 境内股票 ETF 标了 T+0 就是错的"""
+        for it in _backend_items():
+            if it.get("t0"):
+                assert it.get("category") in ("qdii", "commodity"), it
+
+    def test_lof_entries_marked_and_default_is_etf(self):
+        """场内 LOF 标注 form=lof;缺省按 etf"""
+        assert resolve_instrument("162411.SZ").is_lof is True
+        assert resolve_instrument("501099.SH").is_lof is True
+        assert resolve_instrument("510300.SH").is_lof is False
+        assert resolve_instrument("510300.SH").form == "etf"
+
+    def test_watchlist_etfs_are_covered(self):
+        """用户自选里的 ETF 必须能被识别(否则徽章全是「表外灰」)"""
+        expect_t0 = {
+            "513180.SH": True,   # 恒生科技 ETF(QDII)
+            "513120.SH": True,   # 港股创新药 ETF(QDII)
+            "159981.SZ": True,   # 能源化工 ETF(商品期货)
+            "159732.SZ": False,  # 消费电子
+            "588160.SH": False,  # 科创新材料
+            "561380.SH": False,  # 电网设备
+            "159796.SZ": False,  # 电池
+            "561980.SH": False,  # 半导体设备
+            "501099.SH": False,  # 平安新兴产业 LOF(混合型,非 QDII)
+        }
+        for code, t0 in expect_t0.items():
+            inst = resolve_instrument(code)
+            assert inst.kind == KIND_ETF, code
+            assert inst.known is True, code
+            assert inst.t0 is t0, code
+            assert inst.index_name, code
+
+
+class TestFrontendTableConsistency:
+    """前端持有一份品种表副本(徽章要出现在自选/持仓列表,那些接口不返回品种属性)。
+
+    副本由后端表生成,但生成是**一次性脚本** —— 表改了忘记重生成,前后端就会漂移。
+    这里逐项比对,把漂移挡在测试里。
+    """
+
+    FRONTEND_TABLE = (
+        Path(__file__).resolve().parents[2]
+        / "frontend"
+        / "src"
+        / "lib"
+        / "etfInstruments.json"
+    )
+
+    def _frontend_items(self) -> dict:
+        if not self.FRONTEND_TABLE.exists():
+            pytest.skip(f"前端品种表副本不存在: {self.FRONTEND_TABLE}")
+        data = json.loads(self.FRONTEND_TABLE.read_text(encoding="utf-8"))
+        return {it["code"]: it for it in data["items"]}
+
+    def test_frontend_copy_has_same_code_set(self):
+        backend = {i["code"] for i in _backend_items()}
+        frontend = set(self._frontend_items())
+        assert backend == frontend, (
+            f"前后端品种表代码集不一致,缺: {sorted(backend - frontend)}, "
+            f"多: {sorted(frontend - backend)}"
+        )
+
+    def test_frontend_copy_fields_match(self):
+        frontend = self._frontend_items()
+        for item in _backend_items():
+            fe = frontend[item["code"]]
+            for field in ("name", "index", "category", "t0"):
+                assert fe.get(field) == item.get(field), (
+                    f"{item['code']} 的 {field} 不一致: "
+                    f"后端={item.get(field)!r} 前端={fe.get(field)!r}"
+                )
+            # form 可缺省(= etf),比较时归一
+            assert (fe.get("form") or "etf") == (item.get("form") or "etf"), (
+                f"{item['code']} 的 form 不一致: "
+                f"后端={item.get('form')!r} 前端={fe.get('form')!r}"
+            )
+
+    def test_frontend_copy_categories_match(self):
+        data = json.loads(self.FRONTEND_TABLE.read_text(encoding="utf-8"))
+        backend_map = _backend_categories()
+        assert data["categories"] == backend_map
 
 
 class TestTableDegradation:

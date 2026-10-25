@@ -40,6 +40,11 @@ _INSTRUMENTS_PATH = Path(__file__).resolve().parents[1] / "data" / "etf_instrume
 KIND_STOCK = "stock"
 KIND_ETF = "etf"
 
+# 场内基金形态:ETF(交易型开放式) / LOF(上市开放式)
+# 二者的交易规则一致(免印花税、免过户费),但 T+0 只对 QDII/商品/债券/货币类成立。
+FORM_ETF = "etf"
+FORM_LOF = "lof"
+
 # 场内 ETF/LOF 的代码格式(与 core/stock_code.py 的市场前缀规则一致):
 #   5xxxxx.SH → 沪市 ETF(51/56/58 系列)
 #   1xxxxx.SZ → 深市 ETF/LOF(15/16 系列)
@@ -63,10 +68,16 @@ class Instrument:
     display_name: str | None = None    # 场内简称
     t0: bool = False               # 是否当日可回转(T+0)
     known: bool = False            # True = 命中品种表; False = 表外按格式判定
+    form: str = "etf"              # 场内基金形态: 'etf' | 'lof'(上市开放式基金)
 
     @property
     def is_etf(self) -> bool:
         return self.kind == KIND_ETF
+
+    @property
+    def is_lof(self) -> bool:
+        """场内 LOF —— 交易规则与 ETF 一致,但不是 ETF(别在文案里混为一谈)"""
+        return self.form == FORM_LOF
 
 
 @lru_cache(maxsize=1)
@@ -92,11 +103,13 @@ def _load_table() -> tuple[dict[str, dict], dict[str, str]]:
         if not code:
             continue
         # t0 缺失时按 false(保守)处理 —— 判错 T+0 会给出错误的上限
+        form = str(item.get("form") or FORM_ETF).strip().lower()
         items[code] = {
             "index": item.get("index"),
             "name": item.get("name"),
             "category": item.get("category"),
             "t0": bool(item.get("t0", False)),
+            "form": form if form == FORM_LOF else FORM_ETF,
         }
     labels = {
         str(k): str(v)
@@ -122,6 +135,7 @@ def resolve_instrument(code: str) -> Instrument:
             display_name=row.get("name"),
             t0=bool(row.get("t0")),
             known=True,
+            form=str(row.get("form") or FORM_ETF),
         )
     if _ETF_CODE_RE.match(normalized):
         # 表外 ETF:保守按 T+1(无据不判 T+0)
@@ -150,6 +164,8 @@ def degraded_note(code: str) -> str | None:
 
 
 __all__ = [
+    "FORM_ETF",
+    "FORM_LOF",
     "Instrument",
     "KIND_ETF",
     "KIND_STOCK",

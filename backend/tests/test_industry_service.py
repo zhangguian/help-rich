@@ -6,6 +6,7 @@ from app.services.industry_service import (
     _load_industry_map,
     match_sina_industry_rank,
     resolve_industry,
+    resolve_industry_sync,
 )
 
 _MAP = Path(__file__).resolve().parents[1] / "app" / "data" / "industry_map.json"
@@ -141,6 +142,37 @@ class TestEtfIndexFallback:
         assert r["source"] is None
         assert r["note"]
 
+    def test_etf_does_not_call_sina(self, monkeypatch):
+        """ETF 必须先命中品种表 —— 不能为「注定不命中」付一次网络往返
+
+        新浪行业反查要打网络(且会超时)。ETF 不在个股行业表里,
+        若顺序是 baostock → 新浪 → ETF,每个 ETF 的每次请求都白等一次。
+        """
+        async def boom(code):
+            raise AssertionError("ETF 不应走新浪(品种表命中即可)")
+
+        monkeypatch.setattr("app.services.industry_service._resolve_sina", boom)
+        r = _run(resolve_industry("510300.SH"))
+        assert r["source"] == "etf_index"
+        assert r["industry"] == "跟踪沪深 300"
+
+    def test_stock_still_falls_back_to_sina(self, monkeypatch):
+        """股票路径不受影响:baostock 未命中仍走新浪"""
+        monkeypatch.setattr(
+            "app.services.industry_service._resolve_local", lambda code: None
+        )
+
+        async def fake_sina(code):
+            return "银行"
+
+        monkeypatch.setattr(
+            "app.services.industry_service._resolve_sina",
+            fake_sina,
+        )
+        r = _run(resolve_industry("600036.SH"))
+        assert r["source"] == "sina"
+        assert r["industry"] == "银行"
+
     def test_stock_not_affected(self, monkeypatch):
         """股票走 baostock,不被 ETF 路径影响"""
         async def fake_sina(code):
@@ -150,3 +182,36 @@ class TestEtfIndexFallback:
         r = _run(resolve_industry("600519.SH"))
         assert r["source"] == "baostock"
         assert r["industry"]
+
+
+class TestResolveIndustrySync:
+    """纯本地版:只查离线表 + 品种表,绝不打网络
+
+    用途:analysis 端点要往响应里挂一个行业 chip,
+    不值得为它付一次网络往返(新浪行业反查会超时)。
+    """
+
+    def test_stock_uses_baostock(self):
+        r = resolve_industry_sync("600519.SH")
+        assert r["source"] == "baostock"
+        assert r["industry"]
+
+    def test_etf_uses_tracking_index(self):
+        r = resolve_industry_sync("513100.SH")
+        assert r["source"] == "etf_index"
+        assert r["industry"] == "跟踪纳斯达克 100"
+        assert "QDII" in r["note"]
+
+    def test_unknown_etf_returns_none(self):
+        """表外 ETF → 不编跟踪指数"""
+        r = resolve_industry_sync("159934.SZ")
+        assert r["industry"] is None
+        assert r["source"] is None
+
+    def test_never_calls_sina(self, monkeypatch):
+        async def boom(code):
+            raise AssertionError("同步版不得打网络")
+
+        monkeypatch.setattr("app.services.industry_service._resolve_sina", boom)
+        assert resolve_industry_sync("510300.SH")["source"] == "etf_index"
+        assert resolve_industry_sync("600519.SH")["source"] == "baostock"
