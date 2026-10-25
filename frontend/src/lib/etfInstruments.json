@@ -35,7 +35,7 @@
     },
     {
       "code": "159915.SZ",
-      "name": "创业板",
+      "name": "创业板ETF易方达",
       "index": "创业板指",
       "category": "broad",
       "t0": false,
@@ -83,7 +83,7 @@
     },
     {
       "code": "159995.SZ",
-      "name": "芯片ETF",
+      "name": "芯片ETF华夏",
       "index": "国证半导体芯片",
       "category": "industry",
       "t0": false,
@@ -99,7 +99,7 @@
     },
     {
       "code": "159825.SZ",
-      "name": "农业ETF",
+      "name": "农业ETF富国",
       "index": "中证农业主题",
       "category": "industry",
       "t0": false,
@@ -115,7 +115,7 @@
     },
     {
       "code": "159806.SZ",
-      "name": "新能车",
+      "name": "新能源车ETF国泰",
       "index": "中证新能源汽车",
       "category": "industry",
       "t0": false,
@@ -131,7 +131,7 @@
     },
     {
       "code": "159992.SZ",
-      "name": "创新药",
+      "name": "创新药ETF银华",
       "index": "中证创新药",
       "category": "industry",
       "t0": false,
@@ -139,7 +139,7 @@
     },
     {
       "code": "159801.SZ",
-      "name": "芯片基金",
+      "name": "芯片ETF广发",
       "index": "国证半导体芯片",
       "category": "industry",
       "t0": false,
@@ -187,7 +187,7 @@
     },
     {
       "code": "159996.SZ",
-      "name": "家电ETF",
+      "name": "家电ETF国泰",
       "index": "中证家电",
       "category": "industry",
       "t0": false,
@@ -195,7 +195,7 @@
     },
     {
       "code": "159732.SZ",
-      "name": "消费电子",
+      "name": "消费电子ETF华夏",
       "index": "国证消费电子主题",
       "category": "industry",
       "t0": false,
@@ -219,7 +219,7 @@
     },
     {
       "code": "159796.SZ",
-      "name": "电池",
+      "name": "电池ETF汇添富",
       "index": "中证电池主题",
       "category": "industry",
       "t0": false,
@@ -229,6 +229,22 @@
       "code": "561980.SH",
       "name": "半导体设备ETF招商",
       "index": "中证半导体产业",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "159599.SZ",
+      "name": "芯片ETF东财",
+      "index": "中证芯片产业",
+      "category": "industry",
+      "t0": false,
+      "form": "etf"
+    },
+    {
+      "code": "562820.SH",
+      "name": "集成电路ETF嘉实",
+      "index": "中证全指集成电路",
       "category": "industry",
       "t0": false,
       "form": "etf"
@@ -283,7 +299,7 @@
     },
     {
       "code": "159941.SZ",
-      "name": "纳指ETF",
+      "name": "纳指ETF广发",
       "index": "纳斯达克 100",
       "category": "qdii",
       "t0": true,
@@ -331,7 +347,7 @@
     },
     {
       "code": "159981.SZ",
-      "name": "能源化工",
+      "name": "能源化工ETF建信",
       "index": "易盛郑商所能源化工指数",
       "category": "commodity",
       "t0": true,

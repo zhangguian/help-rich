@@ -191,6 +191,29 @@ class TestTableIntegrity:
             assert inst.t0 is t0, code
             assert inst.index_name, code
 
+    def test_user_etf_holdings_are_covered(self):
+        """用户实际持有的 ETF 必须能被识别(2026-10-25 券商截图导入的 6 只)
+
+        漏一只 → 徽章退化成「表外虚线灰」,品种属性与 T+0 规则全丢。
+        """
+        holdings = {
+            "159599.SZ": ("芯片ETF东财", "中证芯片产业", False),
+            "159732.SZ": ("消费电子ETF华夏", "国证消费电子主题", False),
+            "501099.SH": ("平安新兴产业LOF", "中国战略新兴产业", False),
+            "561980.SH": ("半导体设备ETF招商", "中证半导体产业", False),
+            "562820.SH": ("集成电路ETF嘉实", "中证全指集成电路", False),
+            "588160.SH": ("科创新材料ETF南方", "科创新材料", False),
+        }
+        for code, (name, index, t0) in holdings.items():
+            inst = resolve_instrument(code)
+            assert inst.kind == KIND_ETF, code
+            assert inst.known is True, f"{code} 未收录 → 徽章会退化成表外灰"
+            assert inst.display_name == name, code
+            assert inst.index_name == index, code
+            assert inst.t0 is t0, code
+        # 501099 是场内 LOF —— 规则同 ETF,但文案不能说成 ETF
+        assert resolve_instrument("501099.SH").is_lof is True
+
 
 class TestFrontendTableConsistency:
     """前端持有一份品种表副本(徽章要出现在自选/持仓列表,那些接口不返回品种属性)。
