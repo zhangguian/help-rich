@@ -167,8 +167,11 @@
     网格是<b>独立子块</b>(与「做 T」并列,不是六格之一),AI 白话只翻译、不改数字。
   </p>
   <p class="sub">
-    本稿的<b>所有数字都来自真实接口响应</b>(<code>GET /api/stock/{code}/decision</code>),
+    本稿的<b>所有数字都来自真实接口响应</b>(<code>GET /api/stock/{code}/decision</code>,2026-10-25 实测),
     网格「可配置」场景取自 <code>judge_grid_plan</code> 的真实输出。
+    <b>A1 / A2 / A3 / B1 是当前接口的真实响应</b>;
+    <b>A4 / B2 是按同一引擎输出构造的示意场景</b>(真实持仓全是下跌通道,不存在网格可配置的票);
+    <b>B3 是降级场景</b>(费用档 / 现金 / 起始日缺失)。
   </p>
 
   <div class="legend">
@@ -179,7 +182,7 @@
   </div>
 
   <h2><span class="idx">A</span>持仓三种角色 × 网格判定</h2>
-  <p class="note">A1/A2/A3 对应真实持仓;A4 是网格唯一会判「可配置」的形态(震荡 + 有底仓 + 振幅够)。</p>
+  <p class="note">A1/A2 对应真实持仓,A3 是真实空仓标的;A4 是网格唯一会判「可配置」的形态(震荡 + 有底仓 + 振幅够)。</p>
   <div class="grid">
 
     <!-- ============ A1 浮盈 · 网格不建议 ============ -->
@@ -199,7 +202,7 @@
           <div class="cell"><div class="k">止损</div><div class="v"><b>23.43 元</b>(距现价 -6.9%)</div></div>
           <div class="cell"><div class="k">仓位</div><div class="v">分批止盈,每次减 1/3,保留底仓 ≥50%</div></div>
           <div class="cell"><div class="k">触发</div><div class="v">涨到 28.77 元(P80 分位)先减 1/3</div></div>
-          <div class="cell"><div class="k">时间</div><div class="v">已持有 <b>80 天</b></div></div>
+          <div class="cell"><div class="k">时间</div><div class="v">自纳入本系统起 <b>80 天</b>(建仓日未知),已超 <b>20 天</b>阈值 60 天</div></div>
           <div class="cell missing"><div class="k">不动</div><div class="v">暂无别动信号</div></div>
         </div>
 
@@ -230,7 +233,7 @@
         <div class="more"><span class="caret">▸</span> 更多维度(成本锚点 / 时间窗口 / 费用影响 / 品种规则 / 集中度)</div>
         <div class="dims">
           <div class="dim"><span class="dk">成本锚点</span><span class="dv">浮盈 <span class="num">+180.3%</span> · 到 P80 还有 <span class="num">+14.4%</span> · 风险收益比 <span class="num">2.09</span></span></div>
-          <div class="dim"><span class="dk">时间窗口</span><span class="dv">自纳入本系统起 <span class="num">80</span> 天(自然日)· 已超期(阈值 20 天)</span></div>
+          <div class="dim"><span class="dk">时间窗口</span><span class="dv">自纳入本系统起 <span class="num">80</span> 天(自然日,真实建仓日未知)· 已超 <span class="num">20</span> 天阈值 <span class="num">60</span> 天</span></div>
           <div class="dim"><span class="dk">费用影响</span><span class="dv">往返费率 <span class="num">0.102%</span> · 费用设置未启用,按默认档估算</span></div>
           <div class="dim"><span class="dk">品种规则</span><span class="dv">股票有涨跌幅限制(±10%) · T+1,当日买入当日不可卖出</span></div>
           <div class="dim"><span class="dk">集中度</span><span class="dv">该标的占持仓成本 <span class="num">1.3%</span>,集中度可接受</span></div>
@@ -253,9 +256,9 @@
         <div class="cells">
           <div class="cell"><div class="k">价位</div><div class="v">涨到 <b>19.16 元</b>可解套(需涨 5.1%)</div></div>
           <div class="cell"><div class="k">止损</div><div class="v"><b>13.20 元</b>(距现价 -18.5%)</div></div>
-          <div class="cell"><div class="k">仓位</div><div class="v">解套优先,减仓不追补</div></div>
-          <div class="cell"><div class="k">触发</div><div class="v">涨到 19.16 元(P80 分位)</div></div>
-          <div class="cell"><div class="k">时间</div><div class="v">已持有 <b>23 天</b>,回本还需 <b>+5.1%</b></div></div>
+          <div class="cell"><div class="k">仓位</div><div class="v">解套优先,减仓不追补;确需补仓时单次不超过 60%</div></div>
+          <div class="cell"><div class="k">触发</div><div class="v">涨到 19.16 元可解套(需涨 5.1%)</div></div>
+          <div class="cell"><div class="k">时间</div><div class="v">已持有 <b>77 天</b>,已超 <b>20 天</b>阈值 57 天,回本还需 <b>+5.1%</b></div></div>
           <div class="cell"><div class="k">不动</div><div class="v">下跌通道中不要抄底</div></div>
         </div>
 
@@ -278,7 +281,7 @@
           </div>
           <div class="voice-txt">离回本还差 5.1%,但趋势还没修复,别急着补仓摊薄。</div>
           <ul class="voice-bullets">
-            <li>涨到 19.16 元(P80 分位)才算解套</li>
+            <li>涨到 19.16 元才算解套(需涨 5.1%)</li>
             <li>跌破 13.20 元止损,别硬扛</li>
           </ul>
         </div>
@@ -286,10 +289,10 @@
         <div class="more"><span class="caret">▸</span> 更多维度(成本锚点 / 时间窗口 / 费用影响 / 品种规则 / 集中度)</div>
         <div class="dims">
           <div class="dim"><span class="dk">成本锚点</span><span class="dv">浮亏 <span class="num">-4.9%</span> · 回本还需 <span class="num">+5.1%</span> · 距止损 <span class="num">-18.5%</span></span></div>
-          <div class="dim"><span class="dk">时间窗口</span><span class="dv">自纳入本系统起 <span class="num">23</span> 天(自然日)· 未超期</span></div>
+          <div class="dim"><span class="dk">时间窗口</span><span class="dv">已持有 <span class="num">77</span> 天(自然日,起点=最早一笔流水)· 已超 <span class="num">20</span> 天阈值 <span class="num">57</span> 天</span></div>
           <div class="dim"><span class="dk">费用影响</span><span class="dv">做 T 差价 <span class="num">9.7%</span> · 往返费率 <span class="num">0.102%</span> · 划算</span></div>
           <div class="dim"><span class="dk">品种规则</span><span class="dv">股票有涨跌幅限制(±10%) · T+1</span></div>
-          <div class="dim"><span class="dk">集中度</span><span class="dv">该标的占持仓成本 <span class="num">12.0%</span>,集中度可接受</span></div>
+          <div class="dim"><span class="dk">集中度</span><span class="dv">该标的占持仓成本 <span class="num">24.8%</span>,集中度可接受</span></div>
         </div>
       </div>
     </div>
@@ -307,10 +310,10 @@
           <span class="az-src">确定性引擎 · 实时</span>
         </div>
         <div class="cells">
-          <div class="cell"><div class="k">价位</div><div class="v">回落 <b>27.87 元</b>(P20 低位带)且 KDJ 出金叉时</div></div>
-          <div class="cell missing"><div class="k">止损</div><div class="v">暂无止损位</div></div>
-          <div class="cell"><div class="k">仓位</div><div class="v">首仓 20%,站稳 MA20 后加至 40%</div></div>
-          <div class="cell"><div class="k">触发</div><div class="v">回落 27.87 元(P20 低位带)且 KDJ 出金叉</div></div>
+          <div class="cell"><div class="k">价位</div><div class="v">站回 <b>27.87 元</b>(P20 低位带)且 KDJ 出金叉时小仓位试仓</div></div>
+          <div class="cell"><div class="k">止损</div><div class="v"><b>24.00 元</b></div></div>
+          <div class="cell"><div class="k">仓位</div><div class="v">首仓 30%,站稳 MA20 29.30 元后加至 60%</div></div>
+          <div class="cell"><div class="k">触发</div><div class="v">站回 27.87 元(P20 低位带)且 KDJ 出金叉时小仓位试仓</div></div>
           <div class="cell missing"><div class="k">时间</div><div class="v">未持仓,无持有天数</div></div>
           <div class="cell"><div class="k">不动</div><div class="v">下跌通道中不要抄底</div></div>
         </div>
@@ -330,9 +333,9 @@
             <span class="voice-time">数据时间 2026-10-24</span>
             <span class="voice-btn">AI 写白话</span>
           </div>
-          <div class="voice-txt">现在没有底仓,先别急着买;等回落到 27.87 元一带并且 KDJ 金叉再说。</div>
+          <div class="voice-txt">现在没有底仓,先别急着买;等站回 27.87 元一带并且 KDJ 金叉,再小仓位试仓。</div>
           <ul class="voice-bullets">
-            <li>首仓 20%,站稳 MA20 再加</li>
+            <li>首仓 30%,站稳 MA20 29.30 元再加</li>
             <li>下跌通道里不抄底</li>
           </ul>
         </div>
@@ -365,7 +368,7 @@
           <div class="cell"><div class="k">止损</div><div class="v"><b>22.80 元</b>(距现价 -9.0%)</div></div>
           <div class="cell"><div class="k">仓位</div><div class="v">分批止盈,每次减 1/3,保留底仓 ≥50%</div></div>
           <div class="cell"><div class="k">触发</div><div class="v">回落 24.50 元(网格下沿)分批买回</div></div>
-          <div class="cell"><div class="k">时间</div><div class="v">已持有 <b>80 天</b></div></div>
+          <div class="cell"><div class="k">时间</div><div class="v">自纳入本系统起 <b>80 天</b>(建仓日未知),已超 <b>20 天</b>阈值 60 天</div></div>
           <div class="cell missing"><div class="k">不动</div><div class="v">暂无别动信号</div></div>
         </div>
 
@@ -405,7 +408,7 @@
         <div class="more"><span class="caret">▸</span> 更多维度(成本锚点 / 时间窗口 / 费用影响 / 品种规则 / 集中度)</div>
         <div class="dims">
           <div class="dim"><span class="dk">成本锚点</span><span class="dv">浮盈 <span class="num">+180.3%</span> · 到 P80 <span class="num">+14.4%</span></span></div>
-          <div class="dim"><span class="dk">时间窗口</span><span class="dv">自纳入本系统起 <span class="num">80</span> 天(自然日)· 已超期</span></div>
+          <div class="dim"><span class="dk">时间窗口</span><span class="dv">自纳入本系统起 <span class="num">80</span> 天(自然日,真实建仓日未知)· 已超 <span class="num">20</span> 天阈值 <span class="num">60</span> 天</span></div>
           <div class="dim"><span class="dk">费用影响</span><span class="dv">往返费率 <span class="num">0.102%</span> · 每格净收益 <span class="num">39.97</span> 元</span></div>
           <div class="dim"><span class="dk">品种规则</span><span class="dv">股票有涨跌幅限制(±10%) · T+1</span></div>
           <div class="dim"><span class="dk">集中度</span><span class="dv">该标的占持仓成本 <span class="num">1.3%</span>,集中度可接受</span></div>
@@ -427,21 +430,21 @@
     <div class="scene">
       <div class="scene-label">
         <span class="req">B1 ETF · T+0 · 免印花税</span>
-        <span class="code">513120.SH 港股创新药ETF</span>
+        <span class="code">513120.SH 港股创新药ETF(未持仓)</span>
       </div>
       <div class="advice-zone">
         <div class="az-head">
           <span class="az-title">操作建议</span>
-          <span class="role loss">解套参考</span>
+          <span class="role empty">建仓参考</span>
           <span class="az-src">确定性引擎 · 实时</span>
         </div>
         <div class="cells">
-          <div class="cell"><div class="k">价位</div><div class="v">涨到 <b>1.42 元</b>可解套(需涨 6.3%)</div></div>
-          <div class="cell"><div class="k">止损</div><div class="v"><b>1.31 元</b>(距现价 -4.9%)</div></div>
-          <div class="cell"><div class="k">仓位</div><div class="v">解套优先,减仓不追补</div></div>
-          <div class="cell"><div class="k">触发</div><div class="v">涨到 1.42 元(P80 分位)</div></div>
-          <div class="cell"><div class="k">时间</div><div class="v">已持有 <b>12 天</b>,回本还需 <b>+6.3%</b></div></div>
-          <div class="cell"><div class="k">不动</div><div class="v">下跌通道中不要抄底</div></div>
+          <div class="cell missing"><div class="k">价位</div><div class="v">暂无价位信号(等触发)</div></div>
+          <div class="cell"><div class="k">止损</div><div class="v"><b>1.12 元</b></div></div>
+          <div class="cell"><div class="k">仓位</div><div class="v">首仓 30%,站稳 MA20 1.29 元后加至 60%</div></div>
+          <div class="cell missing"><div class="k">触发</div><div class="v">暂无触发条件</div></div>
+          <div class="cell missing"><div class="k">时间</div><div class="v">未持仓,无持有天数</div></div>
+          <div class="cell missing"><div class="k">不动</div><div class="v">暂无别动信号</div></div>
         </div>
 
         <div class="gridblk no">
@@ -451,7 +454,7 @@
             <span class="gb-nums">—</span>
           </div>
           <div class="gb-body">
-            下跌通道中不要布网格:越买越套
+            当前无底仓,网格需先建底仓
             <div style="margin-top:3px;color:var(--text-tertiary)">
               ETF 往返费率 <span class="num">0.05%</span>(免印花税、免过户费),比股票的 0.102% 低一半 —— 震荡时 ETF 更适合网格
             </div>
@@ -464,20 +467,20 @@
             <span class="voice-time">数据时间 2026-10-24</span>
             <span class="voice-btn">AI 写白话</span>
           </div>
-          <div class="voice-txt">这只 ETF 当天可以来回买卖,成本也比股票低,但现在还在下跌通道,不适合挂网格。</div>
+          <div class="voice-txt">这只 ETF 当天可以来回买卖,成本也比股票低一半,但现在还没到建仓条件,继续观察。</div>
           <ul class="voice-bullets">
-            <li>涨到 1.42 元才算解套</li>
             <li>ETF 免印花税,来回成本比股票低一半</li>
+            <li>当前无底仓,做网格前要先建底仓</li>
           </ul>
         </div>
 
         <div class="more"><span class="caret">▸</span> 更多维度(成本锚点 / 时间窗口 / 费用影响 / 品种规则 / 集中度)</div>
         <div class="dims">
-          <div class="dim"><span class="dk">成本锚点</span><span class="dv">浮亏 <span class="num">-5.9%</span> · 回本还需 <span class="num">+6.3%</span></span></div>
-          <div class="dim"><span class="dk">时间窗口</span><span class="dv">自纳入本系统起 <span class="num">12</span> 天(自然日)</span></div>
-          <div class="dim"><span class="dk">费用影响</span><span class="dv">ETF 往返费率 <span class="num">0.05%</span> · 免印花税、免过户费</span></div>
+          <div class="dim"><span class="dk">成本锚点</span><span class="dv">暂无(未持仓)</span></div>
+          <div class="dim"><span class="dk">时间窗口</span><span class="dv">暂无(未持仓)</span></div>
+          <div class="dim"><span class="dk">费用影响</span><span class="dv">ETF 往返费率 <span class="num">0.05%</span> · 免印花税、免过户费 · 做 T 差价 <span class="num">11.53%</span> · 划算</span></div>
           <div class="dim"><span class="dk">品种规则</span><span class="dv">ETF 无涨跌幅限制 · 当日可回转(T+0) · 免印花税、免过户费</span></div>
-          <div class="dim"><span class="dk">集中度</span><span class="dv">该标的占持仓成本 <span class="num">8.4%</span>,集中度可接受</span></div>
+          <div class="dim"><span class="dk">集中度</span><span class="dv">暂无(未持仓)</span></div>
         </div>
       </div>
     </div>
@@ -499,7 +502,7 @@
           <div class="cell"><div class="k">止损</div><div class="v"><b>23.43 元</b>(距现价 -6.9%)</div></div>
           <div class="cell"><div class="k">仓位</div><div class="v">分批止盈,每次减 1/3,保留底仓 ≥50%</div></div>
           <div class="cell"><div class="k">触发</div><div class="v">涨到 28.77 元(P80 分位)先减 1/3</div></div>
-          <div class="cell"><div class="k">时间</div><div class="v">已持有 <b>80 天</b></div></div>
+          <div class="cell"><div class="k">时间</div><div class="v">自纳入本系统起 <b>80 天</b>(建仓日未知),已超 <b>20 天</b>阈值 60 天</div></div>
           <div class="cell missing"><div class="k">不动</div><div class="v">暂无别动信号</div></div>
         </div>
 
@@ -537,7 +540,7 @@
         <div class="more"><span class="caret">▸</span> 更多维度(成本锚点 / 时间窗口 / 费用影响 / 品种规则 / 集中度)</div>
         <div class="dims">
           <div class="dim"><span class="dk">成本锚点</span><span class="dv">浮盈 <span class="num">+180.3%</span></span></div>
-          <div class="dim"><span class="dk">时间窗口</span><span class="dv">自纳入本系统起 <span class="num">80</span> 天(自然日)</span></div>
+          <div class="dim"><span class="dk">时间窗口</span><span class="dv">自纳入本系统起 <span class="num">80</span> 天(自然日,真实建仓日未知)· 已超 <span class="num">20</span> 天阈值 <span class="num">60</span> 天</span></div>
           <div class="dim"><span class="dk">费用影响</span><span class="dv">往返费率 <span class="num">0.102%</span></span></div>
           <div class="dim"><span class="dk">品种规则</span><span class="dv">股票 · T+1</span></div>
           <div class="dim"><span class="dk">集中度</span><span class="dv"><span class="num">62.4%</span> · 集中度过高,加仓会放大单一暴露</span></div>
@@ -560,8 +563,8 @@
         <div class="cells">
           <div class="cell"><div class="k">价位</div><div class="v">涨到 <b>19.16 元</b>可解套(需涨 5.1%)</div></div>
           <div class="cell"><div class="k">止损</div><div class="v"><b>13.20 元</b>(距现价 -18.5%)</div></div>
-          <div class="cell"><div class="k">仓位</div><div class="v">解套优先,减仓不追补</div></div>
-          <div class="cell"><div class="k">触发</div><div class="v">涨到 19.16 元(P80 分位)</div></div>
+          <div class="cell"><div class="k">仓位</div><div class="v">解套优先,减仓不追补;确需补仓时单次不超过 60%</div></div>
+          <div class="cell"><div class="k">触发</div><div class="v">涨到 19.16 元可解套(需涨 5.1%)</div></div>
           <div class="cell missing"><div class="k">时间</div><div class="v">持有天数不可用</div></div>
           <div class="cell"><div class="k">不动</div><div class="v">下跌通道中不要抄底</div></div>
         </div>
