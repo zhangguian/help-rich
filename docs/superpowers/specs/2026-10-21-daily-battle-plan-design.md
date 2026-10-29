@@ -2,7 +2,15 @@
 
 > 日期：2026-10-21
 > 阶段：9（接阶段 8「盯盘决策引擎」之后）
-> 状态：待评审
+> 状态：已落地（2026-10-25 起由 v2 增量扩展）
+
+> ⚠️ **2026-10-25 增量（作战计划 v2）**
+> 本文的三段内容口径（复盘 / 明日预期 / 逐票预案）**不变**。
+> v2 改了两件事：**选股范围**（持仓 ∪ ★关注 → 沪深全市场主板**滚动池**，带记忆）
+> 与**页面骨架**（两栏 → 三栏：左 = 股票锚点栏 + 今日复盘）。
+> 受影响的章节：**§4.6 编排层**（顺序重排）、**§4.7 API**（`/scope` 契约 + `meta` 新增字段）、
+> **§五 前端设计**（页面结构与响应式）。
+> 完整增量设计见 → [作战计划 v2 · 沪深全市场滚动池 + 三栏工作台](./2026-10-25-battle-plan-v2-market-pool-design.md)
 
 ---
 
@@ -533,7 +541,7 @@ async def build_plan(plan_date: date) -> dict:
 |---|---|---|
 | `GET` | `/api/battle-plan?date=YYYY-MM-DD` | 取指定日期的日报。`date` 缺省 = 今天。**该日未生成 → 返回 404 + `{detail: "该日作战计划尚未生成"}`**（不返回空壳，避免前端误显示「无内容」） |
 | `POST` | `/api/battle-plan/generate` | 生成今天的日报（幂等）。body 可选 `{date}`。返回完整日报 |
-| `GET` | `/api/battle-plan/scope` | 返回目标股票池（持仓+关注去重结果），前端显示「本次覆盖 N 只」 |
+| `GET` | `/api/battle-plan/scope` | 返回目标股票池。**⚠️ 2026-10-25 破坏性变更**：返回类型从 `list` 改为对象 `{watchlist, pool, universe}`（见 v2 增量文档 §5.4） |
 
 **响应契约**（`snakeToCamel` 前的 snake_case）：
 
@@ -556,12 +564,17 @@ async def build_plan(plan_date: date) -> dict:
     "scope_count": 11, "scope": [...], "truncated": false,
     "degraded": false, "degraded_reason": [],
     "generated_at": "2026-10-21T15:12:33+08:00",
-    "target_date_estimated": false
+    "target_date_estimated": false,
+    // ⚠️ 2026-10-25(v2)新增 —— 见 v2 增量文档 §5.4
+    "pool": { "limit": 5, "members": [...], "dropped": [...], "candidates_considered": 78, "universe": {...} },
+    "quotes": { "600519.SH": { "price": 1418.0, "change_pct": 1.24 } },
+    "timings": { "fulfillment": 0.14, "select_stage": 5.78, "select_pool": 0.02, "decisions": 8.02 }
   }
 }
 ```
 
-**超时**：11 只票并发取数，前端请求须 `{timeout: 60000}`（与决策端点同级别；`api.ts` 默认 10000ms 会超时）。
+**超时**：并发取数，前端请求须 `{timeout: 90000}`（**v2 从 60000 上调** —— 覆盖数从自选 11 只涨到 22 只，
+实测整轮 12~35s，60s 在慢网络下会间歇性超时，而超时的表现是「点了生成没反应」）。
 
 ### 4.8 LLM 的位置
 
@@ -579,6 +592,11 @@ async def build_plan(plan_date: date) -> dict:
 ## 五、前端设计
 
 ### 5.1 页面结构 `/plan`
+
+> ⚠️ **2026-10-25（v2）：页面骨架由两栏改为三栏**，下方 v1 示意图已被取代。
+> v2 结构：**左栏 = 股票锚点栏 + 今日复盘**（复盘从右栏挪到左栏底部）、
+> **中栏 = 逐票作战计划**、**右栏 = 明日市场预期**。
+> 完整结构图与组件契约见 → [v2 增量文档 §六 前端三栏设计](./2026-10-25-battle-plan-v2-market-pool-design.md#六前端三栏设计)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -609,11 +627,18 @@ async def build_plan(plan_date: date) -> dict:
 
 ### 5.2 布局与响应式
 
-- **≥1280px**：两栏（左预案 + 右预期/复盘）
-- **1024px**：两栏保持（按项目铁律「三栏保持到 1024px」的同源要求，本页两栏不缩为单栏），右栏收窄至 320px
-- **820px 及以下**：单栏，顺序为「明日预期 → 明日预案 → 今日复盘」（**先把最重要的市场预期放最前**，因为窄屏首屏空间有限）
-- **首屏不留大片虚空**：无数据时展示引导态（说明「当前覆盖 11 只，点生成按钮产出计划」+ 已有持仓/关注列表），不留空白页
+> ⚠️ **2026-10-25（v2）**：改为三栏 —— 左 236 / 中自适应 / 右 268（`lg`）与 252 / 自适应 / 304（`xl`），
+> 复用 v0.8 交易台首页的同一套栅格母体（不另起一套宽度）。
+> 窄屏单栏顺序为 **明日预期 → 股票锚点栏 → 明日预案 → 今日复盘**。
+
+- **≥1280px**：三栏（左 = 股票锚点栏 + 今日复盘，中 = 明日预案，右 = 明日预期）
+- **1024px**：三栏保持（按项目铁律「保持到 1024px」的同源要求，本页三栏不缩为单栏），左右栏收窄
+- **左右两栏吸顶**：中栏是长列表，滚动时左栏（今日盯盘清单）与右栏（明日预期）固定不动。
+  左栏内容通常比视口高 → 必须 `sticky + max-h + overflow-y-auto` 三样齐（纯 sticky 的超高元素底部永远够不着）
+- **820px 及以下**：单栏，顺序为「明日预期 → 股票锚点栏 → 明日预案 → 今日复盘」（**先把最重要的市场预期放最前**，因为窄屏首屏空间有限）
+- **首屏不留大片虚空**：无数据时展示引导态（说明「当前覆盖 N 只，点生成按钮产出计划」+ 已有持仓/关注列表 + **选股口径与当前滚动池**），不留空白页
 - 横向滚动：四档宽度均须 `scrollWidth == clientWidth`
+- ⚠️ 基础列必须写 `grid-cols-1`（= `minmax(0,1fr)`）—— 否则窄屏隐式列按 `auto` 定尺，内容 min-content 宽度会撑破栅格
 
 ### 5.3 配色（沿用项目既有规范，不得自创）
 
@@ -632,23 +657,25 @@ async def build_plan(plan_date: date) -> dict:
 | 文件 | 职责 |
 |---|---|
 | `frontend/src/app/(app)/plan/page.tsx` | 页面壳：取数、状态、布局 |
-| `frontend/src/components/plan/PlanPanel.tsx` | 主容器：三段编排与加载/空/错态 |
+| `frontend/src/components/plan/PlanPanel.tsx` | 主容器：三栏编排与加载/空/错态 |
+| `frontend/src/components/plan/StockAnchorRail.tsx` | **v2 新增** · 股票锚点栏（分组 / 徽章 / 最新操作要求 / 兑现状态 / 点击定位中栏） |
 | `frontend/src/components/plan/OutlookCard.tsx` | 明日市场预期（基调 + 维度条 + 关键位） |
-| `frontend/src/components/plan/PlanItemList.tsx` | 明日预案清单（逐票分组 + 条目） |
-| `frontend/src/components/plan/ReviewCard.tsx` | 今日复盘（兑现统计 + 待办） |
+| `frontend/src/components/plan/PlanItemList.tsx` | 明日预案清单（逐票分组 + 票头徽章 + 最新操作要求 + 条目） |
+| `frontend/src/components/plan/ReviewCard.tsx` | 今日复盘（兑现统计 + 待办）—— **v2 移到左栏底部** |
+| `frontend/src/lib/planDerive.ts` | **v2 新增** · 纯派生层（股票级兑现聚合 / 需求文案 / 分组组装），两栏共用同一份文案 |
 | `frontend/src/lib/api/advanced.ts` | 追加 3 个 API 函数 + 类型 |
 
 ### 5.5 数据获取
 
 - `GET /api/battle-plan?date=` → 今日日报；404 → 显示「该日计划尚未生成」+ 「生成今日计划」按钮（**不显示空白**）
-- `POST /api/battle-plan/generate` → 生成（按钮进入 loading，显示进度提示「正在采集 11 只票的行情…」）
+- `POST /api/battle-plan/generate` → 生成（按钮进入 loading，显示**分阶段**进度：全市场快照 → 主板过滤 → 4 因子打分 → 逐票预案）
 - 生成成功后自动刷新 GET
-- 请求 `{timeout: 60000}`
+- 请求 `{timeout: 90000}`（**v2 从 60000 上调**）
 
 ### 5.6 首屏与空态
 
-- **未生成**：展示目标股票池概览（11 只：持仓 5 / 关注 6）+ 说明 + 生成按钮。**不留大片虚空**。
-- **生成中**：骨架屏 + 进度文案。
+- **未生成**：展示目标股票池概览（持仓 5 / 关注 6）+ **选股口径（universe 四级漏斗）+ 当前滚动池** + 说明 + 生成按钮。**不留大片虚空**。
+- **生成中**：分阶段进度（阶段里的只数取 `/scope` 的真实 universe，不编数字）。
 - **生成失败**：错误提示 + 重试按钮（失败原因要具体，如「大盘数据不可用」而非「未知错误」）。
 
 ---

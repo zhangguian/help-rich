@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" href="data:," />
+<title>作战计划 v2 · 三栏 + 全市场滚动池(视觉稿)</title>
+<style>
+  :root {
+    --canvas:#070b12; --surface:#0d131d; --surface-2:#121a26; --surface-3:#18212f;
+    --border:#1e2836; --border-strong:#2a3648;
+    --text-primary:#e2e8f2; --text-secondary:#8fa0b8; --text-tertiary:#5c6b84;
+    --text-disabled:#3d4a5e;
+    --accent:#22d3ee; --accent-subtle:rgba(34,211,238,.12);
+    --up:#f6465d; --down:#0ecb81; --warn:#f5a524;
+    --up-bg:rgba(246,70,93,.14); --down-bg:rgba(14,235,129,.12); --warn-bg:rgba(245,165,36,.14);
+    --r-xs:3px; --r-sm:4px; --r-md:6px; --r-lg:8px; --r-xl:10px;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--canvas); color:var(--text-primary);
+    font-family:"Jakarta Sans",-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    font-size:14px; line-height:1.55;
+  }
+  .mono { font-family:"JetBrains Mono","SF Mono",Consolas,monospace; }
+  .wrap { max-width:1520px; margin:0 auto; padding:30px 22px 90px; }
+  h1 { font-size:21px; font-weight:700; margin:0 0 8px; }
+  .sub { color:var(--text-secondary); font-size:13px; margin:0 0 4px; max-width:1060px; }
+  .sub b { color:var(--text-primary); font-weight:600; }
+  .legend {
+    display:flex; gap:16px; flex-wrap:wrap; margin:14px 0 26px;
+    padding:11px 14px; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg);
+  }
+  .legend div { font-size:12px; color:var(--text-tertiary); }
+  .legend b { color:var(--text-secondary); font-weight:600; }
+  h2 { font-size:15px; font-weight:600; margin:36px 0 4px; }
+  h2 .idx { color:var(--accent); font-family:"JetBrains Mono",monospace; margin-right:8px; }
+  .note { color:var(--text-tertiary); font-size:12px; margin:0 0 14px; max-width:1120px; }
+  .note b { color:var(--text-secondary); font-weight:600; }
+
+  /* ============ 浏览器窗口外框 ============ */
+  .frame {
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--r-xl);
+    overflow:hidden;
+  }
+  .frame-bar {
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    padding:9px 13px; background:var(--surface-2); border-bottom:1px solid var(--border);
+  }
+  .frame-bar .dot { width:9px; height:9px; border-radius:50%; background:var(--border-strong); }
+  .frame-bar .title { font-size:12px; color:var(--text-secondary); }
+  .frame-bar .req {
+    background:var(--surface-3); border:1px solid var(--border); border-radius:var(--r-xs);
+    padding:1px 7px; color:var(--text-secondary);
+    font-family:"JetBrains Mono","SF Mono",Consolas,monospace; font-size:10.5px;
+  }
+  .frame-bar .tag {
+    font-size:10.5px; padding:1px 7px; border-radius:var(--r-sm);
+    border:1px solid var(--border-strong); color:var(--text-secondary);
+  }
+  .frame-bar .tag.pool { border-color:var(--accent); color:var(--accent); background:var(--accent-subtle); }
+  .frame-body { padding:14px; }
+
+  /* ============ 三栏骨架 ============ */
+  .cols { display:grid; gap:12px; grid-template-columns:264px minmax(0,1fr) 320px; align-items:start; }
+  .cols.w1024 { grid-template-columns:240px minmax(0,1fr) 288px; }
+  .cols.stack { grid-template-columns:minmax(0,1fr); }
+  .col { min-width:0; }
+  .col > .col-head {
+    display:flex; align-items:baseline; gap:7px; flex-wrap:wrap;
+    font-size:11.5px; color:var(--text-tertiary); margin:0 2px 7px;
+  }
+  .col > .col-head b { color:var(--text-secondary); font-size:12px; font-weight:600; }
+  .col > .col-head .sp { margin-left:auto; font-family:"JetBrains Mono",monospace; font-size:10.5px; }
+
+  .card {
+    background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-lg);
+    padding:10px 11px; margin-bottom:10px;
+  }
+  .card:last-child { margin-bottom:0; }
+  .card-title { font-size:12px; font-weight:600; color:var(--text-primary); margin:0 0 7px; }
+  .card-note { color:var(--text-tertiary); font-size:11px; margin:0 0 6px; }
+
+  /* ============ 左栏 · 股票锚点栏 ============ */
+  .rail { background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; }
+  .rail-head {
+    display:flex; align-items:baseline; gap:6px; flex-wrap:wrap;
+    padding:9px 11px 8px; border-bottom:1px solid var(--border); background:var(--surface-3);
+  }
+  .rail-head b { font-size:12px; font-weight:600; }
+  .rail-head span { font-size:10.5px; color:var(--text-tertiary); font-family:"JetBrains Mono",monospace; margin-left:auto; }
+  .rail-group {
+    padding:5px 11px 3px; font-size:10px; color:var(--text-tertiary);
+    background:var(--surface-2); border-bottom:1px solid var(--border);
+  }
+  .anchor {
+    display:block; padding:7px 11px 8px; border-bottom:1px solid var(--border);
+    text-decoration:none; color:inherit;
+  }
+  .anchor:last-child { border-bottom:none; }
+  .anchor .row1 { display:flex; align-items:baseline; gap:5px; flex-wrap:wrap; }
+  .anchor .nm { font-size:12px; font-weight:600; color:var(--text-primary); }
+  .anchor .cd { font-family:"JetBrains Mono",monospace; font-size:10px; color:var(--text-tertiary); }
+  .anchor .px { margin-left:auto; font-family:"JetBrains Mono",monospace; font-size:11px; }
+  .anchor .row2 { margin-top:3px; display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
+  .anchor .req-line {
+    margin-top:4px; font-size:11px; color:var(--text-secondary); line-height:1.45;
+    padding-left:7px; border-left:2px solid var(--accent);
+  }
+  .anchor .req-line b { color:var(--text-primary); font-weight:600; }
+  .anchor .req-line .lbl { color:var(--text-tertiary); }
+  .anchor.streak-2 .req-line { border-left-color:var(--warn); }
+
+  .badge {
+    font-size:9.5px; padding:0 5px; border-radius:var(--r-xs); line-height:15px; display:inline-block;
+    border:1px solid var(--border-strong); color:var(--text-secondary); background:var(--surface-3);
+  }
+  .badge.pos { border-color:var(--up); color:var(--up); background:var(--up-bg); }
+  .badge.fav { border-color:var(--accent); color:var(--accent); background:var(--accent-subtle); }
+  .badge.pool { border-color:#a78bfa; color:#a78bfa; background:rgba(167,139,250,.12); }
+  .badge.hit { border-color:var(--down); color:var(--down); background:var(--down-bg); }
+  .badge.miss { border-color:var(--up); color:var(--up); background:var(--up-bg); }
+  .badge.und { border-color:var(--border-strong); color:var(--text-tertiary); background:transparent; }
+  .badge.streak { border-color:var(--warn); color:var(--warn); background:var(--warn-bg); }
+
+  /* 今日复盘(左栏底部) */
+  .review-verdict {
+    display:flex; align-items:center; gap:8px; margin-bottom:7px;
+    padding:6px 8px; background:var(--surface-3); border-radius:var(--r-sm);
+  }
+  .review-verdict .v { font-size:12px; font-weight:600; }
+  .review-verdict .c { margin-left:auto; font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--text-tertiary); }
+  .mini-table { width:100%; border-collapse:collapse; font-size:11px; }
+  .mini-table td { padding:3px 0; vertical-align:top; }
+  .mini-table td:last-child { text-align:right; font-family:"JetBrains Mono",monospace; color:var(--text-secondary); white-space:nowrap; }
+  .todo {
+    margin-top:7px; padding-top:7px; border-top:1px solid var(--border);
+  }
+  .todo .h { font-size:10.5px; color:var(--text-tertiary); margin-bottom:4px; }
+  .todo li { list-style:none; font-size:11px; color:var(--text-secondary); padding:2px 0 2px 10px; position:relative; }
+  .todo li::before { content:"□"; position:absolute; left:0; color:var(--text-tertiary); }
+  .todo ul { margin:0; padding:0; }
+
+  /* ============ 中栏 · 逐票预案 ============ */
+  .plan-stock { background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-lg); margin-bottom:10px; overflow:hidden; }
+  .plan-stock:last-child { margin-bottom:0; }
+  .ps-head {
+    display:flex; align-items:baseline; gap:7px; flex-wrap:wrap;
+    padding:8px 11px 7px; background:var(--surface-3); border-bottom:1px solid var(--border);
+  }
+  .ps-head .nm { font-size:12.5px; font-weight:600; }
+  .ps-head .cd { font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--text-tertiary); }
+  .ps-head .sp { margin-left:auto; display:flex; align-items:center; gap:6px; }
+  .ps-req {
+    padding:6px 11px; font-size:11px; color:var(--text-secondary);
+    background:var(--surface-2); border-bottom:1px solid var(--border);
+  }
+  .ps-req .lbl { color:var(--text-tertiary); }
+  .ps-req b { color:var(--text-primary); font-weight:600; }
+  .ps-items { padding:2px 11px 8px; }
+  .ps-item { padding:7px 0; border-bottom:1px dashed var(--border); }
+  .ps-item:last-child { border-bottom:none; }
+  .ps-item .r1 { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .ps-item .kind {
+    font-size:9.5px; padding:0 5px; border-radius:var(--r-xs); line-height:15px;
+    background:var(--surface-3); color:var(--text-secondary); border:1px solid var(--border-strong);
+  }
+  .ps-item .act { font-size:12px; font-weight:600; }
+  .ps-item .act.buy { color:var(--up); }
+  .ps-item .act.sell { color:var(--down); }
+  .ps-item .tp { font-family:"JetBrains Mono",monospace; font-size:11.5px; }
+  .ps-item .cond { font-size:11.5px; color:var(--text-primary); margin-top:3px; line-height:1.5; }
+  .ps-item .basis { margin:3px 0 0; padding:0; list-style:none; }
+  .ps-item .basis li { font-size:10.5px; color:var(--text-tertiary); line-height:1.5; }
+  .ps-item .basis li::before { content:"依据 "; color:var(--text-disabled); }
+  .ps-item .invalid { font-size:10.5px; color:var(--warn); margin-top:3px; }
+  .ps-item .ff { font-size:10.5px; color:var(--text-tertiary); margin-top:3px; }
+  .ps-item .ff.now { color:var(--accent); }
+
+  /* ============ 右栏 · 明日市场预期 ============ */
+  .stance { display:flex; align-items:baseline; gap:8px; margin-bottom:8px; }
+  .stance .s { font-size:15px; font-weight:700; }
+  .stance .sl { font-size:11.5px; color:var(--text-secondary); }
+  .stance .sc { margin-left:auto; font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--text-tertiary); }
+  .dim { padding:6px 0; border-bottom:1px dashed var(--border); }
+  .dim:last-child { border-bottom:none; }
+  .dim .r1 { display:flex; align-items:baseline; gap:6px; }
+  .dim .k { font-size:11px; color:var(--text-secondary); }
+  .dim .v { margin-left:auto; font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--text-tertiary); }
+  .dim .d { font-size:10.5px; color:var(--text-tertiary); margin-top:2px; line-height:1.45; }
+  .levels { display:grid; grid-template-columns:repeat(2,1fr); gap:5px; margin-top:8px; }
+  .levels .l { background:var(--surface-3); border-radius:var(--r-sm); padding:4px 7px; }
+  .levels .l .k { font-size:9.5px; color:var(--text-tertiary); }
+  .levels .l .v { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--text-primary); margin-top:1px; }
+  .disclaimer { font-size:10px; color:var(--text-disabled); margin-top:8px; line-height:1.45; }
+
+  /* ============ 降级条 ============ */
+  .degraded {
+    border:1px solid var(--warn); background:var(--warn-bg); color:var(--warn);
+    border-radius:var(--r-md); padding:6px 9px; font-size:11px; margin-bottom:10px;
+  }
+
+  /* ============ 状态场景 ============ */
+  .state-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(420px,1fr)); gap:14px; }
+  .state { background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; }
+  .state .sh {
+    padding:7px 11px; font-size:11px; color:var(--text-tertiary);
+    background:var(--surface-2); border-bottom:1px solid var(--border);
+  }
+  .state .sb { padding:12px; }
+  .empty-title { font-size:13px; font-weight:600; }
+  .empty-sub { font-size:11.5px; color:var(--text-secondary); margin-top:4px; line-height:1.55; }
+  .empty-sec { margin-top:10px; padding-top:9px; border-top:1px solid var(--border); }
+  .empty-sec .h { font-size:10.5px; color:var(--text-tertiary); margin-bottom:5px; }
+  .three { display:grid; gap:6px; }
+  .three .it { font-size:11px; color:var(--text-secondary); line-height:1.5; }
+  .three .it b { color:var(--text-primary); font-weight:600; }
+  .btn {
+    display:inline-block; margin-top:9px; padding:5px 12px; border-radius:var(--r-sm);
+    background:var(--accent); color:#04222c; font-size:11.5px; font-weight:600;
+  }
+  .gen-step { display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--text-secondary); margin-top:6px; }
+  .spin { width:9px; height:9px; border-radius:50%; border:2px solid var(--accent); border-top-color:transparent; }
+  .gen-done { width:9px; height:9px; border-radius:50%; background:var(--down); }
+  .gen-wait { width:9px; height:9px; border-radius:50%; background:var(--border-strong); }
+  .gen-bar { height:3px; background:var(--surface-3); border-radius:2px; margin-top:9px; overflow:hidden; }
+  .gen-bar i { display:block; height:100%; width:62%; background:var(--accent); }
+
+  .rule-list { margin:0; padding:0; list-style:none; }
+  .rule-list li { font-size:11.5px; color:var(--text-secondary); line-height:1.65; padding-left:14px; position:relative; }
+  .rule-list li::before { content:"→"; position:absolute; left:0; color:var(--accent); }
+  .rule-list li b { color:var(--text-primary); font-weight:600; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:3px 12px; font-size:11.5px; }
+  .kv dt { color:var(--text-tertiary); }
+  .kv dd { margin:0; color:var(--text-secondary); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>作战计划 v2 · 三栏 + 全市场滚动池</h1>
+  <p class="sub">
+    左栏 = <b>股票锚点栏</b>(今天要盯的票 + 昨天盯的结果) · 中栏 = <b>逐票作战计划</b> · 右栏 = <b>明日市场预期</b>。
+    股票池从「持仓 ∪ ★关注」扩到 <b>沪深全市场主板滚动池</b>:达到预期就留在池里,
+    <b>连续 3 天没达预期就剔除</b>、由新股票补位。
+  </p>
+  <div class="legend">
+    <div>覆盖口径 · <b>自选 11 只 + 全市场池 5 只 = 16 只</b></div>
+    <div>universe · <b>全市场 5568 → 主板 3193 → 非 ST 3053 → 成交额≥1亿 1941</b></div>
+    <div>池上限 · <b>5 只</b></div>
+    <div>剔除阈值 · <b>连续 3 天未达预期</b></div>
+    <div>涨跌色 · <b>红涨绿跌</b></div>
+  </div>
+
+  <!-- ================= 场景 1:宽屏三栏 ================= -->
+  <h2><span class="idx">01</span>宽屏三栏(1440px 视口 · 左 264 / 中 自适应 / 右 320)</h2>
+  <p class="note">
+    左栏把「今天要盯哪些票」「每只票最新要做什么」「昨天盯的结果」压在同一列里 —— 视线不用来回跳。
+    今日复盘放<b>左栏底部</b>,不再埋在右栏卡片里。<b>中栏每只票头部直接给「最新操作要求」</b>,
+    与左栏锚点行同源同一份文案(不写两遍,避免漂移)。
+  </p>
+
+  <div class="frame">
+    <div class="frame-bar">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <span class="title">作战计划 · 2026-10-25</span>
+      <span class="req">1440 × 900</span>
+      <span class="tag pool">全市场池 5 只</span>
+      <span class="tag">覆盖 16 只</span>
+      <span class="tag">生成耗时 31.4s</span>
+    </div>
+    <div class="frame-body">
+      <div class="cols">
+
+        <!-- ===== 左栏 ===== -->
+        <div class="col">
+          <div class="col-head"><b>股票锚点栏</b><span class="sp">16 只</span></div>
+          <div class="rail">
+            <div class="rail-head">
+              <b>今日盯盘清单</b>
+              <span>持仓 3 · ★关注 8 · 池 5</span>
+            </div>
+
+            <div class="rail-group">持仓(3)</div>
+
+            <a class="anchor" href="#">
+              <div class="row1">
+                <span class="nm">贵州茅台</span><span class="cd">600519.SH</span>
+                <span class="px" style="color:var(--up)">+1.24%</span>
+              </div>
+              <div class="row2">
+                <span class="badge pos">持仓</span>
+                <span class="badge hit">昨日已触及</span>
+              </div>
+              <div class="req-line"><span class="lbl">最新操作要求</span> <b>回踩 1418.00 减仓 200 股</b></div>
+            </a>
+
+            <a class="anchor" href="#">
+              <div class="row1">
+                <span class="nm">云铝股份</span><span class="cd">000807.SZ</span>
+                <span class="px" style="color:var(--up)">+3.86%</span>
+              </div>
+              <div class="row2">
+                <span class="badge pos">持仓</span><span class="badge fav">★</span>
+                <span class="badge hit">昨日已执行</span>
+              </div>
+              <div class="req-line"><span class="lbl">最新操作要求</span> <b>站上 15.80 加仓 300 股</b></div>
+            </a>
+
+            <a class="anchor" href="#">
+              <div class="row1">
+                <span class="nm">华天科技</span><span class="cd">002185.SZ</span>
+                <span class="px" style="color:var(--down)">-1.72%</span>
+              </div>
+              <div class="row2">
+                <span class="badge pos">持仓</span>
+                <span class="badge miss">昨日未达预期</span>
+                <span class="badge streak">连续 2 天</span>
+              </div>
+              <div class="req-line" style="border-left-color:var(--warn)"><span class="lbl">最新操作要求</span> <b>跌破 11.40 止损清仓</b></div>
+            </a>
+
+            <div class="rail-group">★关注(8)</div>
+
+            <a class="anchor" href="#">
+              <div class="row1">
+                <span class="nm">平安银行</span><span class="cd">000001.SZ</span>
+                <span class="px" style="color:var(--up)">+0.64%</span>
+              </div>
+              <div class="row2">
+                <span class="badge fav">★</span><span class="badge hit">昨日已触及</span>
+              </div>
+              <div class="req-line"><span class="lbl">最新操作要求</span> <b>11.35 上方站稳 建仓 1000 股</b></div>
+            </a>
+
+            <a class="anchor" href="#">
+              <div class="row1">
+                <span class="nm">招商银行</span><span class="cd">600036.SH</span>
+                <span class="px" style="color:var(--up)">+1.05%</span>
+              </div>
+              <div class="row2">
+                <span class="badge fav">★</span><span class="badge und">昨日未判定</span>
+              </div>
+              <div class="req-line"><span class="lbl">最新操作要求</span> <b>暂无待执行动作,仅观察</b></div>
+            </a>
+
+            <a class="anchor" href="#">
+              <div class="nm" style="font-size:11.5px;color:var(--text-tertiary);padding:6px 11px 7px;">
+                另 6 只(五粮液 / 海康威视 / 紫金矿业 / 中信证券 / 比亚迪 / 工商银行)…
+              </div>
+            </a>
+
+            <div class="rail-group">全市场滚动池(5)</div>
+
+            <a class="anchor" href="#">
+              <div class="row1">
+                <span class="nm">通威股份</span><span class="cd">600438.SH</span>
+                <span class="px" style="color:var(--up)">+4.87%</span>
+              </div>
+              <div class="row2">
+                <span class="badge pool">池 · 新补位</span>
+                <span class="badge">4 因子分 138.6</span>
+              </div>
+              <div class="req-line"><span class="lbl">最新操作要求</span> <b>23.60 上方 建仓 500 股</b></div>
+            </a>
+
+            <a class="anchor" href="#">
+              <div class="row1">
+                <span class="nm">格力电器</span><span class="cd">000651.SZ</span>
+                <span class="px" style="color:var(--up)">+2.13%</span>
+              </div>
+              <div class="row2">
+                <span class="badge pool">池 · 新补位</span>
+                <span class="badge">4 因子分 132.1</span>
+              </div>
+              <div class="req-line"><span class="lbl">最新操作要求</span> <b>41.20 下方建仓 400 股</b></div>
+            </a>
+
+            <a class="anchor" href="#">
+              <div class="row1">
+                <span class="nm">赣锋锂业</span><span class="cd">002460.SZ</span>
+                <span class="px" style="color:var(--down)">-0.94%</span>
+              </div>
+              <div class="row2">
+                <span class="badge pool">池 · 保留</span>
+                <span class="badge und">昨日未判定</span>
+              </div>
+              <div class="req-line"><span class="lbl">最新操作要求</span> <b>36.80 止盈 300 股</b></div>
+            </a>
+
+            <a class="anchor" href="#">
+              <div class="row1">
+                <span class="nm">隆基绿能</span><span class="cd">601012.SH</span>
+                <span class="px" style="color:var(--up)">+3.42%</span>
+              </div>
+              <div class="row2">
+                <span class="badge pool">池 · 保留</span>
+                <span class="badge miss">昨日未达预期</span>
+                <span class="badge streak">连续 2 天</span>
+              </div>
+              <div class="req-line" style="border-left-color:var(--warn)"><span class="lbl">最新操作要求</span> <b>19.90 下方观察,不加仓</b></div>
+            </a>
+
+            <a class="anchor" href="#">
+              <div class="row1">
+                <span class="nm">恒瑞医药</span><span class="cd">600276.SH</span>
+                <span class="px" style="color:var(--up)">+1.08%</span>
+              </div>
+              <div class="row2">
+                <span class="badge miss">已剔除出池</span>
+                <span class="badge streak">连续 3 天未达预期</span>
+              </div>
+              <div class="req-line" style="border-left-color:var(--text-disabled)"><span class="lbl">最新操作要求</span> <b>今日不再跟踪</b></div>
+            </a>
+          </div>
+
+          <!-- 今日复盘(左栏底部) -->
+          <div class="card" style="margin-top:10px;">
+            <p class="card-title">今日复盘</p>
+            <div class="review-verdict">
+              <span class="v" style="color:var(--warn)">有执行缺口</span>
+              <span class="c">34 条 · 已执行 6 · 已触及 11 · 未触发 15 · 数据不足 2</span>
+            </div>
+            <table class="mini-table">
+              <tr><td>已执行(按计划操作)</td><td>6</td></tr>
+              <tr><td>已触及(价格到了,没操作)</td><td>11</td></tr>
+              <tr><td>未触发(当日没碰到价位)</td><td>15</td></tr>
+              <tr><td>数据不足(当天没行情,未判定)</td><td>2</td></tr>
+            </table>
+            <div class="todo">
+              <div class="h">今日待办(条件已满足、还没做)</div>
+              <ul>
+                <li>云铝股份 · 站上 15.80 加仓 300 股</li>
+                <li>贵州茅台 · 回踩 1418.00 减仓 200 股</li>
+                <li>赣锋锂业 · 36.80 止盈 300 股</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== 中栏 ===== -->
+        <div class="col">
+          <div class="col-head">
+            <b>明日操作预案</b>
+            <span>目标日 2026-10-26(按工作日推算)</span>
+            <span class="sp">34 条 / 16 只</span>
+          </div>
+
+          <div class="plan-stock">
+            <div class="ps-head">
+              <span class="nm">贵州茅台</span><span class="cd">600519.SH</span>
+              <span class="sp"><span class="badge pos">持仓</span><span class="badge hit">昨日已触及</span></span>
+            </div>
+            <div class="ps-req"><span class="lbl">最新操作要求</span> · <b>回踩 1418.00 减仓 200 股</b></div>
+            <div class="ps-items">
+              <div class="ps-item">
+                <div class="r1"><span class="kind">做T减</span><span class="act sell">减仓</span><span class="tp">1418.00</span></div>
+                <div class="cond">回踩 1418.00(5 日线下方)时减仓 200 股,成交价不低于 1413 继续执行。</div>
+                <ul class="basis"><li>5 日均线 1426.3,收盘跌破</li><li>量能放大 1.8 倍,短期过热</li></ul>
+                <div class="invalid">失效:站回 1435 上方则本日不做。</div>
+              </div>
+              <div class="ps-item">
+                <div class="r1"><span class="kind">止损</span><span class="act sell">止损</span><span class="tp">1385.00</span></div>
+                <div class="cond">跌破 1385.00 无条件止损全部底仓。</div>
+                <ul class="basis"><li>20 日线 1397.2,失守整数关口</li></ul>
+                <div class="invalid">失效:本日不适用(仅在持有底仓时有效)。</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="plan-stock">
+            <div class="ps-head">
+              <span class="nm">云铝股份</span><span class="cd">000807.SZ</span>
+              <span class="sp"><span class="badge pos">持仓</span><span class="badge fav">★</span><span class="badge hit">昨日已执行</span></span>
+            </div>
+            <div class="ps-req"><span class="lbl">最新操作要求</span> · <b>站上 15.80 加仓 300 股</b></div>
+            <div class="ps-items">
+              <div class="ps-item">
+                <div class="r1"><span class="kind">加仓</span><span class="act buy">加仓</span><span class="tp">15.80</span></div>
+                <div class="cond">放量站上 15.80 后加仓 300 股,回踩不破 15.50 持有。</div>
+                <ul class="basis"><li>量比 2.4,突破前高 15.72</li><li>有色板块资金净流入 3.2 亿</li></ul>
+                <div class="ff now">状态:条件已满足(现价 15.86)→ 已进入今日待办。</div>
+              </div>
+              <div class="ps-item">
+                <div class="r1"><span class="kind">止盈</span><span class="act sell">止盈</span><span class="tp">17.20</span></div>
+                <div class="cond">冲到 17.20 以上分批止盈 500 股。</div>
+                <ul class="basis"><li>前期套牢区 17.0~17.3</li></ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="plan-stock">
+            <div class="ps-head">
+              <span class="nm">华天科技</span><span class="cd">002185.SZ</span>
+              <span class="sp"><span class="badge pos">持仓</span><span class="badge miss">昨日未达预期</span><span class="badge streak">连续 2 天</span></span>
+            </div>
+            <div class="ps-req"><span class="lbl">最新操作要求</span> · <b>跌破 11.40 止损清仓</b></div>
+            <div class="ps-items">
+              <div class="ps-item">
+                <div class="r1"><span class="kind">止损</span><span class="act sell">止损</span><span class="tp">11.40</span></div>
+                <div class="cond">跌破 11.40(前低)止损清仓,不等反弹。</div>
+                <ul class="basis"><li>连续 2 天未达预期</li><li>MACD 死叉,量能萎缩</li></ul>
+                <div class="invalid">失效:站回 11.85 上方则改为观察。</div>
+              </div>
+              <div class="ps-item">
+                <div class="r1"><span class="kind">观察</span><span class="act">仅观察</span></div>
+                <div class="cond">今日不加仓、不做 T;等站回 11.85 再议。</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="plan-stock">
+            <div class="ps-head">
+              <span class="nm">通威股份</span><span class="cd">600438.SH</span>
+              <span class="sp"><span class="badge pool">池 · 新补位</span><span class="badge">4 因子分 138.6</span></span>
+            </div>
+            <div class="ps-req"><span class="lbl">最新操作要求</span> · <b>23.60 上方 建仓 500 股</b></div>
+            <div class="ps-items">
+              <div class="ps-item">
+                <div class="r1"><span class="kind">建仓</span><span class="act buy">建仓</span><span class="tp">23.60</span></div>
+                <div class="cond">回踩不破 23.60 时建仓 500 股,首仓不超过计划仓位的 1/3。</div>
+                <ul class="basis"><li>光伏设备行业资金榜 Top3</li><li>量比 3.1(爆量),涨幅 4.87% 在健康区间</li><li>连续上涨 2 天</li></ul>
+                <div class="invalid">失效:跌破 22.90 则放弃建仓。</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="plan-stock">
+            <div class="ps-head">
+              <span class="nm">赣锋锂业</span><span class="cd">002460.SZ</span>
+              <span class="sp"><span class="badge pool">池 · 保留</span><span class="badge und">昨日未判定</span></span>
+            </div>
+            <div class="ps-req"><span class="lbl">最新操作要求</span> · <b>36.80 止盈 300 股</b></div>
+            <div class="ps-items">
+              <div class="ps-item">
+                <div class="r1"><span class="kind">止盈</span><span class="act sell">止盈</span><span class="tp">36.80</span></div>
+                <div class="cond">反弹到 36.80 止盈 300 股,保住本金优先。</div>
+                <ul class="basis"><li>10 日线 37.4 压制</li></ul>
+                <div class="ff">昨日无行情数据,未判定 —— 不计入连续天数。</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="plan-stock">
+            <div class="ps-head">
+              <span class="nm">恒瑞医药</span><span class="cd">600276.SH</span>
+              <span class="sp"><span class="badge miss">已剔除出池</span><span class="badge streak">连续 3 天未达预期</span></span>
+            </div>
+            <div class="ps-req" style="color:var(--text-tertiary)"><span class="lbl">最新操作要求</span> · 今日不再跟踪(已剔除)</div>
+            <div class="ps-items">
+              <div class="ps-item">
+                <div class="r1"><span class="kind">观察</span><span class="act">仅观察</span></div>
+                <div class="cond">连续 3 天未达预期,已从滚动池剔除;不在明日预案里,仅留档。</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- ===== 右栏 ===== -->
+        <div class="col">
+          <div class="col-head"><b>明日市场预期</b><span class="sp">2026-10-26</span></div>
+          <div class="card">
+            <div class="stance">
+              <span class="s" style="color:var(--warn)">震荡偏弱</span>
+              <span class="sl">量能持平 · 均线承压</span>
+              <span class="sc">3/4 维度</span>
+            </div>
+            <div class="dim">
+              <div class="r1"><span class="k">量能</span><span class="v">持平</span></div>
+              <div class="d">沪市成交 4186 亿,较 5 日均量 +2.3%,未见增量资金。</div>
+            </div>
+            <div class="dim">
+              <div class="r1"><span class="k">涨跌家数</span><span class="v">3187 / 2210</span></div>
+              <div class="d">上涨家数占优但赚钱效应一般,涨停 41 家、跌停 6 家。</div>
+            </div>
+            <div class="dim">
+              <div class="r1"><span class="k">均线位置</span><span class="v">MA20 上方</span></div>
+              <div class="d">上证收 3713.03,站在 MA20(3690) 上方但 MA5 下穿。</div>
+            </div>
+            <div class="dim">
+              <div class="r1"><span class="k">板块资金</span><span class="v">有色 +3.2亿</span></div>
+              <div class="d">有色金属净流入居前,电力设备净流出 2.8 亿。</div>
+            </div>
+            <div class="levels">
+              <div class="l"><div class="k">压力位</div><div class="v">3742.60</div></div>
+              <div class="l"><div class="k">支撑位</div><div class="v">3688.20</div></div>
+              <div class="l"><div class="k">MA5</div><div class="v">3721.40</div></div>
+              <div class="l"><div class="k">MA20</div><div class="v">3690.10</div></div>
+            </div>
+            <p class="disclaimer">基于 4 维度规则推断,非预测;仅作明日操作参考。关键位随行情漂移,下单前请自行核对最新价。</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 场景 2:1024 ================= -->
+  <h2><span class="idx">02</span>1024px · 仍是三栏(左 240 / 右 288)</h2>
+  <p class="note">
+    沿用既有铁律「两栏保持到 1024px」,三栏版同样在 1024 才折叠 —— 桌面小窗仍能一眼看全
+    「盯的票 / 预案 / 预期」。左栏略收窄(240px),中栏仍为主宽度。
+  </p>
+  <div class="frame">
+    <div class="frame-bar">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <span class="title">作战计划 · 2026-10-25</span>
+      <span class="req">1024 × 768</span>
+    </div>
+    <div class="frame-body">
+      <div class="cols w1024">
+        <div class="col">
+          <div class="col-head"><b>股票锚点栏</b><span class="sp">16 只</span></div>
+          <div class="rail">
+            <div class="rail-head"><b>今日盯盘清单</b><span>持仓 3 · ★关注 8 · 池 5</span></div>
+            <div class="rail-group">持仓(3)</div>
+            <a class="anchor" href="#">
+              <div class="row1"><span class="nm">贵州茅台</span><span class="cd">600519.SH</span><span class="px" style="color:var(--up)">+1.24%</span></div>
+              <div class="row2"><span class="badge pos">持仓</span><span class="badge hit">昨日已触及</span></div>
+              <div class="req-line"><span class="lbl">最新操作要求</span> <b>回踩 1418.00 减仓 200 股</b></div>
+            </a>
+            <div class="rail-group">全市场滚动池(5)</div>
+            <a class="anchor" href="#">
+              <div class="row1"><span class="nm">通威股份</span><span class="cd">600438.SH</span><span class="px" style="color:var(--up)">+4.87%</span></div>
+              <div class="row2"><span class="badge pool">池 · 新补位</span></div>
+              <div class="req-line"><span class="lbl">最新操作要求</span> <b>23.60 上方 建仓 500 股</b></div>
+            </a>
+          </div>
+          <div class="card" style="margin-top:10px;">
+            <p class="card-title">今日复盘</p>
+            <div class="review-verdict"><span class="v" style="color:var(--warn)">有执行缺口</span><span class="c">已执行 6 · 已触及 11</span></div>
+            <table class="mini-table"><tr><td>未触发</td><td>15</td></tr><tr><td>数据不足</td><td>2</td></tr></table>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head"><b>明日操作预案</b><span class="sp">34 条 / 16 只</span></div>
+          <div class="plan-stock">
+            <div class="ps-head"><span class="nm">贵州茅台</span><span class="cd">600519.SH</span><span class="sp"><span class="badge pos">持仓</span></span></div>
+            <div class="ps-req"><span class="lbl">最新操作要求</span> · <b>回踩 1418.00 减仓 200 股</b></div>
+            <div class="ps-items">
+              <div class="ps-item">
+                <div class="r1"><span class="kind">做T减</span><span class="act sell">减仓</span><span class="tp">1418.00</span></div>
+                <div class="cond">回踩 1418.00 时减仓 200 股,成交价不低于 1413 继续执行。</div>
+                <ul class="basis"><li>5 日均线 1426.3,收盘跌破</li></ul>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head"><b>明日市场预期</b></div>
+          <div class="card">
+            <div class="stance"><span class="s" style="color:var(--warn)">震荡偏弱</span><span class="sc">3/4</span></div>
+            <div class="dim"><div class="r1"><span class="k">量能</span><span class="v">持平</span></div></div>
+            <div class="dim"><div class="r1"><span class="k">涨跌家数</span><span class="v">3187 / 2210</span></div></div>
+            <div class="levels"><div class="l"><div class="k">压力位</div><div class="v">3742.60</div></div><div class="l"><div class="k">支撑位</div><div class="v">3688.20</div></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 场景 3:820 单栏 ================= -->
+  <h2><span class="idx">03</span>820px · 单栏堆叠(预期 → 锚点 → 预案 → 复盘)</h2>
+  <p class="note">
+    窄屏顺序沿用既有约定:先给「明日市场预期」(当天的大盘前提),再给锚点栏(盯哪些票),
+    然后是逐票预案,复盘收尾。窄屏下左栏不再并排,锚点与预案仍是两段。
+  </p>
+  <div class="frame">
+    <div class="frame-bar">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <span class="title">作战计划 · 2026-10-25</span>
+      <span class="req">820 × 900</span>
+    </div>
+    <div class="frame-body">
+      <div class="cols stack">
+        <div class="col">
+          <div class="col-head"><b>明日市场预期</b></div>
+          <div class="card">
+            <div class="stance"><span class="s" style="color:var(--warn)">震荡偏弱</span><span class="sl">量能持平 · 均线承压</span><span class="sc">3/4</span></div>
+            <div class="dim"><div class="r1"><span class="k">量能</span><span class="v">持平</span></div><div class="d">沪市成交 4186 亿,较 5 日均量 +2.3%。</div></div>
+            <div class="dim"><div class="r1"><span class="k">涨跌家数</span><span class="v">3187 / 2210</span></div></div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head"><b>股票锚点栏</b><span class="sp">16 只</span></div>
+          <div class="rail">
+            <div class="rail-head"><b>今日盯盘清单</b><span>持仓 3 · ★关注 8 · 池 5</span></div>
+            <a class="anchor" href="#">
+              <div class="row1"><span class="nm">贵州茅台</span><span class="cd">600519.SH</span><span class="px" style="color:var(--up)">+1.24%</span></div>
+              <div class="row2"><span class="badge pos">持仓</span><span class="badge hit">昨日已触及</span></div>
+              <div class="req-line"><span class="lbl">最新操作要求</span> <b>回踩 1418.00 减仓 200 股</b></div>
+            </a>
+            <a class="anchor" href="#">
+              <div class="row1"><span class="nm">通威股份</span><span class="cd">600438.SH</span><span class="px" style="color:var(--up)">+4.87%</span></div>
+              <div class="row2"><span class="badge pool">池 · 新补位</span></div>
+              <div class="req-line"><span class="lbl">最新操作要求</span> <b>23.60 上方 建仓 500 股</b></div>
+            </a>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head"><b>明日操作预案</b><span class="sp">34 条 / 16 只</span></div>
+          <div class="plan-stock">
+            <div class="ps-head"><span class="nm">贵州茅台</span><span class="cd">600519.SH</span><span class="sp"><span class="badge pos">持仓</span></span></div>
+            <div class="ps-req"><span class="lbl">最新操作要求</span> · <b>回踩 1418.00 减仓 200 股</b></div>
+            <div class="ps-items">
+              <div class="ps-item">
+                <div class="r1"><span class="kind">做T减</span><span class="act sell">减仓</span><span class="tp">1418.00</span></div>
+                <div class="cond">回踩 1418.00 时减仓 200 股,成交价不低于 1413 继续执行。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head"><b>今日复盘</b></div>
+          <div class="card">
+            <div class="review-verdict"><span class="v" style="color:var(--warn)">有执行缺口</span><span class="c">已执行 6 · 已触及 11 · 未触发 15</span></div>
+            <div class="todo"><div class="h">今日待办</div><ul><li>云铝股份 · 站上 15.80 加仓 300 股</li></ul></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 场景 4:状态 ================= -->
+  <h2><span class="idx">04</span>状态场景(生成中 / 空态 / 降级)</h2>
+  <p class="note">
+    首屏不许留大片虚空:空态把「本次 universe 口径 + 池预览 + 三段内容说明」摊开;
+    生成中分阶段报进度(选股 → 算预案);降级把缺什么写清楚,不编数字。
+  </p>
+  <div class="state-grid">
+
+    <div class="state">
+      <div class="sh">生成中</div>
+      <div class="sb">
+        <p class="empty-title">正在生成作战计划…</p>
+        <p class="empty-sub">从沪深全市场主板里筛出今天的 5 只,并算好 16 只票的明日预案。</p>
+        <div class="gen-step"><span class="gen-done"></span>全市场快照已就绪(5568 只)</div>
+        <div class="gen-step"><span class="gen-done"></span>主板过滤完成 → 1941 只候选</div>
+        <div class="gen-step"><span class="spin"></span>4 因子打分中(80 只精排)</div>
+        <div class="gen-step"><span class="gen-wait"></span>逐票生成预案(16 只)</div>
+        <div class="gen-bar"><i></i></div>
+        <p class="empty-sub" style="margin-top:8px;">预计还需 20~35 秒。</p>
+      </div>
+    </div>
+
+    <div class="state">
+      <div class="sh">空态(今天还没生成)</div>
+      <div class="sb">
+        <p class="empty-title">今天的作战计划还没生成</p>
+        <p class="empty-sub">生成后会得到三段内容:① 今日复盘 ② 明日市场预期 ③ 明日逐票操作预案。</p>
+        <div class="empty-sec">
+          <div class="h">本次选股口径</div>
+          <div class="three">
+            <div class="it"><b>全市场 5568 只</b> → 沪深主板 3193 只(排除创业板 / 科创板 / 北交所)</div>
+            <div class="it">剔除 ST / *ST 后 3053 只 → 成交额 ≥ 1 亿后 <b>1941 只</b></div>
+            <div class="it">滚动池 <b>5 只</b>:达到预期就留在池里,连续 3 天未达预期就剔除并由新股票补位</div>
+          </div>
+        </div>
+        <div class="empty-sec">
+          <div class="h">当前滚动池(5 只)</div>
+          <div class="three">
+            <div class="it">贵州茅台 · 昨日已触及 → 继续关注</div>
+            <div class="it">赣锋锂业 · 昨日未判定 → 不计入连续天数</div>
+            <div class="it">隆基绿能 · 昨日未达预期(连续 2 天)</div>
+            <div class="it">恒瑞医药 · 连续 3 天未达预期 → <b>已剔除</b></div>
+          </div>
+        </div>
+        <span class="btn">生成今日计划</span>
+      </div>
+    </div>
+
+    <div class="state">
+      <div class="sh">降级(部分数据缺失)</div>
+      <div class="sb">
+        <div class="degraded">部分数据缺失(已如实标注,未用假数据填补):申万行业成分股不可用,板块资金与板块强度因子记 0 分;2 只票 K 线不足 30 根已跳过</div>
+        <p class="empty-title">明日操作预案</p>
+        <p class="empty-sub">14 只票有预案,2 只因数据不足被跳过 —— 跳过的票不编内容,页面上直接写明原因。</p>
+        <div class="empty-sec">
+          <div class="h">对选股的影响</div>
+          <div class="three">
+            <div class="it">板块两个因子为 0 → 本次排序主要依据<b>量比</b>与<b>动能</b>(页面已标注)</div>
+            <div class="it">池仍然正常工作:昨日兑现状态不依赖板块数据</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ================= 规则说明 ================= -->
+  <h2><span class="idx">05</span>页面要表达的口径(实现必须与之一致)</h2>
+  <div class="card">
+    <ul class="rule-list">
+      <li><b>覆盖 16 只 = 自选 11 只(持仓 ∪ ★关注,持仓优先)+ 全市场滚动池 5 只</b>,两段各自完整覆盖,不互相挤占。</li>
+      <li><b>「达到预期」= 触及 或 执行</b>;只有「未触发」才累计连续天数;「数据不足」<b>不累计</b>(不因缺数据惩罚股票)。</li>
+      <li><b>连续 3 天未达预期 → 剔除</b>,空出的席位由全市场 4 因子分最高的票补位;被剔的票当天不再补位回来。</li>
+      <li><b>「最新操作要求」是唯一事实源</b>:取该票 <code>status_now == 'now'</code> 的第一条(条件已满足、待执行);没有则显示第一条待触发预案的条件摘要。左栏锚点行与中栏票头<b>显示同一份文案</b>。</li>
+      <li>池票在左栏带<b>「池」徽章</b>并标注<b>保留 / 新补位</b>与 4 因子分;被剔除的票也留在锚点栏里(标灰 + 剔除原因),便于回看「这只为什么被换掉」。</li>
+      <li>universe 口径写明在页面上:<b>全市场 → 主板 → 非 ST → 成交额达标</b>,不写「全市场选股」这种含糊说法。</li>
+      <li>缺数据一律<b>置灰占位 + 如实说明</b>,不用假数据补齐;降级条写清「缺了什么、影响了什么」。</li>
+    </ul>
+  </div>
+
+  <h2><span class="idx">06</span>与现状的差别(为什么要改)</h2>
+  <div class="card">
+    <dl class="kv">
+      <dt>双层边框嵌套</dt><dd>现状:每票一个卡片,每条预案再套一层带边框 div → 信息密度低。现在:条目之间用虚线分隔,票与票之间用卡片边界。</dd>
+      <dt>股票池不可见</dt><dd>现状:看不出这 11 只从哪来、为什么是它们。现在:左栏锚点栏标注来源(持仓 / ★ / 池)与筛选口径。</dd>
+      <dt>待办被埋</dt><dd>现状:今日待办在右栏复盘卡底部。现在:复盘整体移到左栏底部,待办紧跟兑现统计。</dd>
+      <dt>每天重新选</dt><dd>现状:每天按持仓 ∪ 关注重算,与昨日预案无关。现在:滚动池带记忆,达到预期就留,连续 3 天没到就换新。</dd>
+    </dl>
+  </div>
+
+</div>
+</body>
+</html>

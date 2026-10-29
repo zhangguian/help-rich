@@ -110,3 +110,30 @@ SCREENER_EVENT_KEYWORD_BLACKLIST: list[str] = ["ST", "*ST", "退市"]
 SCREENER_FUNDAMENTAL_FILTER_ENABLED: bool = True
 SCREENER_FUNDAMENTAL_FILTER_QUERY: str = "扣非ROE>0 PE<行业中位数 剔除ST"
 SCREENER_FUNDAMENTAL_KICKOUT_PENALTY: int = 30
+
+
+# ============================================================
+# === 作战计划 v2:全市场滚动池(选股 universe + 池记忆) ===
+# ============================================================
+
+# 滚动池容量 —— 全市场选出的部分(持仓 ∪ ★关注 另外单独全覆盖,不占池席位)
+POOL_LIMIT = 5
+
+# 连续多少天未达预期 → 剔除出池
+POOL_MISS_THRESHOLD = 3
+
+# universe 闸门:主板非 ST 且成交额达标(亿元)
+POOL_MIN_AMOUNT_YI = 1.0
+
+# 次新股阈值:上市不足 60 个交易日 → 剔除
+# 判定方式 = 日 K 的**实际根数**(新浪返回上市以来全部日 K,不足 60 根即新股)
+POOL_NEW_LISTING_TRADING_DAYS = 60
+
+# 快照粗筛后进入 4 因子精排的候选数(精排要拉 K 线,不能全市场拉)
+POOL_PRECANDIDATE_LIMIT = 80
+
+# 精排阶段的 K 线根数(量比 / 连涨天数 / 5 日最大跌幅)
+POOL_RANK_KLINE_COUNT = 60
+
+# 精排阶段拉 K 线的并发(沿用 screener 的并发档)
+POOL_RANK_KLINE_CONCURRENCY = 16

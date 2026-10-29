@@ -2,7 +2,10 @@
 
 - GET  /api/battle-plan?date=YYYY-MM-DD  取指定日期的日报(默认今天)
 - POST /api/battle-plan/generate        生成今天的日报(幂等)
-- GET  /api/battle-plan/scope           目标股票池(持仓 ∪ ★关注)
+- GET  /api/battle-plan/scope           目标股票池(自选 ∪ 全市场滚动池)
+
+2026-10-25(作战计划 v2):股票池从「持仓 ∪ ★关注」扩展到「沪深全市场主板滚动池」,
+`/scope` 返回结构随之改为 `{watchlist, pool, universe}`。
 """
 from __future__ import annotations
 
@@ -12,6 +15,7 @@ from datetime import date
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from app.modules.stock_pool.service import get_current_pool, get_universe_stats
 from app.services.battle_plan_service import (
     build_plan,
     get_plan,
@@ -106,9 +110,34 @@ async def generate(req: GenerateRequest | None = None) -> dict:
 
 
 @router.get("/scope")
-async def scope() -> list[dict]:
-    """目标股票池(持仓 ∪ ★关注 去重)"""
-    return await resolve_target_stocks()
+async def scope() -> dict:
+    """目标股票池(自选 ∪ 全市场滚动池)
+
+    ⚠️ **2026-10-25 破坏性变更**:返回类型从 `list[dict]` 改成对象
+    `{watchlist, pool, universe}` —— 前端只有一处调用点(作战计划空态),同批改完,
+    不留中间态。
+
+    - `watchlist`:持仓 ∪ ★关注(持仓优先,组内保源顺序)
+    - `pool`:**当前**在池成员(读 `battle_plan_pool` 表;不是「今天会选出什么」)
+    - `universe`:全市场口径统计(总数 / 主板 / 过完过滤后剩多少);快照不可用 → null
+
+    ⚠️ 不回传 `shares` / `avg_cost`:真实持仓成本不该扩散到出参
+    (与 `meta.scope` 的口径一致)。
+    """
+    watchlist = await resolve_target_stocks()
+    return {
+        "watchlist": [
+            {
+                "stock_code": s.get("stock_code"),
+                "stock_name": s.get("stock_name"),
+                "in_position": bool(s.get("in_position")),
+                "is_favorite": bool(s.get("is_favorite")),
+            }
+            for s in watchlist
+        ],
+        "pool": await get_current_pool(),
+        "universe": await get_universe_stats(),
+    }
 
 
 __all__ = ["router"]

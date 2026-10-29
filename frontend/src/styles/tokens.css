@@ -97,6 +97,8 @@
   --down-rgb: 14 235 129;
   --warn-rgb: 245 165 36;
   --neutral-rgb: 92 107 132;
+  /* 滚动池专用紫 —— 复用图表 MA10 的同一个紫(#a78bfa),不另起一套色 */
+  --pool-rgb: 167 139 250;
   --text-pri-rgb: 226 232 242;
   --text-sec-rgb: 143 160 184;
   --text-ter-rgb: 92 107 132;
@@ -173,6 +175,7 @@ html[data-theme='light'] {
   --down-rgb: 7 160 92;
   --warn-rgb: 184 116 0;
   --neutral-rgb: 138 151 172;
+  --pool-rgb: 124 58 237;
   --text-pri-rgb: 16 24 38;
   --text-sec-rgb: 84 98 122;
   --text-ter-rgb: 138 151 172;

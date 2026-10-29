@@ -16,18 +16,42 @@ def test_get_plan_404_when_not_generated():
     assert "尚未生成" in r.json()["detail"]
 
 
-def test_scope_endpoint_returns_list(monkeypatch):
+def test_scope_endpoint_returns_object(monkeypatch):
+    """`/scope` 2026-10-25 起返回对象 `{watchlist, pool, universe}`(作战计划 v2)
+
+    ⚠️ 破坏性变更:从 `list[dict]` 改成对象。前端只有一处调用点(作战计划空态),
+    已同批改完。
+    """
     from app.api import battle_plan as bp
 
     async def _scope():
         return [{"stock_code": "001896.SZ", "stock_name": "豫能控股",
-                 "in_position": True, "is_favorite": False}]
+                 "in_position": True, "is_favorite": False,
+                 "shares": 100, "avg_cost": 9.5}]
     monkeypatch.setattr(bp, "resolve_target_stocks", _scope)
+
+    async def _pool():
+        return [{"stock_code": "600519.SH", "stock_name": "贵州茅台",
+                 "miss_streak": 0, "last_status": "touched",
+                 "last_score": 72.4, "joined_on": "2026-10-20"}]
+    monkeypatch.setattr(bp, "get_current_pool", _pool)
+
+    async def _universe():
+        return {"total": 5568, "main_board": 3193, "non_st": 3053,
+                "after_filters": 1941, "min_amount_yi": 1.0}
+    monkeypatch.setattr(bp, "get_universe_stats", _universe)
+
     r = client.get("/api/battle-plan/scope")
     assert r.status_code == 200
     data = r.json()
-    assert isinstance(data, list)
-    assert data[0]["stock_code"] == "001896.SZ"
+    assert isinstance(data, dict)
+    assert set(data) == {"watchlist", "pool", "universe"}
+    assert data["watchlist"][0]["stock_code"] == "001896.SZ"
+    # ⚠️ 真实持仓成本(shares / avg_cost)不得扩散到出参
+    assert "shares" not in data["watchlist"][0]
+    assert "avg_cost" not in data["watchlist"][0]
+    assert data["pool"][0]["stock_code"] == "600519.SH"
+    assert data["universe"]["after_filters"] == 1941
 
 
 def test_generate_endpoint_returns_plan(monkeypatch):

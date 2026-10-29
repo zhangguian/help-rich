@@ -6,7 +6,7 @@
  * PUT 的请求体是 `{factors: [...]}` 而不是裸数组。
  */
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '@/lib/api';
-import type { BattlePlan, BattlePlanScopeRow } from '@/lib/planTypes';
+import type { BattlePlan, BattlePlanScopeResponse } from '@/lib/planTypes';
 
 /* ============================================================
  * 阶段2 · 选股权重
@@ -501,8 +501,14 @@ export async function fetchOnboarding(): Promise<OnboardingStatus> {
  * 阶段9 每日作战计划
  * ============================================================ */
 
-/** 作战计划生成要拉 11 只票的行情,默认 10s 超时不够 */
-const PLAN_TIMEOUT = { timeout: 60000 };
+/**
+ * 作战计划生成要拉全市场快照 + 逐票决策,默认 10s 超时不够。
+ *
+ * 60s → 90s(作战计划 v2):覆盖数从「自选 11 只」涨到「自选 + 全市场池」,
+ * 实测 22 只票时整轮 14~35s;60s 在慢网络下会**间歇性超时**,
+ * 而超时的表现是「点了生成没反应」—— 90s 更稳。
+ */
+const PLAN_TIMEOUT = { timeout: 90000 };
 
 export async function fetchBattlePlan(date?: string): Promise<BattlePlan> {
   const q = date ? `?date=${encodeURIComponent(date)}` : '';
@@ -518,12 +524,20 @@ export async function generateBattlePlan(date?: string): Promise<BattlePlan> {
   return apiPost<BattlePlan>('/battle-plan/generate', { date: date ?? null }, PLAN_TIMEOUT);
 }
 
-export async function fetchBattlePlanScope(): Promise<BattlePlanScopeRow[]> {
-  // ⚠️ 响应经 axios 拦截器做过 snake→camel(见 lib/api.ts),
-  // 所以运行时拿到的是 stockCode / stockName / inPosition / isFavorite —— 类型必须按驼峰写,
-  // 写成 snake_case 的话 TS 不报错(泛型是断言),但页面读出来全是 undefined。
-  // ⚠️ 必须写显式泛型,否则返回 any,ScopeRow 的字段拼错也没人拦。
-  return apiGet<BattlePlanScopeRow[]>('/battle-plan/scope');
+/**
+ * 取目标股票池(作战计划 v2)
+ *
+ * ⚠️ 2026-10-25 破坏性变更:后端从返回数组改成返回对象
+ * `{watchlist, pool, universe}` —— 调用方只有一处(PlanPanel 空态),同批改完。
+ *
+ * ⚠️ 响应经 axios 拦截器做过 snake→camel(见 lib/api.ts),
+ * 所以运行时拿到的是 stockCode / stockName / inPosition / isFavorite /
+ * missStreak / lastStatus / minAmountYi —— 类型必须按驼峰写,
+ * 写成 snake_case 的话 TS 不报错(泛型是断言),但页面读出来全是 undefined。
+ */
+export async function fetchBattlePlanScope(): Promise<BattlePlanScopeResponse> {
+  // ⚠️ 必须写显式泛型,否则返回 any,字段拼错也没人拦。
+  return apiGet<BattlePlanScopeResponse>('/battle-plan/scope');
 }
 
 /* ============================================================

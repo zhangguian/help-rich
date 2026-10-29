@@ -131,6 +131,69 @@ export interface BattlePlanMeta {
   targetDateEstimated: boolean;
   /** 重新生成时保留了原有 items(已有兑现判定)—— 见 spec §4.6.3 */
   itemsPreserved?: boolean;
+  /** 全市场滚动池(作战计划 v2)—— 缺省 = 该日报是 v2 之前生成的 */
+  pool?: BattlePlanPoolMeta;
+  /** 各票现价与涨跌幅 —— 左栏锚点栏用 */
+  quotes?: Record<string, BattlePlanQuote>;
+  /** 各阶段耗时(秒) */
+  timings?: Record<string, number>;
+}
+
+/** 全市场选股口径统计 —— 空态要写明「全市场 → 主板 → 非 ST → 成交额达标」 */
+export interface BattlePlanUniverse {
+  /** 全市场只数 */
+  total: number;
+  /** 沪深主板 */
+  mainBoard: number;
+  /** 剔除 ST 之后 */
+  nonSt: number;
+  /** 过完全部闸门之后 */
+  afterFilters: number;
+  /** 成交额下限(亿元) */
+  minAmountYi: number;
+}
+
+/** 池内一只 */
+export interface BattlePlanPoolMember {
+  stockCode: string;
+  stockName: string | null;
+  /** 4 因子总分 */
+  score: number | null;
+  /** 入选理由(给人看的白话) */
+  reason: string;
+  /** kept = 保留在池 | added = 新补位 */
+  state: string;
+  /** 连续未达预期天数 */
+  missStreak: number;
+  /** 昨日股票级兑现状态 */
+  lastStatus: string | null;
+  /** 「这只为什么还在池里」 */
+  streakNote: string;
+}
+
+/** 被剔除出池的一只 */
+export interface BattlePlanPoolDropped {
+  stockCode: string;
+  stockName: string | null;
+  missStreak: number;
+  reason: string;
+}
+
+export interface BattlePlanPoolMeta {
+  /** 池上限 */
+  limit: number;
+  members: BattlePlanPoolMember[];
+  /** 被剔除的票 —— 仍留在锚点栏里(标灰 + 原因),便于回看「这只为什么被换掉」 */
+  dropped: BattlePlanPoolDropped[];
+  /** 本次打分看过的候选数 */
+  candidatesConsidered: number;
+  universe?: BattlePlanUniverse | null;
+}
+
+/** 单只票的现价与涨跌幅 */
+export interface BattlePlanQuote {
+  price: number | null;
+  changePct: number | null;
 }
 
 export interface BattlePlan {
@@ -153,4 +216,24 @@ export interface BattlePlanScopeRow {
   stockName: string | null;
   inPosition: boolean;
   isFavorite: boolean;
+}
+
+/**
+ * `/battle-plan/scope` 的返回(**2026-10-25 破坏性变更**:list → 对象)
+ *
+ * - `watchlist`:持仓 ∪ ★关注
+ * - `pool`:**当前**在池成员(读 `battle_plan_pool` 表,不是「今天会选出什么」)
+ * - `universe`:全市场口径统计;快照不可用 → null
+ */
+export interface BattlePlanScopeResponse {
+  watchlist: BattlePlanScopeRow[];
+  pool: Array<{
+    stockCode: string;
+    stockName: string | null;
+    missStreak: number;
+    lastStatus: string | null;
+    lastScore: number | null;
+    joinedOn: string;
+  }>;
+  universe: BattlePlanUniverse | null;
 }

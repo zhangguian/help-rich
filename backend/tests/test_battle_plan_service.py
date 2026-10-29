@@ -233,9 +233,14 @@ async def test_build_plan_puts_now_actions_into_review_pending_todos(monkeypatch
 
 @pytest.mark.asyncio
 async def test_build_plan_meta_truncated_flag_is_true_when_scope_exceeds_max(monkeypatch):
-    """端到端:股票池超上限时 meta["truncated"] 必须为 True —— 不许谎称没砍票"""
+    """端到端:股票池超上限时 meta["truncated"] 必须为 True —— 不许谎称没砍票
+
+    ⚠️ 上限口径 2026-10-25 已变:不再是固定的 20,而是
+    **min(自选数 + 池 5 只, SCOPE_HARD_CAP=30)** —— 池永远不会被自选挤掉,
+    但自选极多时仍要有个硬顶保护 60s 生成预算。故本例用 35 只持仓触发截断。
+    """
     async def _pos():
-        return [_stock(f"00000{i}.SZ", f"票{i}", 10.0, 100, 9.0) for i in range(25)]
+        return [_stock(f"0000{i:02d}.SZ", f"票{i}", 10.0, 100, 9.0) for i in range(35)]
     async def _fav():
         return []
     monkeypatch.setattr(svc, "_load_positions", _pos)
@@ -277,7 +282,82 @@ async def test_build_plan_meta_truncated_flag_is_true_when_scope_exceeds_max(mon
 
     plan = await svc.build_plan(date(2026, 10, 21))
     assert plan["meta"]["truncated"] is True
-    assert plan["meta"]["scope_count"] == svc.MAX_SCOPE
+    assert plan["meta"]["scope_count"] == svc.SCOPE_HARD_CAP
+
+
+@pytest.mark.asyncio
+async def test_build_plan_meta_carries_quotes_for_anchor_rail(monkeypatch):
+    """`meta["quotes"]` 必须带上每只票的现价与涨跌幅
+
+    为什么:作战计划 v2 的左栏「股票锚点栏」要显示现价与涨跌幅。
+    这两个值原先只存在于编排层局部变量,没进 meta → 前端拿不到,
+    锚点栏只能显示名称与代码(与已拍板的三栏视觉稿不符)。
+    """
+    async def _pos():
+        return [_stock()]
+    async def _fav():
+        return []
+    monkeypatch.setattr(svc, "_load_positions", _pos)
+    monkeypatch.setattr(svc, "_load_favorites", _fav)
+
+    async def _k(code, *a, **kw):
+        return [{"date": "2026-10-21", "open": 9.0, "high": 10.0, "low": 8.8,
+                 "close": 9.9, "volume": 100}]
+    monkeypatch.setattr(svc, "fetch_klines", _k)
+
+    def _ind(klines):
+        return {"latest_close": 9.9, "ma": {"ma5": 9.8, "ma10": 9.5},
+                "position": {"p20": 8.5, "p80": 11.0, "stop_loss_price": 8.26,
+                             "support_price": 8.5, "risk_band": "mid"},
+                "volume": {"ratio": 1.0}, "kdj": {"zone": "neutral", "cross": None},
+                "channel": {"state": "flat"}, "support_pressure": {"pressure": [11.0]},
+                "stabilize": {"state": False, "price": None}, "signal": {"score": 50}}
+    monkeypatch.setattr(svc, "compute_indicators", _ind)
+
+    class _Q:
+        """行情桩 —— 只要 code / current_price / change_pct 三个字段"""
+        def __init__(self, code, price, pct):
+            self.code = code
+            self.current_price = price
+            self.change_pct = pct
+
+    async def _quote(codes):
+        return [_Q(c, 10.5, 1.24) for c in codes]
+    monkeypatch.setattr(svc, "_load_quotes", _quote)
+
+    async def _ctx(code, *a, **kw):
+        from app.services.decision_service import MarketContext
+        return MarketContext(degraded=[])
+    monkeypatch.setattr(svc, "get_market_context", _ctx)
+    async def _sent():
+        return {"up_total": 50, "down_total": 50}
+    monkeypatch.setattr(svc, "fetch_market_sentiment", _sent)
+    async def _flows(*a, **kw):
+        return [{"name": "电子", "netamount_yi": 1.0}]
+    monkeypatch.setattr(svc, "get_sector_fund_flow", _flows)
+    async def _txns(*a, **kw):
+        return [], True
+    monkeypatch.setattr(svc, "_load_transactions", _txns)
+    async def _save(*a, **kw):
+        return 1
+    monkeypatch.setattr(svc, "_persist", _save)
+
+    plan = await svc.build_plan(date(2026, 10, 21))
+    quotes = plan["meta"]["quotes"]
+    assert "001896.SZ" in quotes
+    assert quotes["001896.SZ"]["price"] == 10.5
+    assert quotes["001896.SZ"]["change_pct"] == 1.24
+
+
+async def _review_v2(prev_date="2026-10-21", plan_date="2026-10-22", degraded=None):
+    """新编排下的复盘入口(2026-10-25 编排重排后的契约)
+
+    兑现判定(`evaluate_prev_fulfillment`)与复盘组装(`_build_review`)拆成两步:
+    **全市场滚动池也要用同一份判定结果**,所以判定只做一次、两处消费。
+    """
+    d = degraded if degraded is not None else []
+    prev = await svc.evaluate_prev_fulfillment(prev_date, plan_date, d)
+    return svc._build_review(prev, [], None)
 
 
 @pytest.mark.asyncio
@@ -323,7 +403,7 @@ async def test_fulfillment_uses_only_target_day_kline(monkeypatch):
         return [], True   # F4: (流水列表, 是否读取成功)
     monkeypatch.setattr(svc, "_load_transactions", _txns)
 
-    review = await svc._build_review("2026-10-21", "2026-10-22", [])
+    review = await _review_v2()
     assert review["fulfillment"]["items"][0]["fulfillment"] == "missed"
 
 
@@ -392,6 +472,23 @@ def _patch_plan_env(monkeypatch, stocks=None, index_last_date="2026-10-21"):
     async def _save(*a, **kw):
         return 1
 
+    async def _pool(*a, **kw):
+        """全市场滚动池:测试里**必须打桩**
+
+        不打桩的话 `build_plan` 会去拉真实全市场快照 + 80 只 K 线 ——
+        既慢又不确定(网络波动会让用例随机红)。池自身的逻辑另有专门用例覆盖
+        (tests/test_stock_pool_service.py)。
+        """
+        from app.modules.stock_pool.pool_logic import PoolDecision, UniverseStats
+        from app.modules.stock_pool.service import PoolBuildResult
+
+        return PoolBuildResult(
+            decision=PoolDecision(picks=[], dropped=[], members=[]),
+            universe=UniverseStats(),
+            timings={},
+            skipped=[],
+        )
+
     monkeypatch.setattr(svc, "_load_positions", _pos)
     monkeypatch.setattr(svc, "_load_favorites", _fav)
     monkeypatch.setattr(svc, "fetch_klines", _k)
@@ -402,6 +499,7 @@ def _patch_plan_env(monkeypatch, stocks=None, index_last_date="2026-10-21"):
     monkeypatch.setattr(svc, "get_sector_fund_flow", _flows)
     monkeypatch.setattr(svc, "_load_transactions", _txns)
     monkeypatch.setattr(svc, "_persist", _save)
+    monkeypatch.setattr(svc, "build_market_pool", _pool)
     return bars
 
 
@@ -630,7 +728,7 @@ async def test_transactions_load_failure_marks_degraded(monkeypatch):
     items = [_prev_item()]
     _patch_review(monkeypatch, items, target_bars=[], tx_ok=False)
     degraded: list[str] = []
-    review = await svc._build_review("2026-10-21", "2026-10-22", degraded)
+    review = await _review_v2(degraded=degraded)
     assert any("流水不可用" in r for r in degraded), degraded
     assert review["fulfillment"]["items"][0]["fulfillment"] == "no_data"
 
@@ -649,7 +747,7 @@ async def test_transactions_failure_does_not_claim_no_operation(monkeypatch):
                       "close": 12.0, "volume": 100}],
         tx_ok=False,
     )
-    review = await svc._build_review("2026-10-21", "2026-10-22", [])
+    review = await _review_v2()
     by_kind = {i["item_kind"]: i for i in review["fulfillment"]["items"]}
     assert by_kind["entry"]["fulfillment"] == "missed"
     assert by_kind["entry"]["note"] == "流水不可用,未核对执行"
@@ -677,7 +775,7 @@ async def test_no_data_items_are_not_written_back(monkeypatch):
         transactions=[{"stock_code": "001896.SZ", "action": "buy", "shares": 100,
                        "price": 9.62, "trade_date": "2026-10-22"}],
     )
-    review = await svc._build_review("2026-10-21", "2026-10-22", [])
+    review = await _review_v2()
     by_kind = {i["item_kind"]: i for i in review["fulfillment"]["items"]}
     assert by_kind["entry"]["fulfillment"] == "executed"
     assert by_kind["exit"]["fulfillment"] == "no_data"

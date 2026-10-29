@@ -1077,6 +1077,46 @@ class BattlePlanItem(Base):
     fulfillment_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class BattlePlanPool(Base):
+    """全市场滚动池成员(作战计划 v2)
+
+    一行 = 一只**进过**滚动池的股票。`active` 区分「在池 / 已剔除」——
+    被剔除的行**不物理删除**,保留历史,便于回看「这只为什么被换掉」。
+
+    **为什么单独建表而不是给 `battle_plan_items` 加字段**:
+    - `battle_plan_items` 是「某一天的某一条预案」,会随日报重生成被整体覆盖;
+    - 滚动池是**跨天实体**,它的记忆(连续未达预期天数)必须活过日报覆盖。
+    两者生命周期不同,混在一张表里会互相污染。
+
+    `last_evaluated_on` 是**幂等键**:同一天重复生成日报时,靠它判断
+    「这只票今天已经判过了」,避免 `miss_streak` 被重复累计。
+    """
+    __tablename__ = "battle_plan_pool"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_code: Mapped[str] = mapped_column(
+        String, nullable=False, unique=True, index=True
+    )
+    stock_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 1 = 在池;0 = 已剔除(保留历史行)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    joined_on: Mapped[str] = mapped_column(String, nullable=False)
+    # 连续未达预期天数(达到阈值 → 剔除);触及/执行归零,未判定不累计
+    miss_streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # 上次判定的基准日(幂等键)
+    last_evaluated_on: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 上次兑现状态原文(executed/touched/missed/n_a/no_data)
+    last_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 上次 4 因子总分
+    last_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 最近一次入选 / 剔除理由
+    last_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+
 # ============================================================
 # === 阶段 T2:盘中复盘 ===
 # ============================================================

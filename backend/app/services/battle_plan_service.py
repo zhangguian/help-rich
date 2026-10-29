@@ -10,10 +10,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from app.core.config import POOL_LIMIT
+from app.modules.stock_pool.pool_logic import aggregate_stock_status
+from app.modules.stock_pool.service import build_market_pool
 from app.repositories.battle_plan_repo import battle_plan_repo
 from app.services.fulfillment_checker import check_fulfillment, summarize_fulfillment
 from app.services.kline_service import fetch_klines
@@ -32,7 +36,8 @@ from app.services.ta_service import compute_indicators
 
 logger = logging.getLogger(__name__)
 
-MAX_SCOPE = 20              # 目标股票池上限
+MAX_SCOPE = 20              # 旧上限(「持仓 ∪ ★关注」时代的固定值);仅作绝对兜底
+SCOPE_HARD_CAP = 30         # 总覆盖硬顶(自选极多时兜底,保护 60s 生成预算)
 KLINE_COUNT = 190           # 决策引擎需要足够 K 线
 INDEX_CODE = "000001.SH"    # 上证指数
 INDEX_KLINE_COUNT = 30      # 算 MA20 + 5 日均量足够
@@ -83,6 +88,27 @@ async def _load_quotes(codes: list[str]):
     except Exception as e:  # noqa: BLE001
         logger.warning("作战计划拉取行情失败: %s", e)
         return []
+
+
+def _quotes_meta(quotes_by_code: dict[Any, Any]) -> dict[str, dict[str, float | None]]:
+    """行情 → `meta.quotes` 出参:{code: {price, change_pct}}
+
+    作战计划 v2 的左栏「股票锚点栏」要显示每只票的**现价与涨跌幅**。
+    这两个值原先只存在于编排层的局部变量里,没进 meta → 前端拿不到,
+    锚点栏只能显示名称与代码。落进 meta 后随日报一起存库,
+    GET(读历史日报)与 POST(刚生成)拿到的是同一份数据。
+    """
+    out: dict[str, dict[str, float | None]] = {}
+    for code, q in (quotes_by_code or {}).items():
+        if not code:
+            continue
+        price = getattr(q, "current_price", None)
+        change_pct = getattr(q, "change_pct", None)
+        out[str(code)] = {
+            "price": float(price) if price is not None else None,
+            "change_pct": float(change_pct) if change_pct is not None else None,
+        }
+    return out
 
 
 async def _load_transactions(plan_date: str) -> tuple[list[dict[str, Any]], bool]:
@@ -344,16 +370,114 @@ async def _persist(plan: dict[str, Any]) -> int:
     return plan_id
 
 
+def _merge_scope(
+    watchlist: list[dict[str, Any]],
+    pool_picks: list[Any],
+    max_scope: int | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """合并自选与全市场池 → 最终覆盖列表(**截断只在这里做一次**)
+
+    顺序:持仓 → ★关注 → 池(池排在后面,因为池是「新增的关注」)
+
+    **上限口径(2026-10-25 · 作战计划 v2)**:默认上限 = `len(自选) + POOL_LIMIT`,
+    也就是「自选全覆盖 + 全市场池 5 只」(用户确认的口径)。
+
+    ⚠️ **为什么不能用固定的 MAX_SCOPE=20**:用户自选有 17 只时,
+    17 + 5 = 22 > 20 —— 若按「先砍池尾」的优先级截断,全市场池会被**整个挤掉**,
+    正好违背「全市场永远有位置」这个设计前提。所以上限必须随自选数走,
+    只保留 `SCOPE_HARD_CAP` 作为自选极多时的硬顶(保护 60s 生成预算)。
+
+    截断优先级(**超过上限时**):**先砍池尾 → 再砍★关注尾 → 持仓永不砍**
+    (持仓是用户真金白银的仓,不能因为名额不够就被丢掉;池是可再生的)。
+
+    去重:池票若已在自选里 → 不重复加(它已经被自选覆盖了)。
+    """
+    if max_scope is None:
+        max_scope = min(len(watchlist) + POOL_LIMIT, SCOPE_HARD_CAP)
+    positions = [s for s in watchlist if s.get("in_position")]
+    favorites = [s for s in watchlist if not s.get("in_position")]
+    seen = {str(s.get("stock_code") or "") for s in watchlist}
+
+    pool: list[dict[str, Any]] = []
+    for p in pool_picks or []:
+        code = str(getattr(p, "stock_code", "") or "")
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        pool.append({
+            "stock_code": code,
+            "stock_name": getattr(p, "stock_name", None),
+            "in_position": False,
+            "is_favorite": False,
+            "shares": 0,
+            "avg_cost": 0.0,
+        })
+
+    truncated = False
+    while len(positions) + len(favorites) + len(pool) > max_scope and pool:
+        pool.pop()
+        truncated = True
+    while len(positions) + len(favorites) + len(pool) > max_scope and favorites:
+        favorites.pop()
+        truncated = True
+    scope = positions + favorites + pool
+    if len(scope) > max_scope:
+        # 持仓本身就超过上限 —— 只能截(并如实披露 truncated)
+        scope = scope[:max_scope]
+        truncated = True
+    return scope, truncated
+
+
 async def build_plan(plan_date: date) -> dict[str, Any]:
-    """生成一份作战日报(幂等;同日重复生成覆盖)"""
+    """生成一份作战日报(幂等;同日重复生成覆盖)
+
+    编排顺序(2026-10-25 重排 · 作战计划 v2):
+      ① 昨日兑现判定   ← **提前**:滚动池要用「昨天有没有达到预期」
+      ② 自选(持仓 ∪ ★关注)
+      ③ 全市场滚动池(Stage A 粗筛 → Stage B 4 因子精排 → 池记忆与补位)
+      ④ 合并 scope(自选在前,池在后)
+      ⑤ 行情 / 明日预期 / 逐票决策
+      ⑥ 复盘(复用 ① 的结果,**不重算**)
+      ⑦ 落库
+    """
     ds = plan_date.isoformat()
     degraded: list[str] = []
+    timings: dict[str, float] = {}
 
-    scope, truncated = _truncate_scope(await resolve_target_stocks())
+    # ---- ① 昨日兑现(池选择与复盘共用,只算一次) ----
+    t0 = time.monotonic()
+    prev_date = await _find_prev_plan_date(plan_date)
+    prev_result = await evaluate_prev_fulfillment(prev_date, plan_date, degraded)
+    timings["fulfillment"] = round(time.monotonic() - t0, 2)
+
+    # ---- ② 自选(持仓 ∪ ★关注,持仓优先,组内保源顺序) ----
+    watchlist = await resolve_target_stocks()
+
+    # ---- ③ 全市场滚动池 ----
+    pool_result = await build_market_pool(
+        prev_fulfillment=stock_level_fulfillment(prev_result.checked),
+        watchlist_codes={str(s.get("stock_code") or "") for s in watchlist},
+        evaluated_on=ds,
+        degraded=degraded,
+    )
+    timings.update(pool_result.timings)
+
+    # ---- ④ 合并 scope(上限 = 自选数 + 池上限,池不会被自选挤掉) ----
+    scope, truncated = _merge_scope(watchlist, pool_result.decision.picks)
     if not scope:
-        raise ValueError("目标股票池为空:既无持仓也无★关注票,无法生成作战计划")
+        raise ValueError(
+            "目标股票池为空:既无持仓/★关注票,全市场候选也无可用标的,无法生成作战计划"
+        )
 
-    quotes = await _load_quotes([s["stock_code"] for s in scope])
+    scope_codes = [str(s.get("stock_code") or "") for s in scope]
+    # 被剔除出池的票也要在锚点栏里留个影(标灰 + 剔除原因)→ 一并拉行情
+    scope_code_set = set(scope_codes)
+    extra_codes = [
+        str(getattr(d, "stock_code", "") or "")
+        for d in pool_result.decision.dropped
+    ]
+    extra_codes = [c for c in extra_codes if c and c not in scope_code_set]
+    quotes = await _load_quotes(scope_codes + extra_codes)
     quotes_by_code = {getattr(q, "code", None): q for q in (quotes or [])}
 
     # ---- 市场数据(明日预期原料) ----
@@ -388,9 +512,11 @@ async def build_plan(plan_date: date) -> dict[str, Any]:
         async with sem:
             return await _build_one_decision(stock, quotes_by_code)
 
+    t1 = time.monotonic()
     results = await asyncio.gather(
         *[_one(stock) for stock in scope], return_exceptions=True
     )
+    timings["decisions"] = round(time.monotonic() - t1, 2)
 
     items: list[dict[str, Any]] = []
     todos: list[dict[str, Any]] = []
@@ -412,11 +538,12 @@ async def build_plan(plan_date: date) -> dict[str, Any]:
         except Exception as e:  # noqa: BLE001
             degraded.append(f"{stock.get('stock_code')} 预案转换失败: {e}")
 
-    # ---- 昨日兑现(闭环) ----
-    prev_date = await _find_prev_plan_date(plan_date)
-    review = await _build_review(prev_date, plan_date, degraded, todos, market_snapshot)
+    # ---- 昨日兑现(闭环)—— 复用 ① 的结果 ----
+    review = _build_review(prev_result, todos, market_snapshot)
 
     target_date, estimated = _next_trading_day(plan_date)
+    pool_meta = pool_result.decision.to_meta()
+    pool_meta["universe"] = pool_result.universe.to_dict()
     meta = {
         "scope_count": len(scope),
         # ⚠️ 只留 4 个字段:shares / avg_cost 是真实持仓成本,不该扩散到落库与出参
@@ -436,6 +563,12 @@ async def build_plan(plan_date: date) -> dict[str, Any]:
         "generated_at": datetime.now(UTC).astimezone().isoformat(timespec="seconds"),
         "target_date": target_date,
         "target_date_estimated": estimated,
+        # 全市场滚动池(作战计划 v2)
+        "pool": pool_meta,
+        # 各票现价与涨跌幅 —— 左栏锚点栏用(v2)
+        "quotes": _quotes_meta(quotes_by_code),
+        # 各阶段耗时(秒)—— 定位「生成慢在哪一步」
+        "timings": timings,
     }
 
     plan = {
@@ -452,35 +585,45 @@ async def build_plan(plan_date: date) -> dict[str, Any]:
     return plan
 
 
-async def _build_review(
+@dataclass
+class PrevFulfillment:
+    """昨日预案的兑现判定结果(池选择与复盘共用,只算一次)"""
+
+    checked: list[dict[str, Any]]
+    summary: dict[str, Any] | None
+    note: str | None
+    ok: bool
+
+
+async def evaluate_prev_fulfillment(
     prev_date: str | None,
     plan_date: str,
     degraded: list[str],
-    pending_todos: list[dict[str, Any]] | None = None,
-    market: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """今日复盘 = 昨日预案兑现比对 + 今日待办
+) -> PrevFulfillment:
+    """判定昨日预案在目标日的兑现情况(纯编排,判定本身在 fulfillment_checker)
 
-    `pending_todos` = 本次各票决策里 status=="now" 的动作(条件已满足但用户还没做)。
-    它们**必须进复盘段**:写进明日预案是「已经过期的建议」,只有推到今日待办
-    才能逼用户面对(见 spec §4.4.2 三路分流)。
+    **为什么独立成一个函数**:全市场滚动池要按「昨日是否达到预期」决定谁留谁走,
+    复盘段也要同一份数据。合成一处算一次、两处消费 ——
+    否则要么白拉一遍 K 线,要么两端口径漂移。
+
+    ⚠️ 输入范围约束(来自 fulfillment_checker):传入的 K 线**必须只含目标日**,
+    否则多日极值会被当成单日极值 → 「假触及」。
     """
-    todos = list(pending_todos or [])
     if not prev_date:
-        return {
-            "market": market,
-            "fulfillment": None,
-            "pending_todos": todos,
-            "note": "没有找到上一份作战计划,今日暂无兑现比对",
-        }
-    prev = await battle_plan_repo.get_plan(prev_date)
+        return PrevFulfillment(
+            [], None, "没有找到上一份作战计划,今日暂无兑现比对", False
+        )
+    try:
+        prev = await battle_plan_repo.get_plan(prev_date)
+    except Exception as e:  # noqa: BLE001
+        degraded.append(f"读取昨日作战计划失败: {e}")
+        return PrevFulfillment(
+            [], None, "读取昨日作战计划失败,今日暂无兑现比对", False
+        )
     if not prev:
-        return {
-            "market": market,
-            "fulfillment": None,
-            "pending_todos": todos,
-            "note": "没有找到昨日作战计划,今日暂无兑现比对",
-        }
+        return PrevFulfillment(
+            [], None, "没有找到昨日作战计划,今日暂无兑现比对", False
+        )
     prev_items = await battle_plan_repo.get_items(prev["id"])
 
     # 目标日 = 昨日预案所面向的那一天 = 昨日日报的 meta.target_date(缺失时退回 plan_date)
@@ -532,18 +675,56 @@ async def _build_review(
         except Exception as e:  # noqa: BLE001
             logger.warning("回填兑现状态失败 item=%s: %s", it.get("id"), e)
 
+    return PrevFulfillment(checked, summary, None, True)
+
+
+def stock_level_fulfillment(checked: list[dict[str, Any]]) -> dict[str, str]:
+    """昨日各票的**股票级**兑现状态(code → 状态)—— 滚动池按股票判定
+
+    一只票可能有多条预案;池关心的是「这只票昨天有没有达到预期」,
+    不是「这一条预案有没有达到预期」。
+    """
+    by_code: dict[str, list[str]] = {}
+    for it in checked or []:
+        code = str(it.get("stock_code") or "")
+        if not code:
+            continue
+        by_code.setdefault(code, []).append(str(it.get("fulfillment") or "n_a"))
+    return {code: aggregate_stock_status(statuses) for code, statuses in by_code.items()}
+
+
+def _build_review(
+    prev_result: PrevFulfillment,
+    pending_todos: list[dict[str, Any]] | None = None,
+    market: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """今日复盘 = 昨日预案兑现比对 + 今日待办
+
+    兑现部分直接消费 `evaluate_prev_fulfillment` 的结果 —— **不重算**。
+
+    `pending_todos` = 本次各票决策里 status=="now" 的动作(条件已满足但用户还没做)。
+    它们**必须进复盘段**:写进明日预案是「已经过期的建议」,只有推到今日待办
+    才能逼用户面对(见 spec §4.4.2 三路分流)。
+    """
+    todos = list(pending_todos or [])
+    fulfillment = None
+    if prev_result.summary is not None:
+        fulfillment = {
+            **prev_result.summary,
+            "items": [
+                {
+                    "stock_code": i["stock_code"], "stock_name": i.get("stock_name"),
+                    "label": i.get("label"), "item_kind": i.get("item_kind"),
+                    "fulfillment": i["fulfillment"], "note": i.get("fulfillment_note"),
+                }
+                for i in prev_result.checked
+            ],
+        }
     return {
         "market": market,
-        "fulfillment": {**summary, "items": [
-            {
-                "stock_code": i["stock_code"], "stock_name": i.get("stock_name"),
-                "label": i.get("label"), "item_kind": i.get("item_kind"),
-                "fulfillment": i["fulfillment"], "note": i.get("fulfillment_note"),
-            }
-            for i in checked
-        ]},
+        "fulfillment": fulfillment,
         "pending_todos": todos,
-        "note": None,
+        "note": prev_result.note,
     }
 
 
@@ -563,4 +744,11 @@ async def get_plan(plan_date: date) -> dict[str, Any] | None:
     }
 
 
-__all__ = ["build_plan", "get_plan", "resolve_target_stocks", "MAX_SCOPE"]
+__all__ = [
+    "MAX_SCOPE",
+    "SCOPE_HARD_CAP",
+    "build_plan",
+    "get_plan",
+    "resolve_target_stocks",
+    "stock_level_fulfillment",
+]

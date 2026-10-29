@@ -28,6 +28,41 @@
 
 ## 历史记录
 
+### 2026-10-25 | v0.11 | 作战计划 v2:沪深全市场滚动池 + 三栏工作台
+
+#### Breaking(破坏性)
+- `GET /api/battle-plan/scope`:**返回类型从 `list[dict]` 改为对象** `{watchlist, pool, universe}`
+  - `watchlist`:持仓 ∪ ★关注(持仓优先,组内保源顺序),字段不变
+  - `pool`:**当前**在池成员(读 `battle_plan_pool` 表,**不是**「今天会选出什么」),
+    字段 `stock_code / stock_name / miss_streak / last_status / last_score / joined_on`
+  - `universe`:全市场口径统计 `{total, main_board, non_st, after_filters, min_amount_yi}`,
+    快照不可用 → `null`
+  - ⚠️ 调用方只有一处(作战计划空态),同批改完,不留中间态。
+- `GET /api/battle-plan/scope`:**不再回传 `shares` / `avg_cost`** —— 真实持仓成本不扩散到出参
+  (与 `meta.scope` 口径一致)。
+
+#### Added(新增)
+- `GET /api/battle-plan` 与 `POST /api/battle-plan/generate` 的 `meta` 新增三个字段:
+  - `pool`:全市场滚动池 `{limit, members[], dropped[], candidates_considered, universe}`
+    - `members[]`:`stock_code / stock_name / score / reason / state(kept|added) / miss_streak / last_status / streak_note`
+    - `dropped[]`:`stock_code / stock_name / miss_streak / reason`(被剔除的票,仍留在前端锚点栏以便回看)
+  - `quotes`:`{stock_code: {price, change_pct}}` —— 左栏股票锚点栏要显示现价与涨跌幅
+  - `timings`:`{fulfillment, select_stage, select_pool, decisions}` 各阶段耗时(秒)
+- 新增表 `battle_plan_pool`(跨天实体:滚动池记忆,日报 items 会被次日覆盖,池不会)
+
+#### Changed(修改)
+- `POST /api/battle-plan/generate` 的覆盖口径:从「持仓 ∪ ★关注」扩到
+  **自选全覆盖 + 沪深全市场主板滚动池 5 只**;上限 = `min(自选数 + 5, 30)`,
+  截断优先级「先砍池尾 → 再砍 ★关注尾 → 持仓永不砍」
+- `POST /api/battle-plan/generate` 编排顺序重排:**昨日兑现判定提前到最前**
+  (滚动池要用「昨天有没有达到预期」,判定只算一次、池与复盘共用同一份结果)
+- `GET /api/battle-plan?date=` 的 `review.fulfillment.items` 语义不变(仍是**逐条**兑现);
+  股票级状态由前端 `lib/planDerive.ts` 按 `executed > touched > missed > no_data > n_a` 聚合
+
+#### Fixed(修复)
+- 「达到预期」的口径统一为 `touched | executed`;**只有 `missed` 累计连续天数**,
+  `no_data / n_a / pending` 不累计(缺数据不惩罚股票)
+
 ### 2026-10-25 | v0.10 | 操作建议增强:六格 + 网格交易配置建议 + 口径统一
 
 #### Added(新增)

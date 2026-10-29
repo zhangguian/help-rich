@@ -67,3 +67,32 @@ def infer_market(num: str) -> str | None:
     if normalized:
         return normalized.split(".")[1]
     return None
+
+
+# 沪深主板的代码前缀(按市场分)
+#   SH 主板:600(主板)/601/603/605(次新主板代码段)
+#   SZ 主板:000/001/002/003(原中小板已并入主板)
+# 刻意**不含**:
+#   300/301 创业板、688/689 科创板、8xx/4xx/920 北交所、900/200 B 股
+MAIN_BOARD_PREFIXES: dict[str, tuple[str, ...]] = {
+    "SH": ("600", "601", "603", "605"),
+    "SZ": ("000", "001", "002", "003"),
+}
+
+
+def is_main_board(code: str) -> bool:
+    """该代码是否属于**沪深主板**(不含创业板 / 科创板 / 北交所 / B 股)
+
+    纯函数、零 IO —— 选股 universe 的第一道闸门。
+
+    为什么按**代码前缀**而不是按市场后缀判:
+    `infer_market` 只能区分 SH/SZ/BJ,分不出「主板 vs 创业板 vs 科创板」
+    —— 那三个都在 SH/SZ 里。板块差异必须落到代码段上。
+
+    输入接受任意格式(600519 / 600519.SH / sh600519),非法返回 False。
+    """
+    normalized = normalize_code(code)
+    if not normalized:
+        return False
+    num, market = normalized.split(".")
+    return num.startswith(MAIN_BOARD_PREFIXES.get(market, ()))

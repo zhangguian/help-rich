@@ -67,6 +67,9 @@ const config: Config = {
         'warn': 'rgb(var(--warn-rgb) / <alpha-value>)',
         'warn-bg': 'var(--status-warn-bg)',
         'neutral': 'rgb(var(--neutral-rgb) / <alpha-value>)',
+        // 滚动池(作战计划 v2)—— 紫色只用于「全市场池」这一个身份标识
+        'pool': 'rgb(var(--pool-rgb) / <alpha-value>)',
+        'pool-bg': 'rgb(var(--pool-rgb) / 0.12)',
         // 语义色 — 仅限 badge/toast/边框/错误态,与行情方向无关
         'danger': 'rgb(var(--up-rgb) / <alpha-value>)',
         'danger-bg': 'var(--status-up-bg)',

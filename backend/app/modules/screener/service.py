@@ -268,6 +268,20 @@ async def get_picks_by_run(run_id: int) -> list[ScreenerPick]:
     return await screener_repo.get_picks_by_run(run_id)
 
 
+async def get_effective_weights(refresh: bool = False):
+    """当前生效的 4 因子权重(跨域出口)
+
+    作战计划 v2 的「全市场滚动池」复用**同一套**权重与打分公式 ——
+    用户在选股页调权重,池的排序也跟着变(同一套体系,两处一致)。
+
+    跨域只允许 import 本域的 `service`(见 tests/test_architecture_boundaries.py),
+    故在此开一个出口,而不是让调用方去碰 `weight_service`。
+    """
+    from app.modules.screener.weight_service import get_effective_weights as _get
+
+    return await _get(refresh=refresh)
+
+
 # ============================================================
 # 跑批
 # ============================================================
