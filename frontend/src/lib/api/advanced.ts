@@ -633,6 +633,15 @@ export interface IntradayReviewSchedule {
   tradeDate: string | null;
   slots: IntradaySlot[];
   producedSlots: IntradaySlot[];
+  /**
+   * 已到触发时刻、但**还没产出**的档位(2026-10-27 新增)。
+   *
+   * ⚠️ 为什么必须有:没有这个字段时,前端在「今天一档都没产出」的情况下
+   * 只能显示「下一次盘中复盘 11:30,还有 1287 分钟」——
+   * 用户完全看不出 11:30 **已经到点却没产出**,看起来像「跑过了只是没显示」。
+   * 有了它,面板能明确说「今天的 11:30 档还没产出」。
+   */
+  missingSlots?: IntradaySlot[];
   nextSlot: IntradaySlot | null;
   nextSlotAt: IntradaySlot | null;
   nextSlotMinutesLeft: number | null;

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -271,3 +271,68 @@ def test_invalid_slot_returns_422(_wired):
 def test_invalid_date_returns_422(_wired):
     r = client.get("/api/intraday-review", params={"date": "not-a-date"})
     assert r.status_code == 422
+
+
+# ---------------- missing_slots(2026-10-27) ----------------
+
+def _frozen_datetime(target: datetime):
+    """造一个 now() 被冻结的 datetime 子类(只为测「哪些档位已过时刻」)"""
+
+    class _F(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return target
+
+    return _F
+
+
+def test_schedule_reports_missing_slots(_wired, monkeypatch):
+    """⚠️ 2026-10-27 新增:已到触发时刻、但**还没产出**的档位必须说出来。
+
+    没有这个字段时,前端只能显示「下一次盘中复盘 11:30,还有 1287 分钟」——
+    用户完全看不出今天 11:30 / 14:00 这两档**已经到点却没产出**。
+    """
+    from app.api import intraday_review as api
+
+    async def _only_am(_d):
+        return [{"slot": "11:30"}]
+
+    monkeypatch.setattr(api, "get_reviews", _only_am)
+    monkeypatch.setattr(api, "datetime", _frozen_datetime(datetime(2026, 10, 27, 14, 30)))
+
+    data = client.get("/api/intraday-review/schedule").json()
+    assert data["produced_slots"] == ["11:30"]
+    # 11:30 已产出 → 不算缺;14:00 已到点但没产出 → 算缺
+    assert data["missing_slots"] == ["14:00"]
+    # 两档时刻都过了 → 下一档是明天上午
+    assert data["next_slot"] == "11:30"
+
+
+def test_schedule_missing_slots_empty_before_first_window(_wired, monkeypatch):
+    """还没到 11:30 → 没有任何档位算缺"""
+    from app.api import intraday_review as api
+
+    async def _none(_d):
+        return []
+
+    monkeypatch.setattr(api, "get_reviews", _none)
+    monkeypatch.setattr(api, "datetime", _frozen_datetime(datetime(2026, 10, 27, 9, 0)))
+
+    data = client.get("/api/intraday-review/schedule").json()
+    assert data["missing_slots"] == []
+    assert data["next_slot"] == "11:30"
+
+
+def test_schedule_missing_slots_never_contains_produced(_wired, monkeypatch):
+    """已产出的档位绝不能出现在 missing 里"""
+    from app.api import intraday_review as api
+
+    async def _both(_d):
+        return [{"slot": "11:30"}, {"slot": "14:00"}]
+
+    monkeypatch.setattr(api, "get_reviews", _both)
+    monkeypatch.setattr(api, "datetime", _frozen_datetime(datetime(2026, 10, 27, 15, 0)))
+
+    data = client.get("/api/intraday-review/schedule").json()
+    assert data["produced_slots"] == ["11:30", "14:00"]
+    assert data["missing_slots"] == []

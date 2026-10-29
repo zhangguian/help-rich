@@ -103,6 +103,20 @@ async def schedule() -> dict:
         next_slot = VALID_SLOTS[0]
         minutes_left = int((window - now).total_seconds() // 60)
 
+    # 已过触发时刻、但还没产出的档位
+    #
+    # ⚠️ 为什么必须给:2026-10-27 之前,当某档没产出时,前端只会显示
+    # 「下一次盘中复盘 11:30,还有 1287 分钟」—— 用户完全看不出
+    # **今天 11:30 / 14:00 这两档已经到点却没产出**,
+    # 看起来像「跑过了只是没显示」。
+    # 有了这个字段,前端能明确说「今天的 11:30 档还没产出」。
+    missing_slots: list[str] = []
+    for slot in VALID_SLOTS:
+        hour, minute = SLOT_TIMES[slot]
+        window = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if now >= window and slot not in produced:
+            missing_slots.append(slot)
+
     return {
         "date": today.isoformat(),
         "is_trading_day": bool(meta.get("is_trading_day")),
@@ -111,6 +125,7 @@ async def schedule() -> dict:
         "trade_date": meta.get("trade_date"),
         "slots": list(VALID_SLOTS),
         "produced_slots": produced,
+        "missing_slots": missing_slots,
         "next_slot": next_slot,
         "next_slot_at": next_slot,
         "next_slot_minutes_left": minutes_left,

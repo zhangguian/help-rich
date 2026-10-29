@@ -65,13 +65,21 @@ def test_review_slot_mapping():
 # ---------------- 触发 ----------------
 
 async def test_due_windows_triggers_at_1400(monkeypatch):
+    """14:00 触发时:11:30 那一档若没成功产出过会**顺手补掉**,再跑 14:00。"""
     _patch_calendar(monkeypatch, trading=True)
-    assert await ws.due_windows(datetime(2026, 10, 22, 14, 5)) == ["intraday_pm"]
+    assert await ws.due_windows(datetime(2026, 10, 22, 14, 5)) == [
+        "intraday_am",
+        "intraday_pm",
+    ]
 
 
 async def test_due_windows_triggers_at_last_minute_of_window(monkeypatch):
+    """14:29:14:00 那一档刚到点,11:30 那一档还在补跑有效期内(截止 14:29)"""
     _patch_calendar(monkeypatch, trading=True)
-    assert await ws.due_windows(datetime(2026, 10, 22, 14, 29)) == ["intraday_pm"]
+    assert await ws.due_windows(datetime(2026, 10, 22, 14, 29)) == [
+        "intraday_am",
+        "intraday_pm",
+    ]
 
 
 async def test_due_windows_triggers_at_1130(monkeypatch):
@@ -80,9 +88,11 @@ async def test_due_windows_triggers_at_1130(monkeypatch):
 
 
 async def test_due_windows_ignores_old_1450_window(monkeypatch):
-    """旧的 14:50 窗口已经不存在了"""
+    """旧的 14:50 窗口已经不存在了(14:50 时刻跑的是 14:00 那一档)"""
     _patch_calendar(monkeypatch, trading=True)
-    assert await ws.due_windows(datetime(2026, 10, 22, 14, 50)) == []
+    assert not any(h == 14 and m == 50 for _k, h, m, _e in ws.TIME_WINDOWS)
+    # 14:50 时 14:00 那一档仍在补跑有效期内(截止 15:59)
+    assert await ws.due_windows(datetime(2026, 10, 22, 14, 50)) == ["intraday_pm"]
 
 
 async def test_non_trading_day_does_not_trigger(monkeypatch):
@@ -93,11 +103,18 @@ async def test_non_trading_day_does_not_trigger(monkeypatch):
 
 
 async def test_same_window_triggers_only_once_per_day(monkeypatch):
+    """产出**成功**后同一天不再跑。
+
+    ⚠️ 契约变更(2026-10-27):`due_windows` 自己不再标记「已跑」——
+    标记只发生在产出成功之后(否则失败一次 = 当天放弃)。
+    """
     _patch_calendar(monkeypatch, trading=True)
-    assert await ws.due_windows(datetime(2026, 10, 22, 14, 5)) == ["intraday_pm"]
-    assert await ws.due_windows(datetime(2026, 10, 22, 14, 10)) == []
+    now = datetime(2026, 10, 22, 14, 5)
+    assert await ws.due_windows(now) == ["intraday_am", "intraday_pm"]
+    ws.mark_attempt("intraday_pm", now, ok=True)
+    assert "intraday_pm" not in await ws.due_windows(datetime(2026, 10, 22, 14, 10))
     # 另一天同一窗口可以再触发
-    assert await ws.due_windows(datetime(2026, 10, 23, 14, 5)) == ["intraday_pm"]
+    assert "intraday_pm" in await ws.due_windows(datetime(2026, 10, 23, 14, 5))
 
 
 async def test_estimated_calendar_still_runs(monkeypatch):

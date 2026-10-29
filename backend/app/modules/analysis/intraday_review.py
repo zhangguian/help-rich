@@ -132,6 +132,18 @@ async def get_reviews(trade_date: str) -> list[dict[str, Any]]:
     return await intraday_review_repo.list_by_date(trade_date)
 
 
+async def has_review(trade_date: str, slot: str) -> bool:
+    """该日该档是否**已经产出**。
+
+    ⚠️ 调度器用它避免「重启后重跑 + 重推」:调度器的「已跑」标记只在内存里,
+    后端一重启就忘了 —— 不查库的话,重启会把还在补跑窗口内的档**再产出一次、
+    再推一次**,而推送是不可撤回的,重复推就是重复打扰用户。
+    数据库才是「这一档到底产出没有」的事实来源。
+    """
+    row = await intraday_review_repo.get(trade_date, slot)
+    return row is not None
+
+
 # ============================ 推送 ============================
 
 def _fmt_levels(values: Any) -> str:

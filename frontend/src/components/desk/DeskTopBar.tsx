@@ -59,6 +59,9 @@ export function DeskTopBar({
   const produced = schedule?.producedSlots ?? [];
   const lastSlot = produced.length > 0 ? produced[produced.length - 1] : null;
   const notTradingDay = schedule != null && !schedule.isTradingDay;
+  // ⚠️ 2026-10-27:已到触发时刻却没产出的档位 —— 胶囊必须说出来。
+  // 只显示「下一次 14:00」的话,用户看不出 11:30 那档**已经错过**。
+  const missingSlots = schedule?.missingSlots ?? [];
   const nextHint = schedule?.nextSlot
     ? `下一次 ${schedule.nextSlot}${
         schedule.nextSlotMinutesLeft != null ? `,还有 ${schedule.nextSlotMinutesLeft} 分钟` : ''
@@ -69,9 +72,17 @@ export function DeskTopBar({
     ? '今天不是交易日'
     : lastSlot
       ? `盘中复盘 · ${lastSlot} 已出`
-      : schedule?.nextSlot
-        ? `盘中复盘 · ${schedule.nextSlot}`
-        : '盘中复盘';
+      : missingSlots.length > 0
+        ? `盘中复盘 · ${missingSlots[0]} 待补`
+        : schedule?.nextSlot
+          ? `盘中复盘 · ${schedule.nextSlot}`
+          : '盘中复盘';
+
+  const reviewTitle = notTradingDay
+    ? '今天不是交易日,盘中复盘不会跑'
+    : missingSlots.length > 0
+      ? `已到触发时刻但还没产出:${missingSlots.join('、')}(系统会在补跑有效期内自动重试)`
+      : nextHint || '查看今日盘中复盘';
 
   const toggleTheme = () => {
     const next: ThemeMode = theme === 'light' ? 'dark' : 'light';
@@ -147,7 +158,7 @@ export function DeskTopBar({
           type="button"
           onClick={openPanel}
           data-testid="intraday-review-entry"
-          title={notTradingDay ? '今天不是交易日,盘中复盘不会跑' : nextHint || '查看今日盘中复盘'}
+          title={reviewTitle}
           className={clsx(
             'flex items-center gap-1.5 px-2 py-1 rounded-sm text-[11px] border transition-colors whitespace-nowrap',
             lastSlot

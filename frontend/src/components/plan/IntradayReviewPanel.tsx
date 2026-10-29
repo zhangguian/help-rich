@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   fetchIntradayReview,
@@ -26,6 +26,17 @@ import { useIntradayStore } from '@/stores/useIntradayStore';
  */
 
 const STATE_ORDER: IntradayActionState[] = ['已到价待执行', '未到价', '数据不足', '不适用'];
+
+/**
+ * 档位时间序。
+ *
+ * ⚠️ 不要靠数组下标判断「最新那档」—— `producedSlots` 的顺序是后端契约,
+ * 但显式按时间排一次更稳(免得后端哪天改了排序,前端就静默指错档)。
+ */
+const SLOT_ORDER: Record<IntradaySlot, number> = { '11:30': 0, '14:00': 1 };
+
+/** 面板轮询今日状态的间隔(ms)—— 调度器每 60s 醒一次,取一半保证不漏 */
+const SCHEDULE_POLL_MS = 30000;
 
 function stateClass(state: IntradayActionState): string {
   switch (state) {
@@ -68,20 +79,55 @@ export default function IntradayReviewPanel({
   onClose: () => void;
 }) {
   const schedule = useIntradayStore((s) => s.schedule);
+  const loadSchedule = useIntradayStore((s) => s.loadSchedule);
   const [slot, setSlot] = useState<IntradaySlot>('11:30');
   const [review, setReview] = useState<IntradayReview | null>(null);
   const [loading, setLoading] = useState(false);
   const [missing, setMissing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // 有两档就默认看最新那档
-  useEffect(() => {
-    const produced = schedule?.producedSlots ?? [];
-    const latest = produced[produced.length - 1];
-    if (latest) setSlot(latest);
-  }, [schedule]);
+  const produced = schedule?.producedSlots ?? [];
+  const missingSlots = schedule?.missingSlots ?? [];
 
-  // 打开时按当前档位取数据
+  /** 已产出里时间最晚的那档(按时间排,不靠数组下标) */
+  const latestProduced = produced.length
+    ? produced.reduce((a, b) => (SLOT_ORDER[b] > SLOT_ORDER[a] ? b : a))
+    : null;
+
+  /** 已产出档位的指纹 —— 变了就说明「有新的档产出了」,要重新取数据 */
+  const producedKey = produced.join(',');
+
+  // ⚠️ 2026-10-27 修复:新档产出 → **自动切过去**
+  //
+  // 事故:面板打开后**从不轮询**,所以 11:30 档在面板打开后才产出时,
+  // 面板永远停在「下一次盘中复盘 11:30,还有 1 分钟」的空态;
+  // 状态刷新后倒计时又直接跳到「下一次 14:00」——
+  // 用户看到的就永远是倒计时,**复盘内容一次都没露出来**。
+  //
+  // 这里只在「最新档**变了**」时切(不是每次轮询都切),
+  // 所以用户手动点档位标签切回旧档后,不会被下一次轮询拽走。
+  const prevLatestRef = useRef<IntradaySlot | null>(null);
+  useEffect(() => {
+    if (!latestProduced) {
+      prevLatestRef.current = null;
+      return;
+    }
+    const prev = prevLatestRef.current;
+    prevLatestRef.current = latestProduced;
+    if (prev !== latestProduced) setSlot(latestProduced);
+  }, [latestProduced]);
+
+  // 打开时轮询今日状态(30s)—— 新档产出了才能自动切过去
+  useEffect(() => {
+    if (!open) return;
+    void loadSchedule();
+    const timer = setInterval(() => {
+      void loadSchedule();
+    }, SCHEDULE_POLL_MS);
+    return () => clearInterval(timer);
+  }, [open, loadSchedule]);
+
+  // 按当前档位取数据
   useEffect(() => {
     if (!open) return;
     let alive = true;
@@ -111,7 +157,9 @@ export default function IntradayReviewPanel({
     return () => {
       alive = false;
     };
-  }, [open, slot, schedule?.date]);
+    // ⚠️ `producedKey` 必须在依赖里:「面板先开着、档位后产出」时 slot 没变,
+    // 但 producedKey 变了 → 这里要重新取,否则面板停在空态。
+  }, [open, slot, schedule?.date, producedKey]);
 
   // ESC 关闭
   useEffect(() => {
@@ -123,26 +171,43 @@ export default function IntradayReviewPanel({
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
+  // ⚠️ 陈旧内容守卫:切档后旧档的复盘还在 state 里,
+  // 直接渲染会出现「标题写着 14:00、内容却是 11:30」—— 等于给了用户一份错的复盘。
+  const shownReview = review && review.slot === slot ? review : null;
+
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
-    for (const a of review?.actions ?? []) c[a.actionState] = (c[a.actionState] ?? 0) + 1;
+    for (const a of shownReview?.actions ?? []) c[a.actionState] = (c[a.actionState] ?? 0) + 1;
     return c;
-  }, [review]);
+  }, [shownReview]);
 
   const sortedActions = useMemo(() => {
-    const list = [...(review?.actions ?? [])];
+    const list = [...(shownReview?.actions ?? [])];
     list.sort((a, b) => {
       const d = STATE_ORDER.indexOf(a.actionState) - STATE_ORDER.indexOf(b.actionState);
       return d !== 0 ? d : a.stockCode.localeCompare(b.stockCode);
     });
     return list;
-  }, [review]);
+  }, [shownReview]);
 
   if (!open) return null;
 
-  const mo = review?.marketOpinion;
+  const mo = shownReview?.marketOpinion;
   const kl = mo?.keyLevels ?? null;
-  const produced = schedule?.producedSlots ?? [];
+  /** 当前看的这档是不是「已到点但还没产出」 */
+  const slotMissing = missingSlots.includes(slot);
+
+  /**
+   * 顶部档位切换:已产出的 + 到点却没产出的**都列出来**。
+   *
+   * ⚠️ 为什么把「待补」那档也放进来:只列已产出的档位时,
+   * 今天只产出了 14:00 的话标签行根本不渲染(只有 1 档)——
+   * 用户点不到缺的那档,也就看不到「为什么这一档是空的」。
+   * 列出来之后,点「11:30 待补」能直接看到「今天的 11:30 档还没产出」。
+   */
+  const tabSlots = [...produced, ...missingSlots]
+    .filter((s, i, arr) => arr.indexOf(s) === i)
+    .sort((a, b) => SLOT_ORDER[a] - SLOT_ORDER[b]);
 
   return (
     <>
@@ -162,30 +227,38 @@ export default function IntradayReviewPanel({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold text-text-pri">
-                盘中复盘{review ? ` · ${review.slot}` : ''}
+                盘中复盘{shownReview ? ` · ${shownReview.slot}` : ''}
               </h2>
-              {produced.length > 1 && (
+              {tabSlots.length > 1 && (
                 <div className="flex gap-1">
-                  {produced.map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => setSlot(s)}
-                      className={`rounded px-1.5 py-0.5 text-[11px] ${
-                        s === slot
-                          ? 'bg-accent-subtle text-accent'
-                          : 'text-text-ter hover:text-text-sec'
-                      }`}
-                    >
-                      {s}
-                    </button>
-                  ))}
+                  {tabSlots.map((s) => {
+                    const isMissing = missingSlots.includes(s);
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setSlot(s)}
+                        className={`rounded px-1.5 py-0.5 text-[11px] ${
+                          s === slot
+                            ? isMissing
+                              ? 'bg-warn-bg text-warn'
+                              : 'bg-accent-subtle text-accent'
+                            : isMissing
+                              ? 'text-warn/70 hover:text-warn'
+                              : 'text-text-ter hover:text-text-sec'
+                        }`}
+                      >
+                        {s}
+                        {isMissing ? ' 待补' : ''}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
             <div className="mt-0.5 text-[11px] text-text-ter">
-              {review
-                ? `${review.tradeDate} · 共 ${review.actions.length} 条预案 · 覆盖 ${review.scopeCount ?? '—'} 只`
+              {shownReview
+                ? `${shownReview.tradeDate} · 共 ${shownReview.actions.length} 条预案 · 覆盖 ${shownReview.scopeCount ?? '—'} 只`
                 : schedule?.date ?? ''}
             </div>
           </div>
@@ -208,7 +281,7 @@ export default function IntradayReviewPanel({
         <div className="flex-1 overflow-y-auto px-4 py-3">
           {loading && <div className="py-8 text-center text-xs text-text-ter">加载中…</div>}
 
-          {!loading && !review && (
+          {!loading && !shownReview && (
             <div className="py-10 text-center">
               {loadError ? (
                 <>
@@ -221,6 +294,19 @@ export default function IntradayReviewPanel({
                   <div className="mt-2 text-xs text-text-ter">
                     按上证指数真实交易日历判定,{schedule.date} 无盘中数据,盘中复盘不会跑
                     {schedule.tradingDayEstimated ? '(日历数据源不可用,当前为工作日推算)' : ''}
+                  </div>
+                </>
+              ) : slotMissing ? (
+                /* ⚠️ 这一档「**已经到点**但还没产出」——
+                   绝不能再显示成「下一次盘中复盘 11:30,还有 1287 分钟」:
+                   那会让用户以为 11:30 还没到点,于是永远等不到复盘,
+                   而事实是那一档已经错过、只等补跑。 */
+                <>
+                  <div className="text-sm text-text-sec">今天的 {slot} 档还没产出</div>
+                  <div className="mt-2 text-xs text-text-ter">
+                    已到触发时刻但没产出
+                    {missingSlots.length > 1 ? `(${missingSlots.join('、')})` : ''}。
+                    系统会在补跑有效期内自动重试(11:30 档截止 14:29,14:00 档截止 15:59)。
                   </div>
                 </>
               ) : missing ? (
@@ -244,7 +330,7 @@ export default function IntradayReviewPanel({
             </div>
           )}
 
-          {review && (
+          {shownReview && (
             <>
               {/* 市场意见 */}
               <section className="mb-3 rounded-lg border border-border-def bg-bg-elevated p-3">
@@ -325,8 +411,13 @@ export default function IntradayReviewPanel({
                       </tr>
                     </thead>
                     <tbody>
-                      {sortedActions.map((a: IntradayAction) => (
-                        <tr key={`${a.stockCode}-${a.label}-${a.triggerPrice}`} className="border-b border-border-def/40">
+                      {/* ⚠️ key 必须带下标:`code-label-triggerPrice` 会撞 ——
+                          同一只票可以有多条同 label、触发价同为 null 的动作
+                          (如「明日别动」这类纪律类预案)。
+                          key 撞了 React 会警告,并且**可能丢弃或重复渲染行** ——
+                          表现就是「表格里的预案少了几条」,用户看到的是残缺的复盘。 */}
+                      {sortedActions.map((a: IntradayAction, i: number) => (
+                        <tr key={`${a.stockCode}-${a.label}-${a.triggerPrice}-${i}`} className="border-b border-border-def/40">
                           <td className="py-1.5 pr-2">
                             <div className="text-text-pri">{a.stockName}</div>
                             <div className="font-mono text-[10px] text-text-ter">{a.stockCode}</div>
@@ -366,7 +457,7 @@ export default function IntradayReviewPanel({
                   </table>
                 </div>
                 <div className="mt-2 text-[10.5px] text-text-ter">
-                  仅列前 12 条(共 {review.actions.length} 条),完整清单见「作战计划」页
+                  仅列前 12 条(共 {shownReview.actions.length} 条),完整清单见「作战计划」页
                 </div>
               </section>
 
@@ -378,9 +469,9 @@ export default function IntradayReviewPanel({
                     与盘中复盘并入同一份产出
                   </span>
                 </div>
-                {review.extraLines.length > 0 ? (
+                {shownReview.extraLines.length > 0 ? (
                   <div className="space-y-1 text-[11.5px] leading-relaxed text-text-sec">
-                    {review.extraLines.map((line, i) => (
+                    {shownReview.extraLines.map((line, i) => (
                       <div key={i}>{line}</div>
                     ))}
                   </div>

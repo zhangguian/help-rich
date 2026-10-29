@@ -6,14 +6,16 @@
 **交易日判定**(非交易日不触发)。这里把交易日历**打桩成工作日口径**
 (不打桩真实网络);真实交易日历的行为由 `tests/test_workflow_scheduler.py` 覆盖。
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
 from app.modules.analysis.workflow_scheduler import (
+    RETRY_DEADLINE,
     SLOT_LABEL,
     TIME_WINDOWS,
     due_windows,
+    mark_attempt,
     reset_fired,
 )
 
@@ -74,17 +76,28 @@ class TestDueWindows:
         assert await due_windows(datetime(2026, 10, 24, 8, 30)) == []  # 周六
 
     async def test_idempotent_same_minute(self):
-        """同一分钟内重复检查只触发一次。"""
+        """同一分钟内重复检查:**没成功产出就一直 due**;产出成功后才不再 due。
+
+        ⚠️ 2026-10-27 契约变更:`due_windows` 不再自己标记「已跑」——
+        标记只发生在**产出成功之后**(见 `mark_attempt`)。
+        否则失败一次 = 当天放弃:盘中复盘最常见的失败原因就是
+        「当日作战计划还没生成」,一失败这档就永远产不出来。
+        """
         now = _dt(2026, 10, 19, 8, 30)
         assert "premarket" in await due_windows(now)
-        assert "premarket" not in await due_windows(now)
+        assert "premarket" in await due_windows(now)
+        assert "premarket" in await due_windows(now)
+        # 产出成功 → 标记 → 不再 due
+        mark_attempt("premarket", now, ok=True)
         assert "premarket" not in await due_windows(now)
 
     async def test_idempotent_across_minutes_in_window(self):
-        """窗口内的后续分钟不应重复触发。"""
+        """窗口内的后续分钟:未成功产出前一直 due;成功后不再 due。"""
         assert "premarket" in await due_windows(_dt(2026, 10, 19, 8, 30))
+        assert "premarket" in await due_windows(_dt(2026, 10, 19, 8, 35))
+        assert "premarket" in await due_windows(_dt(2026, 10, 19, 8, 59))
+        mark_attempt("premarket", _dt(2026, 10, 19, 8, 30), ok=True)
         assert "premarket" not in await due_windows(_dt(2026, 10, 19, 8, 35))
-        assert "premarket" not in await due_windows(_dt(2026, 10, 19, 8, 59))
 
     async def test_new_day_fires_again(self):
         """隔天应重新触发。"""
@@ -92,18 +105,29 @@ class TestDueWindows:
         assert "premarket" in await due_windows(_dt(2026, 10, 20, 8, 30))
 
     async def test_boundary_minutes(self):
-        """窗口起止边界都应触发;窗口结束后不再触发。"""
+        """窗口起止边界都应触发;过了**补跑截止**才不再触发。
+
+        ⚠️ 2026-10-27 契约变更:窗口 = 「触发时刻」,补跑截止 = 「放弃时刻」。
+        窗口结束后(到补跑截止之前)仍然 due —— 那正是产出失败后的重试窗口。
+        """
         for kind, h, start, end in TIME_WINDOWS:
             reset_fired()
             assert kind in await due_windows(_dt(2026, 10, 19, h, start)), f"{kind} 起点应触发"
             reset_fired()
             assert kind in await due_windows(_dt(2026, 10, 19, h, end)), f"{kind} 终点应触发"
             reset_fired()
-            # 窗口结束后的下一个小时(同一小时内的 +1 分钟)
-            if end < 59:
-                assert kind not in await due_windows(_dt(2026, 10, 19, h, end + 1)), (
-                    f"{kind} 窗口后不应触发"
-                )
+            # 窗口结束后的下一分钟:仍在补跑有效期内 → 还能重试
+            win_end = datetime(2026, 10, 19, h, end)
+            assert kind in await due_windows(win_end + timedelta(minutes=1)), (
+                f"{kind} 窗口后仍在补跑有效期内,应可重试"
+            )
+            reset_fired()
+            # 过了补跑截止 → 放弃这一档
+            dl_hour, dl_minute = RETRY_DEADLINE[kind]
+            deadline = datetime(2026, 10, 19, dl_hour, dl_minute)
+            assert kind not in await due_windows(deadline + timedelta(minutes=1)), (
+                f"{kind} 过了补跑截止不应再触发"
+            )
 
 
 class TestSlotLabels:
