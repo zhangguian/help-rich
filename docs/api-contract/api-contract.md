@@ -986,6 +986,14 @@ data: {"event":"ping","ts":1690890000}   ← 前端过滤
 
 #### GET /api/behavior-screener/latest
 
+**查询参数**:
+
+| 参数 | 默认 | 范围 | 说明 |
+|---|---|---|---|
+| `kind` | 不传 | 信号 kind | 只看某一类;**传了才返回 `page`** |
+| `limit` | 60 | 1 ~ 200 | `page.picks` 每页条数 |
+| `offset` | 0 | ≥ 0 | `page.picks` 偏移 |
+
 **响应 200**:
 ```jsonc
 {
@@ -997,8 +1005,16 @@ data: {"event":"ping","ts":1690890000}   ← 前端过滤
     "main_board_count": 3193,    // 主板闸门后
     "non_st_count": 3053,        // 非 ST 后
     "after_filters_count": 1941, // 成交额 ≥ 1 亿后
-    "candidates_considered": 120, // 进入逐票算信号的候选数
-    "total_picks": 12,
+    "candidates_considered": 1941, // 进入逐票算信号的候选数(**不再截断**)
+    "total_picks": 402,          // 本批**真实命中总数**
+    "hit_counts": {              // 各 kind 的**真实命中数**(与 total_picks 对得上)
+      "main_force_move": 268,
+      "dip_buy": 95,
+      "lock_position": 31,
+      "distribute": 8
+    },
+    "data_as_of": "2026-10-30",  // 本批数据中**已收盘**的最后交易日
+    "is_intraday": false,        // 本批是否含当日未收盘数据;null = 时点未知
     "elapsed_sec": 8.2,
     "note": null
   },
@@ -1006,9 +1022,8 @@ data: {"event":"ping","ts":1690890000}   ← 前端过滤
     {
       "kind": "dip_buy",
       "kind_label": "低吸信号",
-      "count": 5,
-      "picks": [
-        {
+      "count": 95,               // 该类**真实命中数**(≠ picks.length)
+      "picks": [ /* 只带前 60 条明细 */ {
           "stock_code": "600519.SH",
           "stock_name": "贵州茅台",
           "kind": "dip_buy",
@@ -1019,14 +1034,36 @@ data: {"event":"ping","ts":1690890000}   ← 前端过滤
           "metrics": { "main_net_yi": 0.39 },
           "score": 88.0,
           "change_pct": 0.89
-        }
-      ]
+      } ]
     }
   ],
-  "all": [ /* 全部命中,按综合分降序 */ ],
-  "kinds": [ { "kind": "main_force_move", "label": "主力异动" } ]
+  "all": [ /* 只带前 60 条,按综合分降序 */ ],
+  "kinds": [ { "kind": "main_force_move", "label": "主力异动" } ],
+  "page": {                      // ⚠️ 仅当传了 kind 才出现
+    "kind": "dip_buy",
+    "offset": 0,
+    "limit": 60,
+    "total": 95,                 // 该类真实总数(≠ 本页条数)
+    "picks": [ /* 该类第 offset..offset+limit 条 */ ]
+  }
 }
 ```
+
+**口径要点(2026-10-31 起)**:
+
+- `count` / `page.total` 是**真实命中数**,`groups[].picks` / `page.picks` 是**分页后的明细** ——
+  两者**故意不等**(如 95 vs 60)。前端要显示真实数就取 `count`,要取明细就走 `page` 分页。
+- `groups[].picks` 与 `all` 每类只带前 **60** 条(`BEHAVIOR_SCREENER_GROUP_PAGE_N`),
+  超过部分靠 `?kind=&limit=&offset=` 拉 —— **不存在**「一次拿到全部明细」的入口。
+- `candidates_considered` 现在**等于** `after_filters_count`(候选池不再截断)。
+- `hit_counts` 是**可能为 null 的字典**:存量批次行没有 `hit_counts_json` 时 → `{}`,
+  此时 `count` 兜底为**已加载行数**(不填 0)。
+
+> 🚨 **前端必读:字典的「键」也会被驼峰化**。axios 响应拦截器递归转换**每一个对象的键**,
+> 所以 `hit_counts` 里的 `"main_force_move"` 到前端会变成 **`mainForceMove`**。
+> → **按类取真实数一律走 `groups[].count`**(`groups[].kind` 是**值**,不会被驼峰化),
+> **不要用 `hitCounts[kind]`** —— 那是运行期 `undefined`,而 TS 的 `Record<string, number>`
+> **不报错** → 会静默退回 `picks.length`,让真实计数彻底失效。
 
 **降级**:
 - 尚无批次 → **404**(前端据此显示「还没跑过」,与「跑了但没命中」区分开);
@@ -1044,7 +1081,9 @@ data: {"event":"ping","ts":1690890000}   ← 前端过滤
 
 手动重跑(默认今日)。
 - **生产禁用**:需环境变量 `SCREENER_ALLOW_TRIGGER=1`,否则 **403**(与 `/screener/trigger-now` 同口径);
-- 全市场扫描耗时较长(实测候选 120 只约 8s),前端超时设 300s。
+- 候选池**不再截断**(`BEHAVIOR_SCREENER_CANDIDATE_LIMIT=None`)→ 单批候选约 1900+ 只,
+  每只 2 次外网请求(K 线 + 资金流),墙钟耗时取决于外网行情源 → 前端超时设 **300s**;
+- 响应体的 `all` 是**全部命中**(无上限),单批可达数百条 → 响应体量级为数百 KB。
 
 ### 13.7.3 判定阈值与打分口径(v0.15 定稿)
 
