@@ -158,7 +158,16 @@ POOL_RANK_KLINE_CONCURRENCY = 16
 BEHAVIOR_MIN_KLINE_COUNT = 120
 
 # 回传给前端的标注最大回看天数(避免响应体过大)
-BEHAVIOR_MARKERS_LOOKBACK_DAYS = 60
+#
+# ⚠️ **单位是「日历天」,不是「K 线根数」**(2026-10-31 实测修复):
+# 旧值 60 天 → 找股页(120 根 K 线 ≈ 168 日历天)列出的信号有 61%
+# 在 K 线上根本不存在(找股页有、K 线上找不到)。
+# 现在两条路径都按**日历天**过滤,统一走
+# `app/services/behavior_signal_service.py::filter_markers_by_window`。
+BEHAVIOR_MARKERS_LOOKBACK_DAYS = 120
+
+# 每类分组在 /latest 响应里返回的明细条数上限(真实总数靠 count 披露)
+BEHAVIOR_SCREENER_GROUP_PAGE_N = 60
 
 # --- 主力异动(main_force_move) ---
 # 当日超大单净额 > 0 且 主力净占比 ≥ 阈值 且 涨幅 ≥ 阈值 且 放量

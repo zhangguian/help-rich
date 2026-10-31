@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import Any
 
 from app.core.config import (
@@ -724,6 +725,71 @@ def _detect_lock_position(
     return out
 
 
+# ============================================================
+# 统一窗口过滤(闸 2 完备闸)
+#
+# **为什么要有这个**:找股路径与 K 线路径曾经各写各的过滤 ——
+# 一个按「日历天 60」、另一个按「K 线根数 120 根(= 168 日历天)」,
+# **单位都不同** → 61% 的信号「找股页列出来了、K 线上找不到」(实测 405/663 条)。
+#
+# 把过滤收敛到**这三个纯函数**,两条路径调用同一实现,
+# 一致性问题就从「靠人记住两边写对」变成「物理保证」。
+#
+# **单位**:一律按**日历天**。用户看到的时间语义是「3 个月前」,
+# 按 K 线根数换算会出现「120 根 ≈ 168 天」这种歧义。
+# ============================================================
+
+
+def marker_date(marker: BehaviorMarker) -> date | None:
+    """标注的日期 → `date`;不可解析 → None(**不编数字**)。"""
+    raw = str(getattr(marker, "date", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+
+
+def filter_markers_by_window(
+    markers: Sequence[BehaviorMarker],
+    base_date: date,
+    lookback_days: int,
+) -> list[BehaviorMarker]:
+    """按**日历天**过滤标注,只保留 `base_date - lookback_days` 之后(含端点)的。
+
+    - 保留输入顺序(调用方已按日期升序)。
+    - 日期不可解析的标注 → **丢弃**(无法判断是否在窗口内,不猜)。
+    - `lookback_days <= 0` → 原样返回(不做过滤)。
+    """
+    if not markers:
+        return []
+    if lookback_days <= 0:
+        return list(markers)
+    threshold = base_date - timedelta(days=lookback_days)
+    out: list[BehaviorMarker] = []
+    for m in markers:
+        d = marker_date(m)
+        if d is None:
+            continue
+        if d >= threshold:
+            out.append(m)
+    return out
+
+
+def base_date_from_klines(items: Sequence[dict[str, Any]]) -> date | None:
+    """K 线序列的**末根日期**作为基准日;取不到 → None(不编数字)。"""
+    if not items:
+        return None
+    raw = str(items[-1].get("date") or "").strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw[:10])
+    except ValueError:
+        return None
+
+
 __all__ = [
     "KIND_DISTRIBUTE",
     "KIND_DIP_BUY",
@@ -733,5 +799,8 @@ __all__ = [
     "KIND_ORDER",
     "BehaviorMarker",
     "BehaviorResult",
+    "base_date_from_klines",
     "detect_behavior_markers",
+    "filter_markers_by_window",
+    "marker_date",
 ]
