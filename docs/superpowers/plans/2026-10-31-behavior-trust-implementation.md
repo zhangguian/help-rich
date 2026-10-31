@@ -54,6 +54,19 @@
 > 贯穿全线的一句话：**算不出来就留 `None`，不要用 `False` 冒充「没有」。**
 > 这条在存储层、API 层、调度判断、前端展示四层都成立。
 
+### R2 —— 分页 `total` 的兜底与排序次级键（2026-10-31，Task 5 评审后 controller 判定）
+
+**背景**：Task 5 审查发现两处 plan **自身矛盾**（不是实施者的错），按 R1 的先例 —— **Global Constraints 治理**，
+不需要 human 拍板，因为两处的正确答案都被同一份 plan 的其它条款唯一确定。
+
+| 位置 | 原来的坑 | 已改成 |
+|---|---|---|
+| Task 5 Step 5 | `"total": int(counts.get(kind, 0))` —— 存量批次行没有 `hit_counts_json` 时填 `0`。这**违反铁律**「算不出来不填 0」，且与同一响应体里 `groups[].count` 的兜底（已加载行数）**自相矛盾**。实测真实库那 1 行存量批次就会返回 `page.total = 0` 却带着几十条非空 `page.picks`。 | 兜底改为**该 kind 在已加载行里的条数**（与 `groups[].count` 同源）。真·未知（该 kind 压根没有已加载行）→ `0` 是如实的。 |
+| Task 5 Step 4 | `ORDER BY score DESC` 没有次级键，而分组列表 `logic.group_hits` 按 `(-score, stock_code)` 排 → 两套「前 N」在**分数并列**处可能不一致 → Task 8 的「展开更多」（`offset = group.picks.length + extra.length`）会**重复或漏掉**边界行。实测库里 60 行有 2 对并列分数（3.3%），不是假想。 | 追加 `.order_by(BehaviorSignalPick.stock_code.asc())`，与 `logic.group_hits` 逐字对齐。 |
+
+**顺带记一条 Task 8 的排序前提**：前端「展开更多」的 offset 依赖「分组列表的前 N」与「分页查询的前 N」是**同一个集合** ——
+这条前提现在由上面的次级排序保证。
+
 ---
 
 ## File Structure
@@ -1447,6 +1460,13 @@ async def get_picks_by_kind_offset(
                 BehaviorSignalPick.kind == kind,
             )
             .order_by(BehaviorSignalPick.score.desc())
+            # ⚠️ **必须带 `stock_code` 次级排序**(2026-10-31 评审 fix):
+            # 分组列表(`logic.group_hits`)按 `(-score, stock_code)` 排,
+            # 这里的 SQL 若只按 `score` 排,两套「前 N」的集合在**分数并列**处
+            # 可能不一致 → 「展开更多」用 `offset = group.picks.length + extra.length`
+            # 时,边界行会**重复出现或整条漏掉**。
+            # 实测库里确有并列分数(60 行里 2 对,3.3%)→ 不是假想。
+            .order_by(BehaviorSignalPick.stock_code.asc())
             .offset(offset)
             .limit(limit)
         )
@@ -1507,11 +1527,19 @@ async def behavior_latest(
 
     if kind:
         page_picks = await repo.get_picks_by_kind_offset(run.id, kind, limit, offset)
+        # ⚠️ `total` 的兜底**必须与 `groups[].count` 同源**(2026-10-31 评审 fix):
+        # 存量批次行没有 `hit_counts_json`(真实命中数不可知)时,填 `0` 既违反铁律
+        # 「算不出来不填 0」,又与同一响应体里 `groups[].count` 的兜底(已加载行数)
+        # 自相矛盾 —— 实测真实库里那 1 行存量批次就是这种情况:
+        # 会返回 `page.total = 0` 却同时带着几十条非空 `page.picks`(自相矛盾)。
+        # 这里改成:该 kind 在**已加载行**里的条数(与 groups[].count 的兜底一致)。
+        # 真·未知(该 kind 压根没有已加载行)→ 0 是**如实**的(确实 0 条命中)。
+        kind_loaded_count = sum(1 for d in hit_dicts if d.get("kind") == kind)
         resp["page"] = {
             "kind": kind,
             "offset": offset,
             "limit": limit,
-            "total": int(counts.get(kind, 0)),
+            "total": int(counts.get(kind, kind_loaded_count)),
             "picks": [behavior_service.pick_to_dict(p) for p in page_picks],
         }
     return resp
