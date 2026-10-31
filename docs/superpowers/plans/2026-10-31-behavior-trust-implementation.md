@@ -95,6 +95,54 @@ Step 1 的测试**逐字保留**（不变断言），改动只落在实现代码
 > ⚠️ **这条修订的由来**：plan 里的陈旧文字会顺着任务链复活 —— Task 6 的 brief 从 Step 3 代码块抽，
 > Task 7 的 brief 又从 Task 6 的产出抽。只改代码不改 plan，下游会再撞一次同一个坑。
 
+### R4 —— Task 7 守门脚本必须**逐字镜像生产**的基准日规则（2026-10-31，Task 6 评审后 controller 判定）
+
+**背景**：Task 7 的**单测**与**巡检脚本**都用 `base_date_from_klines(ks) or base` 兜底，
+而同一份 plan 的 **Task 3（`scan_market`）/ Task 4（`api/kline.py`）生产代码**是**没有兜底**的：
+
+| 位置 | 规则 |
+|---|---|
+| Task 3 生产（`service.py` 的 `scan_market`） | `base = base_date_from_klines(ks)`；`if base is None: continue` → **该票不产出标注** |
+| Task 4 生产（`api/kline.py`） | `base = base_date_from_klines(items)`；`if base is None: return [], False` → **不产出标注** |
+| Task 7 单测 `_kline_path`（**旧**） | `base_date_from_klines(ks) or base` → **兜底到传入的 base** ← 与生产不同 |
+| Task 7 巡检脚本 `_markers`（**旧**） | 同上 → 且 `base = date.fromisoformat(ks_a[-1]["date"])` 在日期不可解析时**直接抛 ValueError 崩掉** |
+
+**问题**：闸 3 的守门脚本**自己用另一套规则**，就等于在「基准日不可解析」这一情形下
+拿生产口径去比一个非生产口径 —— **守门守了个寂寞**。而且巡检脚本会**崩**，
+而不是按它自己 docstring 承诺的「退化为 ⊆ 并显式标记该票不可比对」。
+
+**裁定**（Global Constraints 治理：正确答案已被同一份 plan 的 Task 3/Task 4 唯一确定）：
+
+1. **单测**：`_kline_path(ks, flows)` / `_screener_path(ks, flows)` **去掉 `base` 参数**，
+   各自**内部**按生产规则算基准日（找股路径取自 **120 根切片**的那一根，与 `scan_market` 一致），
+   `base is None` → **返回空列表**（不产出标注）。删除调用点上的 `base = date.fromisoformat(...)`
+   （否则是未使用的局部变量）。
+2. **巡检脚本**：`_markers(ks, flows)` 同样去掉 `base` 参数、内部算基准日、`None` → `[]`；
+   `main()` 里把 `base = date.fromisoformat(...)` 换成**不崩的降级**：
+   任一路的 `base_date_from_klines` 为 `None` → 记入 `incomparable`（"基准日不可解析"）并 `continue`。
+3. **import 清理**：脚本里 `from datetime import date, datetime` 两个名字都不再使用
+   （`date` 因为第 2 条删掉了唯一的 `date.fromisoformat` 调用，`datetime` 本来就没用）
+   → **整行删除**（`scripts/` 不在 ruff 的 `tests/**` 豁免里，F401 会拦）。
+4. **单测里删掉 helper 内的局部 import**：`_screener_path` 里那句
+   `from app.core.config import BEHAVIOR_SCREENER_KLINE_COUNT` 与文件顶部的 import
+   **重复定义** → ruff **F811**。而 `tests/**` 的 per-file-ignores 是
+   `["S","B","E","SIM","F401","F841"]` —— **不含 F811** → 这条会在
+   `backend/tests/` 里真的报错 → **删除局部 import**，用顶部那个。
+
+> ✅ **本条修订已实测**：把 Task 7 的两个代码块抽出来真跑过 ——
+> 单测 **4 passed**（对着**已落地**的 Task 3/4 代码）、脚本 `ruff check` 干净、
+> 单测 `ruff check` 干净（修掉 F811 之后）。
+
+**连锁修订（已落到下面各 Task 的正文里）**：
+
+| 位置 | 修订 |
+|---|---|
+| Task 7 Step 1（单测） | 两个 helper 去掉 `base` 参数、内部算基准日、`None` → `[]`；4 处调用点同步；删掉 `base = date.fromisoformat(...)` |
+| Task 7 Step 3（巡检脚本） | `_markers` 同上；`main()` 基准日不可解析 → 记 `incomparable` 并 `continue`（不崩）；删掉 `from datetime import date, datetime` |
+
+> ⚠️ 派发给 Task 7 实施者时必须钉死：**「两条路径同规则」+「规则 = 生产的『不可解析 → 不产出』」**。
+> 守门脚本的价值全在「它和生产跑的是同一套规则」这一点上。
+
 ---
 
 ## File Structure
@@ -1911,6 +1959,9 @@ git -C D:\zga-study\rich commit -m "feat(behavior): 闸4 盘后自动跑批 + �
 - Produces:
   - `backend/tests/test_behavior_consistency.py::test_screener_markers_subset_of_kline_markers` —— 硬门槛：`S_A ⊆ S_B`。
   - `backend/scripts/verify_behavior_consistency.py` —— 手动巡检脚本，输出差异表。
+- ⚠️ **守门必须与生产同规则**（见 **R4**）：脚本/单测里的两条路径都要**逐字镜像生产**的
+  基准日规则 —— 基准日 = 该票自己的 K 线末根日期，**取不到 → 不产出标注**（不编数字）。
+  **不许用 `or base` 之类兜底**：守门用自己的规则比生产，守的就不是同一道门。
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -1986,22 +2037,36 @@ def _sample(n: int = 130):
     return ks, flows
 
 
-def _kline_path(ks, flows, base: date):
-    """K 线路径:300 根 K 线 + 300 天资金流 → 窗口过滤。"""
+def _kline_path(ks, flows):
+    """K 线路径:300 根 K 线 + 300 天资金流 → 窗口过滤。
+
+    ⚠️ **基准日规则逐字镜像生产**(`api/kline.py`):基准日 = 该票自己的
+    K 线末根日期;**取不到 → 不产出标注**(不编数字)。
+    ⚠️ 不许用 `or base` 兜底 —— 那会让守门在「基准日不可解析」这一情形下
+    与生产行为不一致,守门就守了个寂寞。
+    """
     res = detect_behavior_markers(ks, align_by_date(flows))
-    b = base_date_from_klines(ks) or base
+    b = base_date_from_klines(ks)
+    if b is None:
+        return []
     return filter_markers_by_window(
         res.markers, b, BEHAVIOR_MARKERS_LOOKBACK_DAYS
     )
 
 
-def _screener_path(ks, flows, base: date):
-    """找股路径:120 根 K 线 + 120 天资金流 → 窗口过滤。"""
-    from app.core.config import BEHAVIOR_SCREENER_KLINE_COUNT
+def _screener_path(ks, flows):
+    """找股路径:120 根 K 线 + 120 天资金流 → 窗口过滤。
 
-    res = detect_behavior_markers(ks[-BEHAVIOR_SCREENER_KLINE_COUNT:], align_by_date(flows))
+    ⚠️ **基准日同样逐字镜像生产**(`scan_market`):基准日取自**该票自己的
+    K 线末根日期**(即 120 根切片的那一根),取不到 → 该票不产出标注。
+    """
+    sub = ks[-BEHAVIOR_SCREENER_KLINE_COUNT:]
+    res = detect_behavior_markers(sub, align_by_date(flows))
+    b = base_date_from_klines(sub)
+    if b is None:
+        return []
     return filter_markers_by_window(
-        res.markers, base, BEHAVIOR_MARKERS_LOOKBACK_DAYS
+        res.markers, b, BEHAVIOR_MARKERS_LOOKBACK_DAYS
     )
 
 
@@ -2009,9 +2074,8 @@ class TestConsistency:
     def test_screener_markers_subset_of_kline_markers(self):
         """硬门槛:找股路径的每一条都必须在 K 线路径找到。"""
         ks, flows = _sample()
-        base = date.fromisoformat(ks[-1]["date"])
-        a = _screener_path(ks, flows, base)
-        b = _kline_path(ks, flows, base)
+        a = _screener_path(ks, flows)
+        b = _kline_path(ks, flows)
         keys_a = {(m.kind, m.date) for m in a}
         keys_b = {(m.kind, m.date) for m in b}
         assert keys_a <= keys_b, (
@@ -2022,9 +2086,8 @@ class TestConsistency:
     def test_identical_when_both_succeed(self):
         """两者都成功 → 集合完全一致,字段逐字一致。"""
         ks, flows = _sample()
-        base = date.fromisoformat(ks[-1]["date"])
-        a = {(m.kind, m.date): m for m in _screener_path(ks, flows, base)}
-        b = {(m.kind, m.date): m for m in _kline_path(ks, flows, base)}
+        a = {(m.kind, m.date): m for m in _screener_path(ks, flows)}
+        b = {(m.kind, m.date): m for m in _kline_path(ks, flows)}
         assert set(a) == set(b)
         for key in a:
             assert a[key].reason == b[key].reason
@@ -2032,13 +2095,10 @@ class TestConsistency:
 
     def test_degraded_when_kline_path_unavailable(self):
         """某一路取数失败 → 退化为 ⊆ 并显式标记不可比对。"""
-        from app.services.behavior_signal_service import BehaviorResult
-
         ks, flows = _sample()
-        base = date.fromisoformat(ks[-1]["date"])
-        a = _screener_path(ks, flows, base)
+        a = _screener_path(ks, flows)
         # K 线路径:资金流全缺 → 不产出
-        b = _kline_path(ks, [], base)
+        b = _kline_path(ks, [])
         assert b == []
         # 退化:不抛异常,且找股路径的命中仍然存在(供人工比对)
         assert a is not None
@@ -2093,7 +2153,6 @@ import argparse
 import asyncio
 import random
 import sys
-from datetime import date, datetime
 
 from app.core.config import (
     BEHAVIOR_MARKERS_LOOKBACK_DAYS,
@@ -2120,9 +2179,17 @@ async def _load(code: str, count: int):
     return ks, flows, None
 
 
-def _markers(ks, flows, base):
+def _markers(ks, flows):
+    """一条路径的标注产出 —— **逐字镜像生产**的基准日规则。
+
+    ⚠️ 基准日 = 该票自己的 K 线末根日期;**取不到 → 不产出标注**(不编数字)。
+    ⚠️ 不许用 `or base` 兜底 —— 那会让巡检在「基准日不可解析」这一情形下
+    与生产行为不一致,守门就守了个寂寞。
+    """
     res = detect_behavior_markers(ks, align_by_date(flows))
-    b = base_date_from_klines(ks) or base
+    b = base_date_from_klines(ks)
+    if b is None:
+        return []
     return filter_markers_by_window(res.markers, b, BEHAVIOR_MARKERS_LOOKBACK_DAYS)
 
 
@@ -2152,9 +2219,12 @@ async def main() -> int:
         if err_a or err_b:
             incomparable.append((code, err_a or err_b or "未知"))
             continue
-        base = date.fromisoformat(ks_a[-1]["date"])
-        a = {(m.kind, m.date): m for m in _markers(ks_a, flows_a, base)}
-        b = {(m.kind, m.date): m for m in _markers(ks_b, flows_b, base)}
+        if base_date_from_klines(ks_a) is None or base_date_from_klines(ks_b) is None:
+            # 基准日不可解析 → **不可比对**(不崩、不静默跳过)
+            incomparable.append((code, "基准日不可解析"))
+            continue
+        a = {(m.kind, m.date): m for m in _markers(ks_a, flows_a)}
+        b = {(m.kind, m.date): m for m in _markers(ks_b, flows_b)}
         checked += 1
 
         only_a = set(a) - set(b)
