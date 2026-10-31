@@ -604,38 +604,51 @@ class TestTrustGates:
 
     真机踩过的坑:旧的 `hits[:60]` 全局截断让「真实 455 条」显示成「47 条」
     (差 29 倍),且 91% 的命中人间蒸发。这组测试把「不截断 + 真实计数」钉死。
+
+    ⚠️ **造数与期望值都是实测反推的**(2026-10-31,写计划时用真实判定层跑过):
+    - 「平价 + 逐日缩量 10% + 连续主力净流入」→ 只触发 `lock_position`,
+      130 根 K 线产出 **103** 条原始命中;
+    - 基准日 = K 线末根 = 2026-07-01,120 日历天窗口 = 2026-03-03 起
+      → 窗口内 **70** 条、窗口外 **33** 条;
+    - 70 > 60(旧上限)→ 数字能证明「没被截断」。
     """
+
+    @staticmethod
+    def _lock_shape(n: int = 130):
+        """造「平价 + 逐日缩量 + 连续主力净流入」的数据。
+
+        只触发 `lock_position`:
+        - `change_ratio=0.0` → 主力异动要求涨跌幅 ≥2%,不达标
+        - `net_amount` 恒正 → 低吸要求「由负转正」、高抛要求「由正转负」,都不达标
+        - 逐日缩量 10% → 锁仓的「期间缩量」成立
+        """
+        dates = _dates(n)
+        vol = 100000.0
+        ks, flows = [], []
+        for d in dates:
+            ks.append({
+                "date": d, "open": "10.0", "high": "10.1", "low": "9.9",
+                "close": "10.0", "volume": int(vol),
+            })
+            flows.append({
+                "date": d, "net_amount": 1.0e8, "r0_net": 1.0e8,
+                "r0x_ratio": 0.0, "r0_ratio": 0.0, "turnover": 20.0,
+                "change_ratio": 0.0,
+            })
+            vol *= 0.9
+        return dates, ks, flows
 
     async def test_all_hits_persisted_not_truncated(self, monkeypatch):
         """命中 70 条(> 旧上限 60)→ 全部入库,total_picks = 70。"""
-        dates = _dates(130)
-        flows = [
-            {
-                "date": d, "net_amount": 1.0e8, "r0_net": 1.0e8,
-                "r0x_ratio": 80.0, "r0_ratio": 60.0, "turnover": 20.0,
-                "change_ratio": 0.05,
-            }
-            for d in dates
-        ]
-        # 造 70 天主力异动:每天放量 + 上涨 + 资金流入
-        ks = []
-        for i, d in enumerate(dates):
-            row = {
-                "date": d, "open": "10.0", "high": "10.1", "low": "9.9",
-                "close": "10.0", "volume": 100000,
-            }
-            if 55 <= i < 125:  # 70 天命中
-                row.update({
-                    "open": "10.0", "close": "10.5", "high": "10.6",
-                    "low": "9.95", "volume": 300000,
-                })
-            ks.append(row)
+        import json as _json
+
+        dates, ks, flows = self._lock_shape(130)
 
         snapshot = [
             {
-                "code": "600519.SH", "name": "贵州茅台", "price": 10.5,
-                "change_pct": 5.0, "prev_close": 10.0, "amount_yi": 50.0,
-                "limit_pct": 10.0, "volume": 300000,
+                "code": "600519.SH", "name": "贵州茅台", "price": 10.0,
+                "change_pct": 0.0, "prev_close": 10.0, "amount_yi": 50.0,
+                "limit_pct": 10.0, "volume": 100000,
             }
         ]
 
@@ -662,39 +675,34 @@ class TestTrustGates:
 
         from app.modules.behavior_screener import repository as repo
 
-        result = await behavior_service.run_daily_scan(date(2026, 10, 30))
+        result = await behavior_service.run_daily_scan(date(2026, 7, 1))
         assert result is not None
         run, hits = result
-        # 全部入库,不截断
+        # 全部入库,不截断(70 > 旧上限 60)
         assert len(hits) == 70
         assert run.total_picks == 70
         stored = await repo.get_picks_by_run(run.id)
         assert len(stored) == 70
         # 分组真实计数已落库
-        import json as _json
         counts = _json.loads(run.hit_counts_json)
-        assert counts[KIND_MAIN_FORCE_MOVE] == 70
+        assert counts[KIND_LOCK_POSITION] == 70
+        assert sum(counts.values()) == 70
 
     async def test_candidate_pool_not_truncated(self, monkeypatch):
         """候选池不再取前 120 —— 全部成交额达标的票都进逐票精算。"""
-        from app.modules.stock_pool.service import filter_universe as real_filter
-
+        # ⚠️ 代码必须是 **6 位**:`600000 + i`,不能写成 `f"6005{i:02d}.SH"`
+        # (i ≥ 100 时会变成 7 位数 → 主板判定失败 → 只过 100 只,实测踩过)
         snapshot = [
             {
-                "code": f"6005{i:02d}.SH", "name": f"票{i}", "price": 10.0,
+                "code": f"{600000 + i:06d}.SH", "name": f"票{i}", "price": 10.0,
                 "change_pct": 1.0, "prev_close": 10.0, "amount_yi": 50.0,
                 "limit_pct": 10.0, "volume": 1000,
             }
             for i in range(150)
         ]
-        seen_codes: list[str] = []
 
         async def fake_snapshot(*a, **k):
             return snapshot
-
-        async def fake_fetch(code):
-            seen_codes.append(code)
-            return ([], [])
 
         async def fake_klines(code, period="daily", count=120):
             return []
@@ -714,40 +722,20 @@ class TestTrustGates:
             "app.modules.behavior_screener.service.fetch_flow_daily", fake_flows
         )
 
-        result = await behavior_service.scan_market(date(2026, 10, 30))
+        result = await behavior_service.scan_market(date(2026, 7, 1))
         # 150 只全部进入精算(旧版只取 120)
         assert result.candidates_considered == 150
-        assert real_filter is not None
+        assert result.universe.after_filters == 150
 
     async def test_hits_outside_window_filtered_out(self, monkeypatch):
         """超过 120 日历天的命中不进入 hits(过滤在 scan_market 内部)。"""
-        dates = _dates(200, start=date(2026, 1, 1))
-        flows = [
-            {
-                "date": d, "net_amount": 1.0e8, "r0_net": 1.0e8,
-                "r0x_ratio": 80.0, "r0_ratio": 60.0, "turnover": 20.0,
-                "change_ratio": 0.05,
-            }
-            for d in dates
-        ]
-        ks = []
-        for i, d in enumerate(dates):
-            row = {
-                "date": d, "open": "10.0", "high": "10.1", "low": "9.9",
-                "close": "10.0", "volume": 100000,
-            }
-            if i < 3:  # 很久以前的命中(距 2026-10-30 远超 120 天)
-                row.update({
-                    "open": "10.0", "close": "10.5", "high": "10.6",
-                    "low": "9.95", "volume": 300000,
-                })
-            ks.append(row)
+        dates, ks, flows = self._lock_shape(130)
 
         snapshot = [
             {
-                "code": "600519.SH", "name": "贵州茅台", "price": 10.5,
-                "change_pct": 5.0, "prev_close": 10.0, "amount_yi": 50.0,
-                "limit_pct": 10.0, "volume": 300000,
+                "code": "600519.SH", "name": "贵州茅台", "price": 10.0,
+                "change_pct": 0.0, "prev_close": 10.0, "amount_yi": 50.0,
+                "limit_pct": 10.0, "volume": 100000,
             }
         ]
 
@@ -772,9 +760,22 @@ class TestTrustGates:
             "app.modules.behavior_screener.service.fetch_flow_daily", fake_flows
         )
 
-        result = await behavior_service.scan_market(date(2026, 10, 30))
-        assert result.hits == []
+        result = await behavior_service.scan_market(date(2026, 7, 1))
+        # 原始命中 103 条 → 窗口内 70 条(窗口外 33 条被滤掉)
+        assert len(result.hits) == 70
+        # 每一条都在 120 日历天窗口内
+        base = date(2026, 7, 1)
+        threshold = base - timedelta(days=120)
+        for h in result.hits:
+            assert date.fromisoformat(h.signal_date) >= threshold
+        # 分组计数与命中数一致
+        assert sum(result.hit_counts.values()) == 70
 ```
+
+> ⚠️ 该测试文件顶部需要 `from datetime import timedelta`（现有 import 是
+> `from datetime import date, timedelta` —— 已包含，直接用即可）。
+> `KIND_LOCK_POSITION` 需要从 `app.services.behavior_signal_service` import
+> （该文件顶部已有 `KIND_MAIN_FORCE_MOVE` 等 import，把 `KIND_LOCK_POSITION` 一并加上）。
 
 - [ ] **Step 2: 运行测试确认失败**
 
@@ -2523,11 +2524,17 @@ git -C D:\zga-study\rich commit -m "docs(behavior): 四道闸实测回填(真实
 | `api/kline.py` 的 `_date` / `_td` 改后无人使用 | grep 该文件 | Task 4 必须删掉那行 import |
 | `behavior_signal_service.py` 目前没有 datetime import | 读文件头 | Task 2 需补 `from datetime import date, timedelta` |
 
-**5. 计划编写期发现并修正的 3 个实质问题**
+**5. 计划编写期发现并修正的 5 个实质问题**
 
 1. **基准日口径不一致（最严重）**：初稿让找股路径用 `run_date`、K 线路径用「K 线末根日期」→ 两者差一天（停牌时差更多）→ 窗口边界错位 → `S_A ⊆ S_B` 被打破。**已改为两条路径都用「该票自己的 K 线末根日期」**，并同步改 Task 3 的实现与 Task 7 的一致性测试。
 2. **Task 4 的测试测不出东西**：初稿的测试在改前改后都通过（都用「末根日期」作基准）。**已重写**为「基准日不可解析 → 必须返回空标注」—— 旧实现在这个场景下是**全量返回**（窗口闸门形同虚设），是真能测出差异的用例。
 3. **口径与存储的错位**：初稿把窗口过滤放在落库时 → 批次表仍存超窗口信号，`count` 与明细依然对不上（把问题从展示层挪到存储层）。**已改为在 `scan_market` 内部过滤**（与 spec §3.3 的警告一致）。
+4. **Task 3 的造数造不出想要的命中数（实测推翻）**：初稿造「70 天主力异动」期望 70 条，实际只出 **3 条** —— 因为量比是「当日量 ÷ 前 5 日均量」，连续放量 70 天会让均量同步抬高，量比迅速回落到 1 附近。**已换成「平价 + 逐日缩量 10% + 连续主力净流入」的锁仓型数据**（只触发 `lock_position`，可稳定产出 103 条），窗口内 **70** 条 —— 仍是 >60，能证明没被截断。
+5. **Task 3 的候选池代码生成有 bug（实测推翻）**：初稿写 `f"6005{i:02d}.SH"`，i ≥ 100 时变成 **7 位数** → 主板判定失败 → 150 只只过 100 只。**已改为 `f"{600000 + i:06d}.SH"`**，实测 150 → 150。
+
+> 这两条是**写计划时用真实判定层跑出来的**——不是事后诸葛。
+> 如果不实测就派活，实施者会花好几轮去调阈值/造数，而不是实现功能。
+> **计划里的期望数字必须是实测过的**，这是本项目的硬规矩。
 
 **6. 计划的技术前提已用真实数据实测验证（2026-10-31）**
 
