@@ -165,6 +165,13 @@ async def get_picks_by_kind_offset(
                 BehaviorSignalPick.kind == kind,
             )
             .order_by(BehaviorSignalPick.score.desc())
+            # ⚠️ **必须带 `stock_code` 次级排序**(2026-10-31 评审 fix):
+            # 分组列表(`logic.group_hits`)按 `(-score, stock_code)` 排,
+            # 这里的 SQL 若只按 `score` 排,两套「前 N」的集合在**分数并列**处
+            # 可能不一致 → 「展开更多」用 `offset = group.picks.length + extra.length`
+            # 时,边界行会**重复出现或整条漏掉**。
+            # 实测库里确有并列分数(60 行里 2 对,3.3%)→ 不是假想。
+            .order_by(BehaviorSignalPick.stock_code.asc())
             .offset(offset)
             .limit(limit)
         )

@@ -75,11 +75,19 @@ async def behavior_latest(
 
     if kind:
         page_picks = await repo.get_picks_by_kind_offset(run.id, kind, limit, offset)
+        # ⚠️ `total` 的兜底**必须与 `groups[].count` 同源**(2026-10-31 评审 fix):
+        # 存量批次行没有 `hit_counts_json`(真实命中数不可知)时,填 `0` 既违反铁律
+        # 「算不出来不填 0」,又与同一响应体里 `groups[].count` 的兜底(已加载行数)
+        # 自相矛盾 —— 实测真实库里那 1 行存量批次就是这种情况:
+        # 会返回 `page.total = 0` 却同时带着几十条非空 `page.picks`(自相矛盾)。
+        # 这里改成:该 kind 在**已加载行**里的条数(与 groups[].count 的兜底一致)。
+        # 真·未知(该 kind 压根没有已加载行)→ 0 是**如实**的(确实 0 条命中)。
+        kind_loaded_count = sum(1 for d in hit_dicts if d.get("kind") == kind)
         resp["page"] = {
             "kind": kind,
             "offset": offset,
             "limit": limit,
-            "total": int(counts.get(kind, 0)),
+            "total": int(counts.get(kind, kind_loaded_count)),
             "picks": [behavior_service.pick_to_dict(p) for p in page_picks],
         }
     return resp

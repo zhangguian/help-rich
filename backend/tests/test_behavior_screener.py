@@ -648,7 +648,12 @@ class TestTrustGates:
 class TestLatestApiTruth:
     """闸 1 的 API 口径:count 必须是真实命中数,不是返回条数。"""
 
-    async def _seed(self, repo, kind: str, n: int):
+    async def _seed(self, repo, kind: str, n: int, hit_count: int | None = None):
+        """造一批命中。
+
+        `hit_count` 与 `n` **可以不同** —— 那正是闸 1 的口径:
+        `n` = 入库行数,`hit_count` = 该类**真实**命中数(写在 `hit_counts_json` 里)。
+        """
         from app.modules.behavior_screener import logic as lg
 
         hits = [
@@ -664,7 +669,7 @@ class TestLatestApiTruth:
             pool_size=5574, main_board_count=3193, non_st_count=3053,
             after_filters_count=1941, candidates_considered=1817,
             total_picks=n, elapsed_sec=53.1, note=None,
-            hit_counts_json=json.dumps({kind: n}),
+            hit_counts_json=json.dumps({kind: n if hit_count is None else hit_count}),
             data_as_of=date(2026, 10, 30), is_intraday=False,
         )
         await repo.replace_picks(
@@ -740,3 +745,126 @@ class TestLatestApiTruth:
         assert data["run"]["hit_counts"] == {}
         assert data["run"]["data_as_of"] is None
         assert data["run"]["is_intraday"] is None   # 未知 = null,不是 False
+
+    async def test_group_count_comes_from_hit_counts_not_row_count(self, client):
+        """**判别性**用例:只存 60 行、真实命中 70 → count 必须是 70。
+
+        前一条用例(存 70 行 + `hit_counts_json=70`)钉不住「count 从哪来」——
+        读 `hit_counts_json` 或读已载入行数都会得到 70。
+        这里让两者**不相等**:行数 60、真实数 70 → count 只能来自 `hit_counts_json`。
+        """
+        from app.modules.behavior_screener import repository as repo
+
+        await self._seed(repo, KIND_MAIN_FORCE_MOVE, 60, hit_count=70)
+        data = client.get("/api/behavior-screener/latest").json()
+        group = next(g for g in data["groups"] if g["kind"] == KIND_MAIN_FORCE_MOVE)
+        assert len(group["picks"]) == 60      # 已载入行数就这么多
+        assert group["count"] == 70           # 但口径报真实命中数
+
+    async def test_legacy_page_total_falls_back_to_loaded_rows(self, client):
+        """存量批次行(无 `hit_counts_json`)→ `page.total` **不填 0**。
+
+        实测真实库那行就是这种情况(`hit_counts_json IS NULL` + 47 条
+        `main_force_move` 明细):填 0 既违反铁律「算不出来不填 0」,
+        又与同一响应里 `groups[].count` 的兜底(已加载行数)自相矛盾。
+        兜底必须**与 `groups[].count` 同源**。
+        """
+        from app.modules.behavior_screener import repository as repo
+
+        hits = [
+            logic.SignalHit(
+                stock_code=f"60000{i}.SH", stock_name=f"票{i}", kind=KIND_DIP_BUY,
+                signal_date="2026-10-28", days_ago=2, reason="依据",
+                metrics={}, score=float(100 - i),
+            )
+            for i in range(3)
+        ]
+        run = await repo.upsert_run(
+            date(2026, 10, 30),
+            pool_size=5574, main_board_count=3193, non_st_count=3053,
+            after_filters_count=1941, candidates_considered=1817,
+            total_picks=3, elapsed_sec=53.1, note=None,
+            # 存量行:没有 hit_counts_json
+        )
+        await repo.replace_picks(
+            run.id, [{**h.to_dict(), "run_date": date(2026, 10, 30)} for h in hits]
+        )
+        page = client.get(
+            "/api/behavior-screener/latest",
+            params={"kind": KIND_DIP_BUY, "limit": 10, "offset": 0},
+        ).json()["page"]
+        assert page["total"] == 3            # 回退到该 kind 的已加载行数,不是 0
+        assert len(page["picks"]) == 3
+
+    async def test_page_absent_without_kind(self, client):
+        """不传 `kind` → 响应里**没有** `page` 键(不是空壳)。"""
+        from app.modules.behavior_screener import repository as repo
+
+        await self._seed(repo, KIND_DIP_BUY, 3)
+        data = client.get("/api/behavior-screener/latest").json()
+        assert "page" not in data
+
+    async def test_pagination_bounds_rejected(self, client):
+        """`limit` / `offset` 越界 → 422(不静默截断、不静默取负)。"""
+        from app.modules.behavior_screener import repository as repo
+
+        await self._seed(repo, KIND_DIP_BUY, 3)
+        base = "/api/behavior-screener/latest"
+        assert client.get(
+            base, params={"kind": KIND_DIP_BUY, "limit": 0}
+        ).status_code == 422
+        assert client.get(
+            base, params={"kind": KIND_DIP_BUY, "limit": 201}
+        ).status_code == 422
+        assert client.get(
+            base, params={"kind": KIND_DIP_BUY, "offset": -1}
+        ).status_code == 422
+
+    async def test_pagination_continues_group_order_without_duplicates(self, client):
+        """分数并列时,分页必须**接在**分组列表后面(不重复、不漏行)。
+
+        `logic.group_hits` 按 `(-score, stock_code)` 排;分页 SQL 若只按 `score` 排,
+        两套「前 N」在**并列分数**处可能不一致 → 前端「展开更多」
+        (`offset = group.picks.length + extra.length`)会在边界处重复或漏行。
+
+        ⚠️ 入库顺序**故意打乱**(先偶后奇):否则「按 rowid 排」恰好与
+        「按 stock_code 排」一致,本用例就钉不住排序了。
+        """
+        from app.modules.behavior_screener import repository as repo
+
+        codes = [f"{600000 + i:06d}.SH" for i in range(70)]
+        hits = [
+            logic.SignalHit(
+                stock_code=code, stock_name="票", kind=KIND_LOCK_POSITION,
+                signal_date="2026-10-28", days_ago=2, reason="依据",
+                metrics={}, score=50.0,          # 全部并列
+            )
+            for code in codes
+        ]
+        scrambled = hits[::2] + hits[1::2]     # 先偶后奇
+        run = await repo.upsert_run(
+            date(2026, 10, 30),
+            pool_size=5574, main_board_count=3193, non_st_count=3053,
+            after_filters_count=1941, candidates_considered=1817,
+            total_picks=70, elapsed_sec=53.1, note=None,
+            hit_counts_json=json.dumps({KIND_LOCK_POSITION: 70}),
+            data_as_of=date(2026, 10, 30), is_intraday=False,
+        )
+        await repo.replace_picks(
+            run.id, [{**h.to_dict(), "run_date": date(2026, 10, 30)} for h in scrambled]
+        )
+
+        data = client.get("/api/behavior-screener/latest").json()
+        group = next(
+            g for g in data["groups"] if g["kind"] == KIND_LOCK_POSITION
+        )
+        group_codes = [p["stock_code"] for p in group["picks"]]
+        assert group_codes == codes[:60]      # 分组列表按 (-score, stock_code)
+
+        page = client.get(
+            "/api/behavior-screener/latest",
+            params={"kind": KIND_LOCK_POSITION, "limit": 10, "offset": 60},
+        ).json()["page"]
+        page_codes = [p["stock_code"] for p in page["picks"]]
+        assert page_codes == codes[60:]        # 分页接得上:不重复、不漏行
+        assert not set(group_codes) & set(page_codes)
