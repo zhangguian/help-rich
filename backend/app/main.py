@@ -185,6 +185,11 @@ async def lifespan(app: FastAPI):
 
         _spawn(start_screener_scheduler())
 
+        # 盘后行为标注调度器(每日 15:30 工作日自动跑批;闸 4 稳定闸)
+        from app.modules.behavior_screener.service import start_behavior_scheduler
+
+        _spawn(start_behavior_scheduler())
+
         # v0.5.0:全市场快照预热(56 页分页约 3~5s)
         #   不预热的话,首页第一次拉 /market/sentiment 要干等 5 秒才出情绪卡。
         #   放到后台跑,首个用户请求通常已命中 60s 缓存。

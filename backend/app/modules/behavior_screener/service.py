@@ -19,7 +19,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from app.core.config import (
@@ -292,6 +292,8 @@ async def run_daily_scan(
     Returns: `(BehaviorSignalRun, hits)`;快照不可用时返回 None。
     """
     target = target_date or date.today()
+    # 闸 4:批次的数据时点(盘后完整数据 vs 盘中半成品)
+    data_as_of, is_intraday = resolve_batch_time_marks()
     result = await scan_market(target, candidate_limit=candidate_limit)
 
     if not result.universe.total:
@@ -315,8 +317,8 @@ async def run_daily_scan(
         elapsed_sec=result.elapsed_sec,
         note="; ".join(result.degraded) if result.degraded else None,
         hit_counts_json=json.dumps(counts, ensure_ascii=False) if counts else None,
-        data_as_of=None,
-        is_intraday=None,
+        data_as_of=data_as_of,
+        is_intraday=is_intraday,
     )
 
     await repo.replace_picks(
@@ -399,11 +401,106 @@ async def get_picks_by_run(run_id: int) -> list[Any]:
     return await repo.get_picks_by_run(run_id)
 
 
+# ============================================================
+# 后台调度(每日 15:30) —— 闸 4 稳定闸
+# ============================================================
+
+# 盘后跑批时间窗(与选股调度器一致:15:30 之后)
+_BATCH_RUN_HOUR = 15
+_BATCH_RUN_MINUTE = 30
+
+
+def _prev_weekday(d: date) -> date:
+    """d 之前最近的工作日(周末顺延;法定节假日按工作日近似)。"""
+    cur = d - timedelta(days=1)
+    while cur.weekday() >= 5:
+        cur -= timedelta(days=1)
+    return cur
+
+
+def resolve_batch_time_marks(
+    now: datetime | None = None,
+) -> tuple[date, bool]:
+    """本批的 `(data_as_of, is_intraday)`。
+
+    - `data_as_of`:本批数据中**已收盘**的最后交易日
+    - `is_intraday`:本批是否额外包含**当日未收盘**数据
+
+    口径(工作日 15:00 为收盘线,与 `behavior_fund_flow_service._is_post_close` 一致):
+    - 工作日 15:00 之后 → `data_as_of` = 当天,`is_intraday` = False
+    - 工作日 15:00 之前 → `data_as_of` = 上一个工作日,`is_intraday` = True
+    - 周末 → `data_as_of` = 上周五,`is_intraday` = False
+    """
+    now = now or datetime.now()
+    today = date(now.year, now.month, now.day)
+    if now.weekday() >= 5:  # 周末
+        # ⚠️ `_prev_weekday(today)`(不是 `today - 1 天`):`_prev_weekday` 本身
+        # 就只回退到**最近的工作日** —— 周六/周日都落到上周五。
+        # 多减一天会落到周四(周六)→ 与「周末 data_as_of = 上周五」口径矛盾。
+        return _prev_weekday(today), False
+    if now.hour >= 15:  # 已收盘
+        return today, False
+    return _prev_weekday(today), True
+
+
+def should_run_behavior_batch(run: Any, now: datetime | None = None) -> bool:
+    """今天是否需要跑批。
+
+    ⚠️ **跳过条件必须是「今天的批次存在 且 `is_intraday` 明确为 `False`**」:
+    盘中手动跑的那份带 `is_intraday=true`,若被当成「今天已跑」,
+    盘后调度器就会跳过 → 盘中那份会一直留着当最新批次。
+
+    🚨 **`None`(未知)不跳过**(见 R1):只有**明确**知道是盘后完整数据才跳过。
+    `None` = 时点未知(比如 Task 3 的占位批次、迁移前的老批次)→ 不信任它,重跑。
+    `True` = 盘中半成品 → 必须重跑。
+
+    纯函数(只吃 `now` 与批次行),便于单测 —— 不打桩时钟。
+    """
+    now = now or datetime.now()
+    if now.weekday() >= 5:  # 周末不跑
+        return False
+    if not (now.hour >= _BATCH_RUN_HOUR and now.minute >= _BATCH_RUN_MINUTE):
+        return False
+    if run is None:
+        return True
+    if run.run_date != date(now.year, now.month, now.day):
+        return True
+    # 只有明确是盘后完整数据(False)才跳过;None(未知)/True(盘中)都要重跑。
+    return run.is_intraday is not False
+
+
+async def start_behavior_scheduler() -> None:
+    """每日 15:30 跑一次(工作日;今天已有**非盘中**批次则跳过)。"""
+    import os as _os
+
+    if _os.environ.get("PYTEST_CURRENT_TEST"):
+        # 测试环境跳过(与选股调度器同口径)
+        return
+
+    logger.info("行为标注调度器启动: 每日 15:30 跑批")
+    while True:
+        try:
+            now = datetime.now()
+            target = date(now.year, now.month, now.day)
+            today_run = await repo.get_run_by_date(target)
+            if should_run_behavior_batch(today_run, now):
+                await run_daily_scan(target)
+        except asyncio.CancelledError:
+            logger.info("行为标注调度器停止")
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[behavior_screener] 调度器异常: %s", e)
+        await asyncio.sleep(60)
+
+
 __all__ = [
     "ScanResult",
     "get_latest_run",
     "get_picks_by_run",
     "pick_to_dict",
+    "resolve_batch_time_marks",
     "run_to_dict",
     "scan_market",
+    "should_run_behavior_batch",
+    "start_behavior_scheduler",
 ]
