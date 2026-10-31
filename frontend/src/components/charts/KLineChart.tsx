@@ -508,19 +508,38 @@ export function KLineChart({
           kdjJ.setData(mapArr(ind.kdj.jSeries));
         }
 
-        // 信号标注
-        const markers: SeriesMarker<Time>[] = ind.signalSeries.map((m) => ({
-          time: m.time as Time,
-          position: m.position,
-          color: m.color,
-          shape: 'circle' as const,
-          text: m.text,
-        }));
+        // 信号标注(末日语义)+ 四类异动行为标注(历史回溯语义)合并
+        //
+        // ⚠️ **必须按 time 排序**:lightweight-charts 4.2.3 的 setMarkers 文档明确
+        // 要求 "This array should be sorted by time"(同 time 多条允许)。
+        // `signal_series` 全落在末日、`behavior_markers` 跨历史日期 —— 直接 concat
+        // 会得到无序数组 → 库抛错 → 旧的 `catch {}` 静默吞掉 → **所有标注一起消失**
+        // (连原有的金叉/形态标注也没了),且页面上没有任何报错提示。
+        const markers: SeriesMarker<Time>[] = [
+          ...ind.signalSeries.map((m) => ({
+            time: m.time as Time,
+            position: m.position,
+            color: m.color,
+            shape: 'circle' as const,
+            text: m.text,
+          })),
+          ...(d.behaviorMarkers ?? []).map((m) => ({
+            time: m.date as Time,
+            position: m.position,
+            color: m.color,
+            shape: 'circle' as const,
+            text: m.text,
+          })),
+        ].sort((a, b) => {
+          if (a.time === b.time) return 0;
+          return (a.time as string) < (b.time as string) ? -1 : 1;
+        });
         if (markers.length > 0) {
           try {
             series.setMarkers(markers);
-          } catch {
-            /* time 排序问题静默 */
+          } catch (e) {
+            // 不再静默吞掉:标注整体消失是**无声故障**,必须留痕
+            console.warn('[KLineChart] setMarkers 失败,信号标注未显示:', e);
           }
         }
 
@@ -532,7 +551,19 @@ export function KLineChart({
             { high: Number(it.high), low: Number(it.low), close: Number(it.close) },
           ]),
         );
-        markersRef.current = ind.signalSeries;
+        // 命中测试用的 marker 列表:合并两类标注(**保持与 setMarkers 相同的顺序**,
+        // 堆叠偏移依赖顺序);四类行为标注额外带上「当日依据」文字。
+        markersRef.current = [
+          ...ind.signalSeries.map((m) => ({ ...m })),
+          ...(d.behaviorMarkers ?? []).map((m) => ({
+            time: m.date,
+            dateIndex: m.dateIndex,
+            text: m.text,
+            position: m.position,
+            color: m.color,
+            reason: m.reason,
+          })),
+        ].sort((a, b) => (a.time === b.time ? 0 : a.time < b.time ? -1 : 1));
         {
           const lastItem = items[items.length - 1];
           const prevItem = items[items.length - 2];
@@ -932,6 +963,7 @@ export function KLineChart({
             name={signalTip.hit.name}
             entry={signalTip.entry}
             nowLine={nowLine}
+            reason={signalTip.hit.reason}
             style={{}}
           />
         </div>

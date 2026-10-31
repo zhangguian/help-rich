@@ -928,6 +928,179 @@ data: {"event":"ping","ts":1690890000}   ← 前端过滤
 
 ---
 
+## 13.7 K 线异动行为标注与找股模块(v0.15 新增)
+
+> 四类异动行为标注:主力异动 / 低吸信号 / 锁仓信号 / 高抛信号。
+> **定位**:日线级别的**形态回溯标注** —— 回答「历史上某一天出现了什么可观测事实」。
+> 与 `modules/signal`(盘中实时推送,ADR-0007)是**两回事**。
+>
+> ⚠️ **措辞纪律**:标注只陈述已发生的事实,**不预测涨跌、不给买卖指令**。
+> 「低吸」「高抛」是形态名称,不是操作建议。
+
+### 13.7.1 GET /api/kline/{code}/indicators(v0.15 追加字段)
+
+响应**追加**两个字段,既有字段(`items` / `indicators` / `signal_series` 等)**完全不变**:
+
+```jsonc
+{
+  "stock_code": "600519.SH",
+  "period": "daily",
+  "count": 300,
+  "items": [ /* 不变 */ ],
+  "indicators": { /* 不变 */ },
+
+  // 新增:异动行为标注点(按日期升序)
+  "behavior_markers": [
+    {
+      "kind": "dip_buy",              // main_force_move | dip_buy | lock_position | distribute
+      "date": "2026-10-28",
+      "date_index": 288,
+      "text": "🔻 低吸信号",
+      "position": "belowBar",         // aboveBar | belowBar
+      "color": "#22d3ee",
+      "reason": "主力净额由 -0.79 亿转 +0.39 亿；下影 2.31 ≥ 实体 1.10×1.5；收盘 1330.75 回踩 MA20 1341.20（偏离 0.8%）；量比 0.94",
+      "metrics": { "main_net_yi": 0.39, "volume_ratio": 0.94, "ma20": 1341.2 }
+    }
+  ],
+  // 新增:资金流不可用时为 true(此时 behavior_markers 为空数组)
+  "behavior_markers_unavailable": false
+}
+```
+
+**降级语义**:
+- 资金流历史不可用 → `behavior_markers=[]` + `behavior_markers_unavailable=true`,
+  **K 线与既有指标照常返回 200**(资金流是「锦上添花」,失败就如实说不可用);
+- K 线不足 120 根 → 不产出标注(`behavior_markers=[]`),`behavior_markers_unavailable=false`
+  (数据够,只是不够算);
+- **非日线周期**(weekly/monthly/minute)→ 不产出标注(口径不同,不误导);
+- 只回传最近 60 个日历日内的标注(控制响应体)。
+
+**前端注意**:前端需把 `behavior_markers` 与既有 `signal_series` **合并后按 time 排序**
+再调 `setMarkers` —— lightweight-charts 要求数组按 time 有序,否则抛错且标注整体消失。
+
+### 13.7.2 找股模块 `/api/behavior-screener`
+
+> ⚠️ 与 `/api/screener`(选股)口径不同:
+> - 选股:按**因子打分**(主力净流入/量比/动能/板块强度/事件热度)排 Top 20
+> - 找股:按 **K 线行为信号命中**分组
+
+#### GET /api/behavior-screener/latest
+
+**响应 200**:
+```jsonc
+{
+  "run": {
+    "id": 1,
+    "run_date": "2026-10-30",
+    "generated_at": "2026-10-30T15:40:12",
+    "pool_size": 5574,          // 全市场快照总数
+    "main_board_count": 3193,    // 主板闸门后
+    "non_st_count": 3053,        // 非 ST 后
+    "after_filters_count": 1941, // 成交额 ≥ 1 亿后
+    "candidates_considered": 120, // 进入逐票算信号的候选数
+    "total_picks": 12,
+    "elapsed_sec": 8.2,
+    "note": null
+  },
+  "groups": [
+    {
+      "kind": "dip_buy",
+      "kind_label": "低吸信号",
+      "count": 5,
+      "picks": [
+        {
+          "stock_code": "600519.SH",
+          "stock_name": "贵州茅台",
+          "kind": "dip_buy",
+          "kind_label": "低吸信号",
+          "signal_date": "2026-10-28",
+          "days_ago": 2,
+          "reason": "主力净额由 -0.79 亿转 +0.39 亿；…",
+          "metrics": { "main_net_yi": 0.39 },
+          "score": 88.0,
+          "change_pct": 0.89
+        }
+      ]
+    }
+  ],
+  "all": [ /* 全部命中,按综合分降序 */ ],
+  "kinds": [ { "kind": "main_force_move", "label": "主力异动" } ]
+}
+```
+
+**降级**:
+- 尚无批次 → **404**(前端据此显示「还没跑过」,与「跑了但没命中」区分开);
+- 全市场快照不可用 → 跑批失败,返回 502。
+
+#### GET /api/behavior-screener/runs?days=N
+
+返回最近 N 天批次列表(默认 10,上限 90)。
+
+#### GET /api/behavior-screener/pool
+
+返回候选池口径统计(未跑过时 `universe=null` + `note="尚无批次,未统计"`,**不编数字**)。
+
+#### POST /api/behavior-screener/trigger-now
+
+手动重跑(默认今日)。
+- **生产禁用**:需环境变量 `SCREENER_ALLOW_TRIGGER=1`,否则 **403**(与 `/screener/trigger-now` 同口径);
+- 全市场扫描耗时较长(实测候选 120 只约 8s),前端超时设 300s。
+
+### 13.7.3 判定阈值与打分口径(v0.15 定稿)
+
+> 阈值全部外置 `backend/app/core/config.py`(`BEHAVIOR_*` 前缀),便于回测调参。
+> 下表是 **2026-10-30 全市场真机校准后的定稿值** —— 初版偏松(大盘普涨日命中率达 81%),
+> 已收紧。**换市场环境仍可能失配**,需持续回测调整。
+
+| 信号 kind | 判定条件 |
+|---|---|
+| `main_force_move` | `r0_net` > 0 且 `r0x_ratio` ≥ **65%** 且 涨幅 ≥ **2%** 且 量比 ≥ **1.5** |
+| `dip_buy` | 主力净额由负转正(≥ 0 亿) + 下影 ≥ 实体×1.5 + 收盘回踩 MA20(偏离 ≤ 3%) + 量比 ≤ 1.0 |
+| `lock_position` | 连续 5 日主力净额为正且累计 ≥ 0.5 亿 + 期间振幅 ≤ 8% + 期间均量 ≤ 前 5 日均量×0.9 |
+| `distribute` | 主力净额由正转负(≤ 0 亿) + 上影 ≥ 实体×1.5 + 距近 20 日高 ≤ 5% + 量比 ≥ **1.5** |
+
+**强度分级(仅 `main_force_move`,其余三类按各自形态指标归一)**
+
+四个维度的「过线进度」`进度 = (实测值 − 判定线) / (强线 − 判定线)`,截断到 `[0,1]`:
+
+| 维度 | 判定线 | 强线 |
+|---|---|---|
+| 主力净占比 `r0x_ratio` | 65% | 85% |
+| 涨跌幅 `change_pct` | 2% | 7% |
+| 量比 `volume_ratio` | 1.5 | 3.0 |
+| 超大单净额 `r0_net_yi` | 0 | 5 亿 |
+
+- 强度进度 = 四维**均值**;强度系数 = `0.5 + 1.5 × 进度`(范围 0.5 ~ 2.0);
+- 等级「强 / 一般」由**同一个进度**决定(≥ **0.6** 为强)—— 等级与分数同源,不自相矛盾;
+- `metrics` 里 `strength_level` 是**字符串枚举**(`"强"` / `"一般"`)、`strength_note` 是说明文字、
+  `strength_progress` 是 0~1 的数值 —— 前端 `metrics` 类型须允许字符串。
+
+**打分口径**
+
+```
+score = 类型权重 × 新鲜度系数 × 强度系数 × 100
+```
+
+- 类型权重:主力异动 1.0 / 低吸 1.2 / 锁仓 1.1 / 高抛 0.9(`BEHAVIOR_SCREENER_KIND_WEIGHTS`);
+- 新鲜度系数:`0.85 ^ days_ago`,下限 0.3;
+- **×100 是必需的**:不放大时分数落在 1.3 ~ 1.5,排序差异肉眼不可辨、等于随机。
+  放大后实测落在 **18.9 ~ 147.0**(极差 128.1),Top 12 无并列。
+
+**`change_pct` 的口径(易错)**
+
+`change_pct` 是**信号当日**的涨跌幅,**不是**跑批当天的涨跌幅 —— 它显示在
+「信号日 2026-10-30(1 天前)」旁边,必须与 `reason` 里说的「当日涨跌」是同一天。
+
+- 取值优先:`metrics.change_pct`(主力异动判定用的实测值,与 `reason` 逐字一致);
+- 其余三类信号从 K 线算(`close[i] / close[i-1] - 1`);
+- 算不出 → `null`(前端显示 `-`),**不编数字**。
+
+⚠️ **前端类型必须写驼峰**:axios 响应拦截器会递归把 snake_case 转成 camelCase,
+前端 API 层的 TS 类型写成 snake_case 时 TS 不报错,但运行期读出来全是 `undefined`
+(口径条会渲染成「主板 只 · 非 ST 只」这种**空数字**)。
+
+---
+
 ## 14. 错误码全局清单
 
 | code | HTTP | 模块 | 用户文案 |

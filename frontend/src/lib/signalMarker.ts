@@ -57,6 +57,14 @@ export interface SignalMarkerHit {
   shapeX: number;
   shapeY: number;
   shapeR: number;
+  /**
+   * 信号发生**当日**的数值依据(仅四类异动行为标注有)。
+   *
+   * ⚠️ 与「当前这只票的真实数据」是**两回事**:
+   * 现在线是末根 K 线的当前值,依据是信号当天的事实 ——
+   * 不能混用,否则会把 10-28 的信号配上 10-30 的现价。
+   */
+  reason?: string | undefined;
 }
 
 /** 去掉后端 text 里的 emoji:「⚠️ BOLL 收口」→「BOLL 收口」 */
@@ -171,6 +179,7 @@ export function computeSignalMarkerHits(
       shapeX: x,
       shapeY,
       shapeR: 2 + circleSize / 2,
+      reason: m.reason,
     });
   });
 

@@ -699,6 +699,44 @@ export interface SignalMarker {
   text: string;
   position: 'aboveBar' | 'belowBar' | 'inBar';
   color: string;
+  /**
+   * 信号发生**当日**的数值依据(仅四类异动行为标注有)。
+   *
+   * ⚠️ 与「当前这只票的真实数据」是**两回事**:
+   * 现在线是末根 K 线的当前值,依据是信号当天的事实 ——
+   * 不能混用,否则会把 10-28 的信号配上 10-30 的现价。
+   */
+  reason?: string;
+}
+
+/**
+ * K 线异动行为标注点(四信号:主力异动 / 低吸 / 锁仓 / 高抛)
+ *
+ * 与 `SignalMarker` 的区别:
+ * - `SignalMarker` 是**末日**语义(金叉/死叉/形态/诱多诱空),全部落在最后一根 K 线
+ * - `BehaviorMarker` 是**历史回溯**语义,标注「某一天出现了什么可观测事实」
+ *
+ * `reason` 是信号发生**当日**的数值依据 —— 不能与「当前这只票的真实数据」混用。
+ */
+export interface BehaviorMarker {
+  kind: 'main_force_move' | 'dip_buy' | 'lock_position' | 'distribute';
+  /** 对应 K 线日期(YYYY-MM-DD) */
+  date: string;
+  /** 在 K 线序列中的下标 */
+  dateIndex: number;
+  /** 显示文案(含 emoji) */
+  text: string;
+  position: 'aboveBar' | 'belowBar';
+  color: string;
+  /** 依据文字(带实测数值) */
+  reason: string;
+  /**
+   * 机器可读依据数值。
+   *
+   * ⚠️ 不全是数字:`strength_level` 是字符串枚举(`强` / `一般`)、
+   * `strength_note` 是说明文字 —— 等级要能当枚举用,不能塞进 number。
+   */
+  metrics: Record<string, number | string | null>;
 }
 
 /** M1.3 信号历史胜率回检(/api/stock/{code}/analysis 顶层 signalWinrate) */
@@ -753,6 +791,10 @@ export interface KlineIndicatorsResponse {
   count: number;
   items: KlineItem[];
   indicators: TechnicalIndicators;
+  /** 四类异动行为标注点(历史回溯语义) */
+  behaviorMarkers?: BehaviorMarker[];
+  /** 资金流不可用 → true(此时 behaviorMarkers 为空) */
+  behaviorMarkersUnavailable?: boolean;
 }
 
 export interface KlineItem {

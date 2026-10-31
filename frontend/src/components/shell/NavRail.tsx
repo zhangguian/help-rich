@@ -47,6 +47,7 @@ const GROUPS: NavGroup[] = [
     title: '决策',
     items: [
       { href: '/screener', label: '选股', icon: '🎯' },
+      { href: '/behavior-screener', label: '找股', icon: '🔍' },
       { href: '/backtest', label: '回测', icon: '📊' },
       { href: '/analysis', label: '深度分析', icon: '🤖' },
       { href: '/brief', label: '盘前简报', icon: '☀️' },

@@ -32,6 +32,7 @@ export function SignalExplainCard({
   name,
   entry,
   nowLine,
+  reason,
   style,
 }: {
   /** 标记名(去掉 emoji) */
@@ -40,6 +41,14 @@ export function SignalExplainCard({
   entry: GlossaryEntry | null;
   /** 当前这只票的真实数据(只拼接口真有的字段) */
   nowLine: string | null;
+  /**
+   * 信号发生**当日**的数值依据(仅四类异动行为标注有)。
+   *
+   * ⚠️ 与 `nowLine` 是**两回事**,不可合并:
+   * `nowLine` 是末根 K 线的当前值,`reason` 是信号当天的事实 ——
+   * 混用会把 10-28 的信号配上 10-30 的现价,误导用户。
+   */
+  reason?: string | undefined;
   style: CSSProperties;
 }) {
   return (
@@ -85,6 +94,15 @@ export function SignalExplainCard({
       ) : (
         <div className="mt-2 text-xs leading-relaxed text-text-sec">
           暂无解释(词条缺失,不做猜测)。
+        </div>
+      )}
+
+      {reason && (
+        <div className="mt-2">
+          <div className="text-[10px] tracking-wide text-text-ter">当日依据</div>
+          <div className="mt-0.5 text-[11px] leading-relaxed text-text-sec">
+            {reason}
+          </div>
         </div>
       )}
 

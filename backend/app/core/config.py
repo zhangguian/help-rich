@@ -137,3 +137,97 @@ POOL_RANK_KLINE_COUNT = 60
 
 # 精排阶段拉 K 线的并发(沿用 screener 的并发档)
 POOL_RANK_KLINE_CONCURRENCY = 16
+
+
+# ============================================================
+# === K 线异动行为标注(四信号:主力异动 / 低吸 / 锁仓 / 高抛) ===
+# ============================================================
+#
+# 定位:**日线级别的形态回溯标注** —— 回答「历史上某天出现了什么可观测事实」。
+# 与 `modules/signal/engine.py`(盘中实时推送)是**两回事**,不要混。
+#
+# 铁律(与项目既有判定层一致):
+# - 缺数据 → 该信号不产出,**绝不编数字**
+# - 每条信号必须带**数值依据**(reason 里写清实测值)
+# - 只用**当日及之前**的数据 → 可回测、可复现
+# - 文案只陈述事实,**不预测涨跌**(项目红线)
+
+# 判定所需的最少 K 线根数(不足 → 该票不产出标注)
+# 为什么固定 120:K 线图拉 300 根、找股模块拉 120 根,
+# 固定下限 + 尾窗口径 → 同一只票在两处得出**同一批信号**(闭环成立)
+BEHAVIOR_MIN_KLINE_COUNT = 120
+
+# 回传给前端的标注最大回看天数(避免响应体过大)
+BEHAVIOR_MARKERS_LOOKBACK_DAYS = 60
+
+# --- 主力异动(main_force_move) ---
+# 当日超大单净额 > 0 且 主力净占比 ≥ 阈值 且 涨幅 ≥ 阈值 且 放量
+#
+# ⚠️ **阈值收紧的原因**(真机实测 2026-10-30 全市场 5574 只):
+# 初版(50% / 1% / 量比 1.3)在大盘普涨日会命中 908/1121 = 81% 的命中记录,
+# **区分度太低** —— 几乎每只涨得多的票都成"主力异动",等于没筛。
+# 收紧后(65% / 2% / 量比 1.5)只有资金参与度明显更高的票才命中。
+BEHAVIOR_MAIN_FORCE_MIN_R0X_RATIO = 65.0   # 主力净占比 r0x_ratio(%)
+BEHAVIOR_MAIN_FORCE_MIN_CHANGE_PCT = 2.0   # 当日涨跌幅(%)
+BEHAVIOR_MAIN_FORCE_MIN_VOLUME_RATIO = 1.5  # 量比(vs 前 5 日均量)
+
+# 「强」参考线 —— 与上面的**判定线**分开,用于强度分级与连续强度系数
+# 判定线只管「算不算命中」,强线管「命中之后有多强」。
+# 连续系数取四个维度的**过线进度**(刚过判定线 = 0, 达到强线 = 1)的均值,
+# 这样强弱是连续变化的,不会因为「都算强」而并列同分。
+BEHAVIOR_MAIN_FORCE_STRONG_R0X_RATIO = 85.0    # 主力净占比强线(%)
+BEHAVIOR_MAIN_FORCE_STRONG_CHANGE_PCT = 7.0    # 涨跌幅强线(%)
+BEHAVIOR_MAIN_FORCE_STRONG_VOLUME_RATIO = 3.0  # 量比强线
+BEHAVIOR_MAIN_FORCE_STRONG_R0_NET_YI = 5.0      # 超大单净额强线(亿元)
+# 强度进度(0~1)≥ 该值 → 强度等级「强」
+# ⚠️ 等级与打分**同源**(都基于强度进度),避免出现
+# 「等级写着强、分数却排在一般后面」的自相矛盾。
+# 0.6 是实测调出来的:真机全市场 455 条主力异动里,进度 ≥ 0.6 的约占三成
+# —— 门槛再低(0.45)会让七成都标「强」,徽标就廉价了。
+BEHAVIOR_MAIN_FORCE_STRONG_PROGRESS = 0.6
+
+# --- 低吸信号(dip_buy) ---
+# 主力净额由负转正 + 下影线实体 + 回踩 MA20 + 缩量或平量
+BEHAVIOR_DIP_MIN_MAIN_NET_YI = 0.0         # 主力净额(亿元)转正后的下限
+BEHAVIOR_DIP_MIN_SHADOW_BODY_RATIO = 1.5   # 下影 ≥ 实体 × 该系数
+BEHAVIOR_DIP_MAX_MA20_DEVIATION_PCT = 3.0  # |close-ma20|/ma20 ≤ 该值(%)
+BEHAVIOR_DIP_MAX_VOLUME_RATIO = 1.0        # 量比 ≤ 该值(缩量或平量)
+
+# --- 锁仓信号(lock_position) ---
+# 连续 N 日主力净额持续为正 + 期间横盘 + 期间缩量
+BEHAVIOR_LOCK_MIN_DAYS = 5                 # 连续主力净流入天数
+BEHAVIOR_LOCK_MIN_TOTAL_NET_YI = 0.5       # 累计主力净流入(亿元)
+BEHAVIOR_LOCK_MAX_RANGE_PCT = 8.0          # 期间振幅(%)≤ 该值 = 横盘
+BEHAVIOR_LOCK_MAX_VOLUME_RATIO = 0.9       # 期间均量 / 前 5 日均量 ≤ 该值 = 缩量
+
+# --- 高抛信号(distribute) ---
+# 主力净额由正转负 + 上影线冲高回落 + 近 M 日高位 + 放量
+BEHAVIOR_DISTRIBUTE_MAX_MAIN_NET_YI = 0.0  # 主力净额(亿元)转负后的上限
+BEHAVIOR_DISTRIBUTE_MIN_SHADOW_BODY_RATIO = 1.5  # 上影 ≥ 实体 × 该系数
+BEHAVIOR_DISTRIBUTE_HIGH_WINDOW = 20       # 「近 M 日高位」回看根数
+BEHAVIOR_DISTRIBUTE_MAX_HIGH_DISTANCE_PCT = 5.0  # 距 M 日最高价 ≤ 该值(%)
+# 放量阈值与主力异动对称(1.5):大盘普跌日同样会大量触发,阈值需一致收紧
+BEHAVIOR_DISTRIBUTE_MIN_VOLUME_RATIO = 1.5  # 量比 ≥ 该值(放量)
+
+# 均线回看窗口(低吸回踩 MA20 / 高抛高位判定共用)
+BEHAVIOR_MA_WINDOW = 20
+
+# --- 找股模块(behavior_screener) ---
+# 全市场快照粗筛后进入逐票算信号的候选数上限
+BEHAVIOR_SCREENER_CANDIDATE_LIMIT = 120
+# 逐票拉 K 线 / 资金流历史的根数
+BEHAVIOR_SCREENER_KLINE_COUNT = 120
+BEHAVIOR_SCREENER_FLOW_COUNT = 120
+# 逐票并发
+BEHAVIOR_SCREENER_CONCURRENCY = 12
+# 各信号类型的打分权重(与信号强度相乘得到综合分)
+BEHAVIOR_SCREENER_KIND_WEIGHTS: dict[str, float] = {
+    "main_force_move": 1.0,
+    "dip_buy": 1.2,
+    "lock_position": 1.1,
+    "distribute": 0.9,
+}
+# 入库上限(每批最多存多少条命中记录)
+BEHAVIOR_SCREENER_TOP_N = 60
+# 资金流历史拉取超时(秒) —— 超时即降级,不拖慢 K 线主流程
+BEHAVIOR_FUND_FLOW_TIMEOUT_SEC = 3.0

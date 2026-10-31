@@ -1225,3 +1225,96 @@ class IntradaySignalTrigger(Base):
 # ============================================================
 
 
+class FundFlowDailyCache(Base):
+    """个股**逐日**资金流缓存(behavior_fund_flow_service:DB 优先,miss 走真实接口后落库)
+
+    与迁移 b3c4d5e6f708_add_behavior_tables 对齐:
+    - 金额列用 String 保留原始精度(元),与 KlineCache 一致
+    - 唯一性由 (stock_code, trade_date) 索引保证;写入策略是
+      "先按 stock_code 整段删除再重插",因此不加 UNIQUE 约束
+    - 为什么需要缓存:K 线本身有 KlineCache(DB 优先)所以端点很快,
+      资金流若无缓存则每次开 K 线图都要新增一次外网请求 → 拖慢主流程
+    """
+    __tablename__ = "fund_flow_daily_cache"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # 主力净额(元)/ 超大单净额(元)
+    net_amount: Mapped[str] = mapped_column(String, nullable=False, default="0")
+    r0_net: Mapped[str] = mapped_column(String, nullable=False, default="0")
+    # 主力净占比(%)/ 超大单占比(%)/ 换手率(%)
+    r0x_ratio: Mapped[str | None] = mapped_column(String, nullable=True)
+    r0_ratio: Mapped[str | None] = mapped_column(String, nullable=True)
+    turnover: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 当日涨跌幅(小数,0.0281 = 2.81%)
+    change_ratio: Mapped[str | None] = mapped_column(String, nullable=True)
+    source: Mapped[str | None] = mapped_column(String, nullable=True, default="sina")
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=datetime.now)
+
+    __table_args__ = (
+        Index("idx_flow_daily_code_date", "stock_code", "trade_date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<FundFlowDailyCache {self.stock_code} {self.trade_date}>"
+
+
+class BehaviorSignalRun(Base):
+    """找股批次(behavior_screener 跑批记录)"""
+
+    __tablename__ = "behavior_signal_run"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_date: Mapped[date] = mapped_column(Date, nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
+    # 全市场快照总数
+    pool_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 主板闸门后 / 非 ST 后 / 成交额闸门后
+    main_board_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    non_st_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    after_filters_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 进入逐票算信号的候选数
+    candidates_considered: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 命中信号总数(入库条数)
+    total_picks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    elapsed_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 降级说明(如「资金流不可用」)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<BehaviorSignalRun {self.run_date} picks={self.total_picks}>"
+
+
+class BehaviorSignalPick(Base):
+    """找股命中记录(一只票一条,含命中信号与依据)"""
+
+    __tablename__ = "behavior_signal_pick"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    run_date: Mapped[date] = mapped_column(Date, nullable=False)
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
+    stock_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 命中的信号种类(main_force_move / dip_buy / lock_position / distribute)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    # 信号发生日
+    signal_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # 距今天数
+    days_ago: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 综合分
+    score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    # 依据文字(带数值)
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # 依据数值(JSON)
+    metrics_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 当日涨跌幅(%)
+    change_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (
+        Index("idx_behavior_pick_run", "run_id", "score"),
+        Index("idx_behavior_pick_code", "stock_code", "run_date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<BehaviorSignalPick {self.stock_code} {self.kind} score={self.score}>"

@@ -356,7 +356,9 @@ async def get_universe_stats() -> dict[str, Any] | None:
 
 __all__ = [
     "PoolBuildResult",
+    "UniverseStats",
     "build_market_pool",
+    "filter_universe",
     "get_current_pool",
     "get_universe_stats",
 ]

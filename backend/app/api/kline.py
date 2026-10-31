@@ -3,16 +3,65 @@
 - GET /api/kline/{stock_code}?period=daily&limit=60
 - GET /api/kline/{stock_code}/indicators?period=&limit=
     K 线 + 全量指标 + 信号标注点(轻量,不触发 LLM、不进前端 IndexedDB 缓存)
+    追加 `behavior_markers`:四类异动行为标注(主力异动/低吸/锁仓/高抛)
 - 数据源失败 → 502 DATA_SOURCE_UNAVAILABLE(无 mock 兜底)
 """
+from datetime import date as _date, timedelta as _td
+
 from fastapi import APIRouter, HTTPException
 
+from app.core.config import BEHAVIOR_MARKERS_LOOKBACK_DAYS
 from app.core.stock_code import normalize_code
+from app.services.behavior_fund_flow_service import (
+    FundFlowUnavailable,
+    align_by_date,
+    fetch_flow_daily,
+)
+from app.services.behavior_signal_service import detect_behavior_markers
 from app.services.kline_service import KLineSourceUnavailable, fetch_intraday, fetch_klines
 from app.services.overview_service import get_overview
 from app.services.ta_service import TaError, compute_indicators
 
 router = APIRouter(prefix="/kline", tags=["kline"])
+
+
+async def _build_behavior_markers(
+    normalized: str,
+    items: list[dict],
+    period: str,
+) -> tuple[list[dict], bool]:
+    """算四类异动行为标注。
+
+    Returns:
+        (markers, unavailable) —— `unavailable=True` 表示资金流不可用,
+        此时 markers 为空(**不编数字**),但 K 线与既有指标照常返回。
+    """
+    # 只对**日线**做形态回溯标注(周/月/分钟线的口径不同,含义会误导)
+    if period != "daily" or not items:
+        return [], False
+
+    try:
+        flows = await fetch_flow_daily(normalized, count=len(items))
+    except FundFlowUnavailable:
+        return [], True
+    except Exception:  # noqa: BLE001 —— 任何异常都只降级,绝不阻断 K 线主流程
+        return [], True
+
+    flows_by_date = align_by_date(flows)
+    result = detect_behavior_markers(items, flows_by_date)
+
+    # 只回传最近 N 日的标注(避免响应体过大)
+    if not result.markers:
+        return [], False
+    # 以 K 线末根日期为基准回看 N 个日历日
+    try:
+        last = _date.fromisoformat(items[-1].get("date") or "")
+    except ValueError:
+        last = None
+    if last is not None:
+        threshold = (last - _td(days=BEHAVIOR_MARKERS_LOOKBACK_DAYS)).isoformat()
+        return [m.to_dict() for m in result.markers if m.date >= threshold], False
+    return [m.to_dict() for m in result.markers], False
 
 
 @router.get("/{stock_code}/indicators")
@@ -25,6 +74,8 @@ async def get_kline_indicators(
 
     - 数据源失败 → 502
     - 计算失败 / 数据不足 → 指标字段为 None/空,degraded 列表说明
+    - 资金流不可用 → `behavior_markers=[]` + `behavior_markers_unavailable=true`,
+      **不影响** K 线与既有指标
     """
     if period not in {"daily", "weekly", "monthly", "60min", "30min", "15min", "5min", "1min"}:
         raise HTTPException(
@@ -59,12 +110,18 @@ async def get_kline_indicators(
             detail={"code": "INDICATOR_CALC_FAILED", "message": str(e)},
         ) from e
 
+    behavior_markers, behavior_unavailable = await _build_behavior_markers(
+        normalized, items, period
+    )
+
     return {
         "stock_code": normalized,
         "period": period,
         "count": len(items),
         "items": items,
         "indicators": indicators,
+        "behavior_markers": behavior_markers,
+        "behavior_markers_unavailable": behavior_unavailable,
     }
 
 

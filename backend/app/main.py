@@ -21,6 +21,7 @@ from app.modules.paper_trading.api import router as paper_trading_router
 from app.modules.alert.api import router as price_alerts_router
 from app.modules.signal.api import router as signals_router
 from app.modules.analysis.workflow_api import router as workflow_router
+from app.modules.behavior_screener.api import router as behavior_screener_router
 from app.api.cost_settings import router as cost_settings_router
 from app.api.diagnose import router as diagnose_router
 from app.api.events import router as events_router
@@ -272,4 +273,5 @@ app.include_router(risk_report_router, prefix="/api")
 app.include_router(score_calibration_router, prefix="/api")
 app.include_router(screenshot_router, prefix="/api")
 app.include_router(screener_router, prefix="/api")
+app.include_router(behavior_screener_router, prefix="/api")
 app.include_router(stock_router, prefix="/api")
