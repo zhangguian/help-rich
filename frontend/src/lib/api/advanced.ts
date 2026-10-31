@@ -238,6 +238,95 @@ export async function testNotifyChannel(
 }
 
 /* ============================================================
+ * 盘中持仓信号 · 桌面通知(ADR-0007)
+ *
+ * 注意:axios 响应拦截器自动 snake→camel、请求体自动 camel→snake,
+ * 所以这里的类型一律写 camelCase。
+ * ============================================================ */
+
+export interface SignalConfig {
+  enabled: boolean;
+  /** 急速判定窗口(秒) */
+  velocityWindowSec: number;
+  /** 急速判定幅度(%) */
+  velocityPct: number;
+  /** 涨幅突破阈值(%) */
+  breakoutUpPct: number;
+  /** 跌幅突破阈值(%,负数) */
+  breakoutDownPct: number;
+  enableVelocity: boolean;
+  enableBreakout: boolean;
+  enableTPoint: boolean;
+  enableBuyPoint: boolean;
+  /** 同类信号冷却(秒) */
+  cooldownSec: number;
+  /** 单票单日上限 */
+  dailyLimit: number;
+  /** 投递渠道 */
+  channels: string[];
+}
+
+export interface SignalTrigger {
+  id: number;
+  stockCode: string;
+  stockName: string | null;
+  kind: string;
+  level: number | null;
+  value: number | null;
+  title: string;
+  body: string;
+  fingerprint: string;
+  /** 是否真的推送成功(false = 被冷却/限流或发送失败) */
+  notified: boolean;
+  error: string | null;
+  createdAt: string | null;
+}
+
+export interface SignalLevelView {
+  kind: string;
+  level: number;
+  label: string;
+  condition: string;
+  basis: string;
+}
+
+export interface SignalRuntime {
+  /** 触发价最近一次重算时间 */
+  levelsUpdatedAt: string | null;
+  codes: string[];
+  levels: Record<string, SignalLevelView[]>;
+  /** 每只票"今天不适合做T/做网格"的原文原因 */
+  notes: Record<string, string[]>;
+}
+
+export async function fetchSignalConfig(): Promise<{
+  config: SignalConfig;
+  runtime: SignalRuntime;
+}> {
+  return apiGet<{ config: SignalConfig; runtime: SignalRuntime }>('/signals/config');
+}
+
+export async function updateSignalConfig(
+  payload: Partial<SignalConfig>,
+): Promise<{ config: SignalConfig }> {
+  return apiPatch<{ config: SignalConfig }>('/signals/config', payload);
+}
+
+export async function fetchSignalTriggers(
+  stockCode?: string,
+  limit = 50,
+): Promise<{ items: SignalTrigger[] }> {
+  const q = stockCode
+    ? `?stock_code=${encodeURIComponent(stockCode)}&limit=${limit}`
+    : `?limit=${limit}`;
+  return apiGet<{ items: SignalTrigger[] }>(`/signals${q}`);
+}
+
+export async function testSignalToast(): Promise<{ ok: boolean; detail: string }> {
+  return apiPost<{ ok: boolean; detail: string }>('/signals/test');
+}
+
+/* ============================================================
  * 阶段3 · 模拟盘
  * ============================================================ */
 

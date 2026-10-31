@@ -151,6 +151,121 @@
 > 验收实测(2026-10-29):SSE 被断开后前端 3 次失败即切 REST 轮询(每 3s,`fresh=true` 跳过 5 分钟缓存);
 > 后端恢复后 1.7s 内自动回切 SSE 且轮询停止。
 
+### 2.5.4 盘中信号(2026-10-29 新增,ADR-0007)
+
+对**持仓股**的四类盘中事件做检测,命中后**由后端直发 Windows 桌面通知**
+(浏览器关着也能收到)。判定口径复用决策引擎的数值价位,与决策卡同源。
+
+#### GET /api/signals/config
+
+**目的**:读当前配置 + 运行时快照(当前生效的触发价 / 「今日不适合做T」的原文原因)。
+
+**响应 200**:
+```json
+{
+  "config": {
+    "enabled": true,
+    "velocity_window_sec": 60,
+    "velocity_pct": 1.5,
+    "breakout_up_pct": 5.0,
+    "breakout_down_pct": -5.0,
+    "enable_velocity": true,
+    "enable_breakout": true,
+    "enable_t_point": true,
+    "enable_buy_point": true,
+    "cooldown_sec": 600,
+    "daily_limit": 5,
+    "channels": ["desktop"]
+  },
+  "runtime": {
+    "levels_updated_at": "2026-10-29T03:10:00",
+    "codes": ["002185.SZ"],
+    "levels": {
+      "002185.SZ": [
+        {"kind": "t_sell_point", "level": 12.5, "label": "T 卖出点",
+         "condition": "上冲到 12.50", "basis": ""}
+      ]
+    },
+    "notes": {"002185.SZ": ["t_plan: 今日振幅不足,不适合做T"]}
+  }
+}
+```
+
+`notes` 里的内容是**决策引擎自己给的原因原文** —— 不适合时**不产出任何价位**
+(不替用户编一个触发价)。
+
+#### PATCH /api/signals/config
+
+**目的**:改阈值 / 开关 / 渠道(落库)。**只传要改的字段**(全字段可选)。
+
+**请求体**(示例):
+```json
+{"velocity_pct": 2.0, "enable_breakout": false, "channels": ["desktop", "dingtalk"]}
+```
+
+**响应 200**:`{"config": { ...同 GET... }}`
+
+**校验**:窗口 5~3600 秒;急速幅度 0~20%;涨幅突破 0~50%;跌幅突破 -50~0;
+冷却 0~86400 秒;日限流 1~100。越界 → **422**。
+
+#### GET /api/signals
+
+**目的**:最近的信号流水(「为什么推了这条 / 为什么没推」)。
+
+**查询参数**:
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| stock_code | str | 否 | 按代码过滤 |
+| limit | int | 否 | 最多返回条数(1~500,默认 50) |
+
+**响应 200**:
+```json
+{
+  "items": [
+    {
+      "id": 12, "stock_code": "002185.SZ", "stock_name": "华天科技",
+      "kind": "t_sell_point", "level": 12.5, "value": 12.52,
+      "title": "T 卖出点 · 002185.SZ", "body": "...",
+      "fingerprint": "t_sell_point:002185.SZ:1250",
+      "notified": true, "error": null,
+      "created_at": "2026-10-29T03:12:00"
+    }
+  ]
+}
+```
+
+`kind` 取值:`velocity_up` / `velocity_down` / `breakout_up` / `breakout_down` /
+`t_sell_point` / `t_buyback_point` / `grid_sell_point` / `buy_point`。
+
+`notified=false` 表示**没有推出去**:被冷却/日限流(见 `error`)或渠道发送失败。
+**桌面通知由后端弹** —— 前端不调 `new Notification`。
+
+#### GET /api/signals/stream(SSE)
+
+**目的**:盘中信号实时推送。
+
+**响应**:`text/event-stream`,每帧形如 `data: {json}\n\n`
+
+| 帧 | 时机 | payload |
+|---|---|---|
+| `signal_snapshot` | 首帧 | `{event, levels_updated_at, codes[], levels{}, notes{}}` |
+| `signal_fired` | 命中信号且推送成功 | `{event, signal: {id, kind, stock_code, stock_name, level, value, title, body}}` |
+| `:heartbeat` | 30s 无数据 | 注释行,保活 |
+
+**降级(可逆)**:前端连续失败 3 次 → 退回 `GET /api/signals` 拉流水(5s);
+降级期间**不关闭** EventSource,后端恢复后自动回切 SSE(与 `/api/quotes/stream` 同款)。
+
+#### POST /api/signals/test
+
+**目的**:真弹一条桌面通知(验通道是否通)。
+
+**响应 200**:`{"ok": true, "detail": "OK:BALLOON"}`
+(`detail` 的 `OK:BALLOON` = 走托盘气泡兜底;`OK:<AUMID>` = 走了 WinRT 通知中心 Toast)
+
+**失败**:非 Windows → `ok=false` + `detail` 说明;两条路径都失败 → `ok=false`。
+
+---
+
 ## 3. 交易流水
 
 ### 3.1 GET /api/transactions

@@ -17,6 +17,7 @@ from app.modules.notify.base import (
 from app.modules.notify.channels import (
     BarkNotifier,
     ConsoleNotifier,
+    DesktopNotifier,
     DingTalkNotifier,
     WeComNotifier,
     WebhookNotifier,
@@ -30,6 +31,12 @@ def _build_notifier(channel: str, config: dict | None) -> Notifier | None:
     try:
         if channel == NotifyChannel.CONSOLE.value:
             return ConsoleNotifier()
+        if channel == NotifyChannel.DESKTOP.value:
+            # 桌面通知零凭据;AUMID / 投递模式(toast|balloon|auto)可选
+            return DesktopNotifier(
+                aumid=cfg.get("aumid") or None,
+                mode=cfg.get("mode") or "auto",
+            )
         if channel == NotifyChannel.DINGTALK.value:
             webhook = cfg.get("webhook")
             if not webhook:

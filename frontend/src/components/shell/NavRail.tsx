@@ -58,6 +58,7 @@ const GROUPS: NavGroup[] = [
     title: '执行',
     items: [
       { href: '/price-alerts', label: '提醒', icon: '🔔' },
+      { href: '/signals', label: '盘中信号', icon: '📡' },
       { href: '/paper-trading', label: '模拟盘', icon: '🎮' },
     ],
   },

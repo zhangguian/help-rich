@@ -1144,3 +1144,84 @@ class IntradayReview(Base):
 
     def __repr__(self) -> str:
         return f"<IntradayReview {self.trade_date} {self.slot}>"
+
+
+# ============================================================
+# === 盘中持仓信号 · 桌面通知(ADR-0007) ===
+# ============================================================
+
+
+class IntradaySignalConfig(Base):
+    """盘中信号配置(单行,id=1)
+
+    与 `CostSettings` 同款单行设置范式:缺行 = 回落这里的默认值。
+    阈值口径全部可改 —— 判定层只读这里的值,不改判定逻辑。
+    """
+
+    __tablename__ = "intraday_signal_config"
+
+    id: Mapped[int] = mapped_column(default=1, primary_key=True)
+    # 总开关
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # 急速判定:窗口秒数 / 幅度阈值(%)
+    velocity_window_sec: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    velocity_pct: Mapped[float] = mapped_column(Float, default=1.5, nullable=False)
+    # 突破判定:相对昨收的 ±%(涨为正、跌为负)
+    breakout_up_pct: Mapped[float] = mapped_column(Float, default=5.0, nullable=False)
+    breakout_down_pct: Mapped[float] = mapped_column(Float, default=-5.0, nullable=False)
+    # 四类信号各自开关
+    enable_velocity: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    enable_breakout: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    enable_t_point: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    enable_buy_point: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # 同类信号冷却(秒)/ 单票单日上限(次)
+    cooldown_sec: Mapped[int] = mapped_column(Integer, default=600, nullable=False)
+    daily_limit: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    # 投递渠道(JSON 数组)。desktop 零凭据,其余渠道需在通知设置里已启用
+    channels_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+    def __repr__(self) -> str:
+        return f"<IntradaySignalConfig enabled={self.enabled}>"
+
+
+class IntradaySignalTrigger(Base):
+    """盘中信号触发流水(前端可查"为什么推了这条 / 为什么没推")。
+
+    `fingerprint` 落库 → 到价类信号**跨后端重启**也不会重复提醒
+    (内存限流器重启即清零,靠这张表兜住)。
+    """
+
+    __tablename__ = "intraday_signal_trigger"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_code: Mapped[str] = mapped_column(String, nullable=False)
+    stock_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    # 触发价(到价类)/ 触发幅度(斜率、突破类)
+    level: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String, nullable=False)
+    # 是否真的推送成功(False = 被冷却/限流或发送失败)
+    notified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+    __table_args__ = (
+        Index("idx_intraday_signal_code_time", "stock_code", "created_at"),
+        Index("idx_intraday_signal_fp", "fingerprint", "created_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<IntradaySignalTrigger {self.stock_code} {self.kind} notified={self.notified}>"
+
+
+# ============================================================
+# === K 线异动行为标注(四信号)相关表 ===
+# ============================================================
+
+

@@ -8,13 +8,11 @@
 import asyncio
 import json
 import logging
-from dataclasses import replace
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.core.instrument import resolve_instrument
 from app.services.kline_service import KLineSourceUnavailable, fetch_klines
 from app.modules.portfolio.service import get_position
 from app.services.quote_service import QuoteService
@@ -28,16 +26,13 @@ from app.services.stock_advice_service import (
     stream_stock_analysis,
 )
 from app.services.industry_service import resolve_industry, resolve_industry_sync
-from app.services.decision_service import DecisionContext, MarketContext, build_decision
-from app.services.decision_advice_service import (
-    build_advice,
-    build_fact_pack,
-    compose_rule_advice,
-)
-from app.services.decision_context_service import (
-    enrich_decision_context,
-    load_decision_extras,
-    parse_date,
+from app.services.decision_service import build_decision
+from app.services.decision_advice_service import build_advice, build_fact_pack
+from app.services.decision_context_service import load_decision_extras
+from app.services.decision_runtime import (
+    DecisionDataUnavailable,
+    DecisionDeps,
+    build_decision_payload,
 )
 from app.services.market_context_service import get_market_context
 from app.services.position_status import (
@@ -45,7 +40,6 @@ from app.services.position_status import (
     resolve_position_status as _resolve_position_status,
     sanitize_current_price as _sanitize_current_price,
 )
-from app.services.ta_service import compute_indicators
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +109,23 @@ def _check_question(question: str) -> str:
     return q
 
 
+def _decision_deps() -> DecisionDeps:
+    """决策装配依赖 —— 注入**本模块**的可 patch 点。
+
+    装配逻辑本体已下沉到 `app/services/decision_runtime.py`(盘中信号模块要复用同源口径),
+    但既有测试 patch 的是 `app.api.stock.fetch_klines` / `get_position` /
+    `get_market_context` / `load_decision_extras` / `build_decision`。
+    这里在**调用时**读取模块属性,保证这些 patch 依旧生效,测试无需改写。
+    """
+    return DecisionDeps(
+        fetch_klines=fetch_klines,
+        get_position=get_position,
+        get_market_context=get_market_context,
+        load_decision_extras=load_decision_extras,
+        build_decision=build_decision,
+    )
+
+
 async def _compute_decision(
     code: str,
     klines: list[dict] | None = None,
@@ -124,8 +135,12 @@ async def _compute_decision(
 ) -> dict:
     """装配决策上下文并算出决策(零 LLM)。
 
+    装配本体在 `app/services/decision_runtime.py`;本函数只做**api 层适配**:
+    1. 按 `_provided` 决定是否自行取 K 线 / 行情;
+    2. 把 service 层的 `DecisionDataUnavailable` 翻译成 HTTP 502。
+
     `/decision` 与 `/decision-advice` 共用这一条路径 → 两处口径必然一致。
-    `klines`/`quote` 可由调用方传入(analysis 端点已有,复用即可,不重复拉取)。
+    盘中信号模块也走同一条 runtime → 决策卡与桌面信号**口径 100% 同源**。
 
     ⚠️ `_provided=True` 表示「klines/quote 已由调用方给出」—— 即使 quote 为 None
     (拿不到报价)也不重复拉取。否则 analysis 端点会多打一次 K 线接口。
@@ -139,104 +154,22 @@ async def _compute_decision(
             _load_klines(code),
             _load_quote(code),
         )
-    current_price, _ = _sanitize_current_price(quote, klines)
-    # 持仓读取降级:SQLite 在并发写(如选股落库)时可能抛 database is locked,
-    # 不能让整张决策卡 500 —— 按空仓继续,并在 degraded 里如实标注。
-    position_failed = False
     try:
-        position = await get_position(code)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("决策端点读取持仓失败(%s): %s", code, e)
-        position = None
-        position_failed = True
-    position_status, _ = _resolve_position_status(
-        position, current_price, _kline_fallback_price(klines)
-    )
-
-    try:
-        indicators = compute_indicators(klines)
-    except Exception as e:  # noqa: BLE001
+        return await build_decision_payload(
+            code,
+            klines=klines,
+            quote=quote,
+            include_env=include_env,
+            need_extras=True,
+            # `_provided=True` → 报价已由调用方给过,即便为 None 也不重复拉取
+            quote_is_final=_provided,
+            deps=_decision_deps(),
+        )
+    except DecisionDataUnavailable as e:
         raise HTTPException(
             status_code=502,
-            detail={"code": "DATA_SOURCE_UNAVAILABLE", "message": f"K 线指标计算失败: {e}"},
+            detail={"code": "DATA_SOURCE_UNAVAILABLE", "message": str(e)},
         ) from e
-
-    prev_close = None
-    if quote is not None:
-        try:
-            prev_close = float(quote.prev_close) if quote.prev_close is not None else None
-        except (TypeError, ValueError):
-            prev_close = None
-    if prev_close is None and len(klines) >= 2:
-        try:
-            prev_close = float(klines[-2]["close"])
-        except (TypeError, ValueError):
-            prev_close = None
-
-    change_pct = None
-    if quote is not None and quote.change_pct is not None:
-        try:
-            change_pct = float(quote.change_pct)
-        except (TypeError, ValueError):
-            change_pct = None
-
-    if include_env:
-        try:
-            env = await get_market_context(code, stock_change_pct=change_pct)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("决策端点市场环境聚合失败(%s): %s", code, e)
-            env = None
-        if env is None:
-            env = MarketContext(degraded=["市场环境不可用"])
-        if position_failed:
-            env = replace(env, degraded=[*env.degraded, "持仓读取失败,按空仓给出建仓参考"])
-    else:
-        # analysis 端点的事实包:不取市场环境(省掉 4~5 次外部 HTTP)
-        env = MarketContext(degraded=["市场环境未纳入事实包"])
-    inst = resolve_instrument(code)
-    ctx = DecisionContext(
-        stock_code=code,
-        stock_name=getattr(position, "stock_name", None) if position is not None else None,
-        indicators=indicators,
-        klines=klines,
-        current_price=float(current_price) if current_price is not None else None,
-        prev_close=prev_close,
-        # 空仓时 Position.avg_cost 是 Decimal("0"),语义上不等于"有成本",给 None
-        cost_basis=(
-            float(position.avg_cost)
-            if position is not None and position.shares and position.shares > 0
-            else None
-        ),
-        shares=int(position.shares) if position is not None and position.shares else 0,
-        position_status=position_status,
-        env=env,
-        # 品种属性:ETF 无涨跌停、跨境/黄金类 T+0 → 判定口径要分流
-        instrument_kind=inst.kind,
-        t0=inst.t0,
-    )
-
-    # v0.10:新增输入(费用档 / 现金 / 集中度 / 持有天数)—— 与计算器 T 卡共用同一装配口
-    latest_kline_date = klines[-1]["date"] if klines else None
-    extras = await load_decision_extras(code, as_of=parse_date(latest_kline_date))
-    ctx = enrich_decision_context(ctx, extras)
-
-    decision = build_decision(ctx)
-    degraded = decision.setdefault("data_quality", {}).setdefault("degraded", [])
-    for note in extras.degraded:
-        if note not in degraded:
-            degraded.append(note)
-
-    # 规则白话兜底(零 LLM、零延迟):决策卡永不空白
-    decision["advice"] = {
-        **compose_rule_advice(build_fact_pack(decision, as_of=latest_kline_date)),
-        "source": "rule",
-    }
-
-    return {
-        "decision": decision,
-        "klines": klines,
-        "latest_kline_date": latest_kline_date,
-    }
 
 
 async def _build_fact_pack(

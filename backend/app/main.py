@@ -19,6 +19,7 @@ from app.modules.notify.api import router as notify_router
 from app.api.onboarding import router as onboarding_router
 from app.modules.paper_trading.api import router as paper_trading_router
 from app.modules.alert.api import router as price_alerts_router
+from app.modules.signal.api import router as signals_router
 from app.modules.analysis.workflow_api import router as workflow_router
 from app.api.cost_settings import router as cost_settings_router
 from app.api.diagnose import router as diagnose_router
@@ -170,6 +171,10 @@ async def lifespan(app: FastAPI):
         _spawn(start_price_alert_scheduler(interval_sec=60))
         # 秒级盯盘行情轮询(2s 一轮,交易时段内;快照经 SSE 推前端)
         _spawn(start_quote_poller(interval_sec=2))
+        # 盘中持仓信号(快信号跟行情帧;慢信号每 60s 重算一次触发价)
+        from app.modules.signal.scheduler import start_signal_scheduler
+
+        _spawn(start_signal_scheduler(interval_sec=60))
         # 阶段3:模拟盘收盘后净值快照
         _spawn(start_paper_scheduler(interval_sec=1800))
         # 阶段4:三段式 Agent(盘前 08:30 / 盘中 11:30,14:50)
@@ -237,6 +242,7 @@ app.include_router(annual_report_router, prefix="/api")
 app.include_router(calculator_router, prefix="/api")
 app.include_router(notify_router, prefix="/api")
 app.include_router(price_alerts_router, prefix="/api")
+app.include_router(signals_router, prefix="/api")
 app.include_router(backtest_router, prefix="/api")
 app.include_router(battle_plan_router, prefix="/api")
 app.include_router(intraday_review_router, prefix="/api")

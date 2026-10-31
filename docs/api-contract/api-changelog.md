@@ -28,6 +28,33 @@
 
 ## 历史记录
 
+### 2026-10-29 | v0.14 | 盘中持仓信号:桌面通知渠道 + 信号模块(ADR-0007)
+
+#### Added(新增)
+- **`desktop` 通知渠道**(`NotifyChannel.DESKTOP`):后端直发 Windows 桌面通知
+  (PowerShell + WinRT `ToastNotificationManager`,**零新 pip 依赖**);
+  平台不受理 package identity 时自动降级到托盘气泡(`NotifyIcon.ShowBalloonTip`)。
+  复用既有 `POST /api/notify/channels/{channel}/test` 自检路由。
+- **`GET /api/signals/config`**:盘中信号配置 + 运行时快照(当前触发价 + 不适合做T 的原文原因)。
+- **`PATCH /api/signals/config`**:改阈值 / 四类开关 / 投递渠道 / 冷却 / 日限流(落库)。
+- **`GET /api/signals`**:信号流水(`?stock_code=`、`?limit=`),含 `notified` 与 `error`
+  —— 可查「为什么推了这条 / 为什么没推」。
+- **`GET /api/signals/stream`(SSE)**:首帧 `signal_snapshot`,命中时 `signal_fired`,
+  30s `:heartbeat` 保活。
+- **`POST /api/signals/test`**:真弹一条桌面通知(验通道是否通)。
+- **`app/modules/signal/`**:判定(engine,纯函数)/ 编排(service)/ 调度(scheduler)/
+  仓储(repository)/ 路由(api)五个文件。
+- **`app/services/decision_runtime.py`**:决策装配下沉到服务层(供信号模块复用,口径同源)。
+
+#### Changed(修改)
+- `GET /api/notify/channels` 的 `items` 多一项 `desktop` 渠道(默认未启用、零凭据)。
+- 新增表 `intraday_signal_config`(单行配置)与 `intraday_signal_trigger`(触发流水,
+  指纹落库 → 到价类信号**跨后端重启**也只提醒一次)。
+
+#### Fixed(修复)
+- `GET /api/stock/{code}/decision` 的装配逻辑改为委托 `app/services/decision_runtime.py`
+  —— **纯重构,零行为变化**;既有测试的 patch 点保持不变。
+
 ### 2026-10-29 | v0.13 | 秒级盯盘:行情 SSE 推送 + 热路径零缓存(ADR-0006)
 
 #### Added(新增)

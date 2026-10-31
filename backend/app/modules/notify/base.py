@@ -19,6 +19,7 @@ class NotifyChannel(str, enum.Enum):
     """支持的推送渠道。"""
 
     CONSOLE = "console"      # 本地日志/终端,默认开启,零配置
+    DESKTOP = "desktop"      # Windows 原生桌面通知(Toast),零配置
     DINGTALK = "dingtalk"    # 钉钉机器人
     WECOM = "wecom"          # 企业微信机器人
     BARK = "bark"            # Bark(iOS)
@@ -28,6 +29,7 @@ class NotifyChannel(str, enum.Enum):
 # 展示名(前端直接用,避免各页面各写一份中文映射)
 CHANNEL_LABELS: dict[str, str] = {
     NotifyChannel.CONSOLE.value: "终端日志",
+    NotifyChannel.DESKTOP.value: "桌面通知",
     NotifyChannel.DINGTALK.value: "钉钉",
     NotifyChannel.WECOM.value: "企业微信",
     NotifyChannel.BARK.value: "Bark",

@@ -14,6 +14,7 @@ from app.modules.notify.base import CHANNEL_LABELS, NotifyChannel
 from app.modules.notify.channels import (
     BarkNotifier,
     ConsoleNotifier,
+    DesktopNotifier,
     DingTalkNotifier,
     WeComNotifier,
     WebhookNotifier,
@@ -73,7 +74,14 @@ class NotifyConfigService:
         """发一条测试消息;失败记入 last_error 并把原因带回给调用方。"""
         config = await notify_config_repo.get_decrypted_config(channel)
 
-        if channel == NotifyChannel.CONSOLE.value:
+        if channel == NotifyChannel.DESKTOP.value:
+            # 桌面通知零凭据(可选用 aumid / mode 指定借用哪个应用与投递方式)
+            desktop_cfg = config or {}
+            notifier = DesktopNotifier(
+                aumid=desktop_cfg.get("aumid"),
+                mode=desktop_cfg.get("mode") or "auto",
+            )
+        elif channel == NotifyChannel.CONSOLE.value:
             notifier = ConsoleNotifier()
         elif not config:
             raise ValueError("渠道尚未配置")

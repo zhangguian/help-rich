@@ -137,6 +137,32 @@ class BarkNotifier(_HttpNotifier):
         return NotifyResult.success(self.channel.value, "已推送")
 
 
+class DesktopNotifier(Notifier):
+    """Windows 原生桌面通知:零配置,浏览器关着也能收到。
+
+    两条投递路径(见 `app/modules/notify/desktop_toast.py`):
+    - `toast`   WinRT 通知中心卡片(现代 Toast)
+    - `balloon` Win32 托盘气泡(不需要 package identity,受限环境兜底)
+    - `auto`    先 Toast,平台不认身份时自动降级到气泡(默认)
+
+    这里只做 DTO → 调用 → 结果转换。
+    """
+
+    channel = NotifyChannel.DESKTOP
+
+    def __init__(self, aumid: str | None = None, mode: str = "auto") -> None:
+        self._aumid = aumid
+        self._mode = mode or "auto"
+
+    async def send(self, message: NotifyMessage) -> NotifyResult:
+        from app.modules.notify.desktop_toast import send_toast
+
+        detail = await send_toast(
+            message.title, message.body, self._aumid, mode=self._mode
+        )
+        return NotifyResult.success(self.channel.value, detail or "已弹出桌面通知")
+
+
 class WebhookNotifier(_HttpNotifier):
     """通用 Webhook:把消息原样 JSON POST 出去,便于对接自建服务。"""
 
@@ -169,6 +195,7 @@ __all__ = [
     "BarkNotifier",
     "CHANNEL_LABELS",
     "ConsoleNotifier",
+    "DesktopNotifier",
     "DingTalkNotifier",
     "WeComNotifier",
     "WebhookNotifier",

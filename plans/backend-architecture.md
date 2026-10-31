@@ -62,7 +62,7 @@ SSE 订阅       ←────   主动推送
 | 数据校验 | Pydantic | 2.9.2 |
 | 配置 | python-dotenv | 1.0.1 |
 | HTTP 客户端 | httpx | 0.27.2 |
-| 行情数据 | akshare | ≥1.13.0 |
+| 行情数据 | ~~akshare~~ → **不采用**(2026-10-29 ADR-0006);新浪 `hq.sinajs.cn` / 腾讯 `qt.gtimg.cn` | — |
 | 测试 | pytest | 8.3.3 |
 | 异步测试 | pytest-asyncio | 0.24.0 |
 | 数值精度 | Python `decimal`(内置) | — |
@@ -693,6 +693,23 @@ async def get_annual_report(year: int):
 
 ### 5.8 akshare 长期风险与对策(v1.4 新增)
 
+> **2026-10-29 更新(ADR-0006)**:akshare **已评估,决定不引入**。
+>
+> 实测结论(详见 `docs/dev-log/ADR-0006-akshare-evaluation-and-second-level-quotes.md`):
+> - akshare 的东财系接口**全部携带 `ut` 令牌**(源码实测 19 文件 / 53 处 / 5 个令牌值),
+>   而带令牌的请求在公司网络下被网关**直接 RST** —— 即使注入浏览器 UA + Referer 也一样;
+> - 依赖足迹会把 pandas / lxml / bs4 / curl_cffi / mini-racer(V8) 拉进当前极简 venv;
+> - 它"省掉自己写爬虫"的价值在本项目**不成立** —— 新浪/腾讯行情、资金流、快讯、领涨股、
+>   申万行业成分、全市场快照均已手搓且稳定。
+>
+> **将来若确需东财数据**:走**东财原生 HTTP 封装**(`app/data/eastmoney.py`,
+> **不带 `ut` 令牌**、低频 ≥10s、`trust_env=False`、连通性门禁),
+> 而**不是**把 akshare 拖进来。
+> 实测可用的东财端点:`datacenter-web`(沪深港通/北向,0.61s)、`push2ex`(涨停池,10.8s);
+> `push2` / `push2his` 属**机会性可用**(高频后整域 RST)。
+>
+> 以下 §5.8.1~§5.8.4 保留为**历史决策记录**,不作为当前实施依据。
+
 > **风险本质**:akshare 是无官方维护的社区爬虫库,接口依赖上游网站(东财等)的页面结构,上游改版即挂。历史上 `stock_zh_a_spot_em` 已多次变更字段。
 
 #### 5.8.1 风险分级(MVP 实际暴露面)
@@ -731,6 +748,49 @@ requirements.txt 锁定 akshare==x.y.z(精确版本,不用 >=)
 1. 跑一次全市场列表拉取,确认成功率
 2. 检查 akshare 是否有新版本、release notes 是否提到接口变更
 3. 与东财列表抽样对账 10 只股票价格(沿用 §13.3 校验规则)
+
+### 5.9 盘中信号模块 + 桌面通知渠道(2026-10-29 新增,ADR-0007)
+
+对**持仓股**的四类盘中事件(急速涨跌 / 涨跌幅突破 / 预测做T点 / 预测买点)做检测,
+命中后**由后端直发 Windows 桌面通知**(浏览器关着也能收到)。
+
+**模块布局**(`app/modules/signal/`,与用户手写规则的 `alert` 域分开):
+
+```
+app/modules/signal/
+├── engine.py       判定(纯函数,零 IO、零 LLM):斜率 / 突破 / 到价
+├── service.py      编排:去重 → 通知 → 落库 → 广播
+├── scheduler.py    常驻循环:快信号跟行情帧;慢信号 60s 重算触发价
+├── repository.py   配置(单行) + 触发流水
+└── api.py          GET/PATCH /api/signals/*、GET /api/signals/stream(SSE)
+```
+
+**检测分层**:
+
+| 层 | 信号 | 数据源 | 频率 | 成本 |
+|---|---|---|---|---|
+| L1 快信号 | 急速拉升/下跌 | 2s 帧滚动窗口 | 每帧 | 纯内存 |
+| L1 快信号 | 涨幅/跌幅突破 | 现价 + 昨收 | 每帧 | 纯内存 |
+| L2 慢信号 | 做T点、买点 | 决策引擎**数值**价位 | 触发价 60s 重算,现价每帧比对 | 重算 ~1~3s/11 票 |
+
+**帧从哪来**:复用 `services/quote_poller.py` 广播的 `quote_update` 事件
+(`event_bus.subscribe_callback`)→ **不额外打行情源**。
+
+**口径同源**:触发价取自 `judge_t_plan` / `judge_grid_plan` / `actions`(只取**数值**,
+**绝不解析文本触发语**)。决策装配已下沉到 `app/services/decision_runtime.py`
+(modules 不得 import `app.api.*`)→ 决策卡与信号**同源**。
+
+**新增通知渠道 `desktop`**(`app/modules/notify/`):
+
+- `base.py`:`NotifyChannel.DESKTOP` + `CHANNEL_LABELS["desktop"] = "桌面通知"`。
+- `desktop_toast.py`:PowerShell + WinRT `ToastNotificationManager`(零新 pip 依赖);
+  平台不受理 package identity 时降级到托盘气泡(`NotifyIcon.ShowBalloonTip`)。
+- `channels.py`:`DesktopNotifier`;`service.py::_build_notifier` / `config_service.py::test_channel` 加分支。
+
+**新增表**:`intraday_signal_config`(单行 id=1)、`intraday_signal_trigger`(流水 + 指纹去重)。
+
+**并发与门禁**:非交易时段完全停跑(`core/trading_time.py`);持仓集合每次现取;
+慢信号重算用 `asyncio.gather` + `Semaphore(4)` 限并发。
 
 ---
 
