@@ -162,19 +162,11 @@ class TestLookbackWindow:
     旧实现是「`last` 解析失败 → **不过滤,全量返回**」——
     基准日都算不出来还把全部历史标注倒给前端,等于窗口闸门形同虚设。
     新实现统一走 `filter_markers_by_window`,基准日取不到 → 不产出标注。
+
+    ⚠️ **窗口边界按「日历天」钉死**:base−120 天(留)与 base−121 天(剔)两条断言
+    合起来把**有效窗口**锁死在 120 个日历天 —— 窗口常量一改(60/121/240…),
+    这两条必有一条失败(不像「远超窗口」那样怎么改都绿)。
     """
-
-    @staticmethod
-    def _days(n: int) -> list[str]:
-        import datetime as _dt
-
-        out: list[str] = []
-        d = _dt.date(2026, 1, 1)
-        while len(out) < n:
-            if d.weekday() < 5:
-                out.append(d.isoformat())
-            d += _dt.timedelta(days=1)
-        return out
 
     class _M:
         """最小的标注替身(只需 date 与 to_dict)。"""
@@ -197,25 +189,31 @@ class TestLookbackWindow:
             }
 
     async def test_markers_outside_120_days_are_filtered(self, monkeypatch):
-        """距基准日远超 120 日历天的标记 → 剔除;基准日当天的 → 保留。"""
+        """**有效窗口 = 120 个日历天**:base−120 留、base−121 剔、基准日当天留。
+
+        边界这两条合起来把窗口锁死在 120 天(常量一改必挂)。
+        """
         from app.api import kline as kline_api
 
-        days = self._days(200)
-        base = days[-1]
-        old = days[0]
-        items = [
-            {
-                "date": dd, "open": "10.0", "high": "10.1", "low": "9.9",
-                "close": "10.0", "volume": 100000,
-            }
-            for dd in days
-        ]
+        days = _dates(200)
+        items = _klines(200)
+        base = items[-1]["date"]
+        base_date = date.fromisoformat(base)
+        # 窗口边界(按**日历天**算,不必是交易日):120 天留、121 天剔
+        edge_in = (base_date - timedelta(days=120)).isoformat()
+        edge_out = (base_date - timedelta(days=121)).isoformat()
+        old = days[0]  # 距 base ≈ 280 个日历天 → 必剔
 
         async def fake_flows(code, count=120, **k):
             return [{"date": dd, "net_amount": 1.0} for dd in days]
 
         class _Res:
-            markers = [TestLookbackWindow._M(old), TestLookbackWindow._M(base)]
+            markers = [
+                TestLookbackWindow._M(old),
+                TestLookbackWindow._M(edge_out),
+                TestLookbackWindow._M(edge_in),
+                TestLookbackWindow._M(base),
+            ]
             degraded = []
 
         def fake_detect(ks, flows, **k):
@@ -228,10 +226,17 @@ class TestLookbackWindow:
             "600519.SH", items, "daily"
         )
         assert unavailable is False
-        # 200 个工作日 ≈ 280 日历天前 → 被过滤掉
-        assert all(m["date"] != old for m in markers)
+        kept = {m["date"] for m in markers}
         # 基准日当天保留
-        assert any(m["date"] == base for m in markers)
+        assert base in kept
+        # 恰好 120 个日历天(边界含端点)→ 保留
+        assert edge_in in kept
+        # 121 个日历天(刚出窗口)→ 剔除
+        assert edge_out not in kept
+        # 远超窗口(≈280 个日历天)→ 剔除
+        assert old not in kept
+        # 只剩「基准日」与「base−120」两条 —— 窗口一改这里必炸
+        assert kept == {base, edge_in}, f"有效窗口不是 120 个日历天:kept={sorted(kept)}"
 
     async def test_unparsable_base_date_yields_no_markers(self, monkeypatch):
         """⚠️ **本组测试的核心** —— 基准日取不到 → **不产出标注**。
@@ -241,14 +246,8 @@ class TestLookbackWindow:
         """
         from app.api import kline as kline_api
 
-        days = self._days(200)
-        items = [
-            {
-                "date": dd, "open": "10.0", "high": "10.1", "low": "9.9",
-                "close": "10.0", "volume": 100000,
-            }
-            for dd in days
-        ]
+        days = _dates(200)
+        items = _klines(200)
         # 末根日期不可解析 → 基准日取不到
         items[-1] = {**items[-1], "date": "不是日期"}
 
