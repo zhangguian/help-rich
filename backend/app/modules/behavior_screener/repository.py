@@ -54,6 +54,9 @@ async def upsert_run(
     total_picks: int,
     elapsed_sec: float | None,
     note: str | None = None,
+    hit_counts_json: str | None = None,
+    data_as_of: date | None = None,
+    is_intraday: bool = False,
 ) -> BehaviorSignalRun:
     """UPSERT 批次(同一天重跑覆盖)。"""
     async with async_session() as session:
@@ -69,6 +72,9 @@ async def upsert_run(
             existing.total_picks = total_picks
             existing.elapsed_sec = elapsed_sec
             existing.note = note
+            existing.hit_counts_json = hit_counts_json
+            existing.data_as_of = data_as_of
+            existing.is_intraday = is_intraday
             await session.commit()
             await session.refresh(existing)
             return existing
@@ -84,6 +90,9 @@ async def upsert_run(
             total_picks=total_picks,
             elapsed_sec=elapsed_sec,
             note=note,
+            hit_counts_json=hit_counts_json,
+            data_as_of=data_as_of,
+            is_intraday=is_intraday,
         )
         session.add(run)
         await session.commit()

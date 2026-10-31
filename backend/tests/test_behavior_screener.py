@@ -404,3 +404,37 @@ class TestApi:
         assert data["groups"]
         assert data["groups"][0]["kind"] == KIND_DIP_BUY
         assert data["groups"][0]["picks"][0]["stock_code"] == "600519.SH"
+
+
+class TestRunTrustFields:
+    """闸 1 / 闸 4 的批次字段:真实分类计数 + 数据时点 + 是否盘中。"""
+
+    async def test_trust_fields_roundtrip(self):
+        from app.modules.behavior_screener import repository as repo
+
+        run = await repo.upsert_run(
+            date(2026, 10, 30),
+            pool_size=5574, main_board_count=3193, non_st_count=3053,
+            after_filters_count=1941, candidates_considered=1817,
+            total_picks=402, elapsed_sec=53.1, note=None,
+            hit_counts_json='{"main_force_move": 268, "dip_buy": 96}',
+            data_as_of=date(2026, 10, 30),
+            is_intraday=False,
+        )
+        assert run.hit_counts_json == '{"main_force_move": 268, "dip_buy": 96}'
+        assert run.data_as_of == date(2026, 10, 30)
+        assert run.is_intraday is False
+
+    async def test_is_intraday_defaults_false(self):
+        """不传 is_intraday → False(存量批次行不因缺字段而崩)。"""
+        from app.modules.behavior_screener import repository as repo
+
+        run = await repo.upsert_run(
+            date(2026, 10, 29),
+            pool_size=1, main_board_count=1, non_st_count=1,
+            after_filters_count=1, candidates_considered=1,
+            total_picks=0, elapsed_sec=0.1, note=None,
+        )
+        assert run.is_intraday is False
+        assert run.hit_counts_json is None
+        assert run.data_as_of is None

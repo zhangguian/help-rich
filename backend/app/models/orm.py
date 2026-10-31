@@ -1279,6 +1279,16 @@ class BehaviorSignalRun(Base):
     # 命中信号总数(入库条数)
     total_picks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     elapsed_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 每类**真实**命中数(JSON: {"main_force_move": 268, "dip_buy": 96, ...})
+    # ⚠️ 与 `total_picks` 的区别:total_picks 是**总数**,这里是**分类别**的真实命中数。
+    # 两者都必须是「真实命中数」,不是「入库条数」—— 入库可能因分页而少于命中。
+    hit_counts_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 本批数据中**已收盘**的最后交易日(闸 4:批次的数据时点)
+    data_as_of: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # 本批是否额外包含当日**未收盘**数据(闸 4:区分盘后完整数据与盘中半成品)
+    is_intraday: Mapped[bool] = mapped_column(
+        Boolean, nullable=True, default=False, server_default="0"
+    )
     # 降级说明(如「资金流不可用」)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
