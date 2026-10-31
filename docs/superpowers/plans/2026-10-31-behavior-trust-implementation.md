@@ -493,33 +493,18 @@ BEHAVIOR_MARKERS_LOOKBACK_DAYS = 60
 BEHAVIOR_MARKERS_LOOKBACK_DAYS = 120
 ```
 
-把
-
-```python
-# 全市场快照粗筛后进入逐票算信号的候选数上限
-BEHAVIOR_SCREENER_CANDIDATE_LIMIT = 120
-```
-
-改成
-
-```python
-# 全市场快照粗筛后进入逐票算信号的候选数上限
-#
-# ⚠️ **None = 不截断**(2026-10-31 修复):
-# 旧的「取前 120」是**筛选维度与被筛目标的时间窗错配** ——
-# 候选池按「当日资金异动强度」排序,打分对象却是历史窗口内的信号,
-# 于是「20 天前有强信号、今天资金平淡」的票压根进不了池子。
-# 成交额闸门(POOL_MIN_AMOUNT_YI)保留 —— 那是合理的业务闸门。
-# 保留该参数供测试与小规模分级验证(传 300 / 600)。
-BEHAVIOR_SCREENER_CANDIDATE_LIMIT: int | None = None
-```
-
 并在其后新增：
 
 ```python
 # 每类分组在 /latest 响应里返回的明细条数上限(真实总数靠 count 披露)
 BEHAVIOR_SCREENER_GROUP_PAGE_N = 60
 ```
+
+> 🚫 **本 Task 不动 `BEHAVIOR_SCREENER_CANDIDATE_LIMIT`**（2026-10-31 调整）：
+> 「取消候选池截断」是**行为变更**，它必须和**真正改代码的那一步**在同一个 Task 里落地 ——
+> 否则会出现「配置说 `None`、代码还在 `[:120]`」的中间态，Task 之间无法独立验收。
+> 该常量的改动已挪到 **Task 3**（那里才改 `scan_market` 的截断逻辑）。
+> 本 Task 的改动是**纯增量**：3 个纯函数 + 2 个常量（`LOOKBACK_DAYS` 60→120、新增 `GROUP_PAGE_N`）。
 
 - [ ] **Step 4: 实现三个纯函数**
 
@@ -859,7 +844,32 @@ Expected: FAIL —— `total_picks` 是 60（被截断）/ `candidates_considere
 
 - [ ] **Step 4: 改 `scan_market` —— 去截断 + 窗口过滤 + 真实计数**
 
-在 `scan_market` 里，把
+先在 `backend/app/core/config.py` 把
+
+```python
+# 全市场快照粗筛后进入逐票算信号的候选数上限
+BEHAVIOR_SCREENER_CANDIDATE_LIMIT = 120
+```
+
+改成
+
+```python
+# 全市场快照粗筛后进入逐票算信号的候选数上限
+#
+# ⚠️ **None = 不截断**(2026-10-31 修复):
+# 旧的「取前 120」是**筛选维度与被筛目标的时间窗错配** ——
+# 候选池按「当日资金异动强度」排序,打分对象却是历史窗口内的信号,
+# 于是「20 天前有强信号、今天资金平淡」的票压根进不了池子。
+# 成交额闸门(POOL_MIN_AMOUNT_YI)保留 —— 那是合理的业务闸门。
+# 保留该参数供测试与小规模分级验证(传 300 / 600)。
+BEHAVIOR_SCREENER_CANDIDATE_LIMIT: int | None = None
+```
+
+> ⚠️ 常量默认值在**模块导入期**求值 → `scan_market` / `run_daily_scan` 的
+> `candidate_limit: int = BEHAVIOR_SCREENER_CANDIDATE_LIMIT` 会拿到 `None`。
+> 所以这两个签名必须**同步**改成 `int | None`（见下一步），否则类型标注撒谎。
+
+然后在 `scan_market` 里，把
 
 ```python
     candidates, stats = filter_universe(rows, min_amount_yi=POOL_MIN_AMOUNT_YI)
