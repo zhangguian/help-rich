@@ -425,8 +425,8 @@ class TestRunTrustFields:
         assert run.data_as_of == date(2026, 10, 30)
         assert run.is_intraday is False
 
-    async def test_is_intraday_defaults_false(self):
-        """不传 is_intraday → False(存量批次行不因缺字段而崩)。"""
+    async def test_is_intraday_defaults_none(self):
+        """不传 is_intraday → None(未知),**不编成「确定不是盘中」**。"""
         from app.modules.behavior_screener import repository as repo
 
         run = await repo.upsert_run(
@@ -435,6 +435,37 @@ class TestRunTrustFields:
             after_filters_count=1, candidates_considered=1,
             total_picks=0, elapsed_sec=0.1, note=None,
         )
-        assert run.is_intraday is False
+        assert run.is_intraday is None
         assert run.hit_counts_json is None
         assert run.data_as_of is None
+
+    async def test_upsert_run_updates_existing_row(self):
+        """同日再 upsert → **覆盖同一行**(不是新增),三字段一起被更新。
+
+        覆盖 brief Step 6 要求的「两条分支都赋值」里的 update 分支:
+        同 `run_date` 二次 upsert 必须落回同一行,且三字段被新值覆盖。
+        """
+        from app.modules.behavior_screener import repository as repo
+
+        first = await repo.upsert_run(
+            date(2026, 10, 28),
+            pool_size=1, main_board_count=1, non_st_count=1,
+            after_filters_count=1, candidates_considered=1,
+            total_picks=1, elapsed_sec=0.1, note=None,
+            hit_counts_json='{"main_force_move": 1}',
+            data_as_of=date(2026, 10, 28),
+            is_intraday=True,
+        )
+        second = await repo.upsert_run(
+            date(2026, 10, 28),
+            pool_size=2, main_board_count=2, non_st_count=2,
+            after_filters_count=2, candidates_considered=2,
+            total_picks=2, elapsed_sec=0.2, note=None,
+            hit_counts_json='{"main_force_move": 9}',
+            data_as_of=date(2026, 10, 27),
+            is_intraday=False,
+        )
+        assert first.id == second.id
+        assert second.hit_counts_json == '{"main_force_move": 9}'
+        assert second.data_as_of == date(2026, 10, 27)
+        assert second.is_intraday is False

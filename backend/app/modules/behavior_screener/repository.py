@@ -56,7 +56,7 @@ async def upsert_run(
     note: str | None = None,
     hit_counts_json: str | None = None,
     data_as_of: date | None = None,
-    is_intraday: bool = False,
+    is_intraday: bool | None = None,
 ) -> BehaviorSignalRun:
     """UPSERT 批次(同一天重跑覆盖)。"""
     async with async_session() as session:

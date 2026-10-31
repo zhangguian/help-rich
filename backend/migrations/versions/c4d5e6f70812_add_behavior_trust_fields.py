@@ -27,14 +27,13 @@ def upgrade() -> None:
         "behavior_signal_run",
         sa.Column("data_as_of", sa.Date(), nullable=True),
     )
+    # ⚠️ **不设 server_default**(2026-10-31 human 拍板):
+    # 「未传值」必须落成 NULL(未知),而不是 DEFAULT 0(「确定不是盘中」)。
+    # 铁律:缺数据 → 不产出,绝不编数字。三列一律无默认 → 存量行不需回填,
+    # 且新行省略该列时自然为 NULL。
     op.add_column(
         "behavior_signal_run",
-        sa.Column(
-            "is_intraday",
-            sa.Boolean(),
-            nullable=True,
-            server_default=sa.false(),
-        ),
+        sa.Column("is_intraday", sa.Boolean(), nullable=True),
     )
 
 

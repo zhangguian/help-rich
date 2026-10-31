@@ -1286,9 +1286,9 @@ class BehaviorSignalRun(Base):
     # 本批数据中**已收盘**的最后交易日(闸 4:批次的数据时点)
     data_as_of: Mapped[date | None] = mapped_column(Date, nullable=True)
     # 本批是否额外包含当日**未收盘**数据(闸 4:区分盘后完整数据与盘中半成品)
-    is_intraday: Mapped[bool] = mapped_column(
-        Boolean, nullable=True, default=False, server_default="0"
-    )
+    # ⚠️ **None = 未知**,不是「确定不是盘中」—— 缺数据不编值(human 2026-10-31 拍板)。
+    # 因此**不设** default / server_default:省略该列时自然落成 NULL。
+    is_intraday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # 降级说明(如「资金流不可用」)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
