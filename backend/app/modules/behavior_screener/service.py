@@ -361,6 +361,14 @@ def pick_to_dict(p: Any) -> dict[str, Any]:
 
 def run_to_dict(r: Any) -> dict[str, Any]:
     """ORM 行 → API dict。"""
+    counts: dict[str, int] = {}
+    if r.hit_counts_json:
+        try:
+            loaded = json.loads(r.hit_counts_json)
+            if isinstance(loaded, dict):
+                counts = {str(k): int(v) for k, v in loaded.items()}
+        except (json.JSONDecodeError, TypeError, ValueError):
+            counts = {}
     return {
         "id": r.id,
         "run_date": r.run_date.isoformat() if r.run_date else None,
@@ -371,6 +379,11 @@ def run_to_dict(r: Any) -> dict[str, Any]:
         "after_filters_count": r.after_filters_count,
         "candidates_considered": r.candidates_considered,
         "total_picks": r.total_picks,
+        "hit_counts": counts,
+        "data_as_of": r.data_as_of.isoformat() if r.data_as_of else None,
+        # ⚠️ **原样透出**,不塌缩成 False(None = 未知,见 R1)。
+        # 前端据此区分「盘后完整数据」(false) / 「盘中半成品」(true) / 「时点未知」(null)。
+        "is_intraday": r.is_intraday,
         "elapsed_sec": r.elapsed_sec,
         "note": r.note,
     }

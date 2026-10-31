@@ -17,6 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.core.config import BEHAVIOR_SCREENER_GROUP_PAGE_N
 from app.modules.behavior_screener import repository as repo
 from app.modules.behavior_screener import service as behavior_service
 from app.modules.behavior_screener.logic import group_hits, sort_hits
@@ -28,10 +29,17 @@ router = APIRouter(prefix="/behavior-screener", tags=["behavior-screener"])
 
 
 @router.get("/latest")
-async def behavior_latest() -> dict[str, Any]:
+async def behavior_latest(
+    kind: str | None = Query(default=None, description="分页:只看某一类"),
+    limit: int = Query(default=BEHAVIOR_SCREENER_GROUP_PAGE_N, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
     """最新一批结果(默认今日,无则上一交易日)。
 
     - 尚无批次 → 404(前端据此区分「还没跑」与「跑了但没命中」)
+    - `groups[].count` 是该类**真实命中数**(不是本次返回的明细条数)
+    - `run.total_picks` 是**真实命中总数**
+    - 传 `kind` → 额外返回 `page`,按 `limit`/`offset` 取该类明细分页
     """
     run = await repo.get_latest_run()
     if run is None:
@@ -41,15 +49,40 @@ async def behavior_latest() -> dict[str, Any]:
         )
     picks = await repo.get_picks_by_run(run.id)
     hit_dicts = [behavior_service.pick_to_dict(p) for p in picks]
-    return {
-        "run": behavior_service.run_to_dict(run),
-        "groups": _group_dicts(hit_dicts),
-        "all": hit_dicts,
+    run_dict = behavior_service.run_to_dict(run)
+    counts = run_dict.get("hit_counts") or {}
+
+    # 每组只带前 N 条明细,真实总数靠 count 披露(响应体控制)
+    groups = []
+    for g in _group_dicts(hit_dicts):
+        groups.append(
+            {
+                **g,
+                "count": int(counts.get(g["kind"], g["count"])),
+                "picks": g["picks"][:BEHAVIOR_SCREENER_GROUP_PAGE_N],
+            }
+        )
+
+    resp: dict[str, Any] = {
+        "run": run_dict,
+        "groups": groups,
+        "all": hit_dicts[:BEHAVIOR_SCREENER_GROUP_PAGE_N],
         "kinds": [
             {"kind": k, "label": KIND_META.get(k, {}).get("label", k)}
             for k in KIND_META
         ],
     }
+
+    if kind:
+        page_picks = await repo.get_picks_by_kind_offset(run.id, kind, limit, offset)
+        resp["page"] = {
+            "kind": kind,
+            "offset": offset,
+            "limit": limit,
+            "total": int(counts.get(kind, 0)),
+            "picks": [behavior_service.pick_to_dict(p) for p in page_picks],
+        }
+    return resp
 
 
 def _group_dicts(hit_dicts: list[dict[str, Any]]) -> list[dict[str, Any]]:

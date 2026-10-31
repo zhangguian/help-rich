@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 
 import pytest
@@ -642,3 +643,100 @@ class TestTrustGates:
             assert date.fromisoformat(h.signal_date) >= threshold
         # 分组计数与命中数一致
         assert sum(result.hit_counts.values()) == 70
+
+
+class TestLatestApiTruth:
+    """闸 1 的 API 口径:count 必须是真实命中数,不是返回条数。"""
+
+    async def _seed(self, repo, kind: str, n: int):
+        from app.modules.behavior_screener import logic as lg
+
+        hits = [
+            lg.SignalHit(
+                stock_code=f"60000{i}.SH", stock_name=f"票{i}", kind=kind,
+                signal_date="2026-10-28", days_ago=2, reason="依据",
+                metrics={}, score=float(100 - i),
+            )
+            for i in range(n)
+        ]
+        run = await repo.upsert_run(
+            date(2026, 10, 30),
+            pool_size=5574, main_board_count=3193, non_st_count=3053,
+            after_filters_count=1941, candidates_considered=1817,
+            total_picks=n, elapsed_sec=53.1, note=None,
+            hit_counts_json=json.dumps({kind: n}),
+            data_as_of=date(2026, 10, 30), is_intraday=False,
+        )
+        await repo.replace_picks(
+            run.id, [{**h.to_dict(), "run_date": date(2026, 10, 30)} for h in hits]
+        )
+        return run
+
+    async def test_group_count_is_true_hit_count(self, client):
+        """真实命中 70 条 → count 报 70(即使响应只带 60 条明细)。"""
+        from app.modules.behavior_screener import repository as repo
+
+        await self._seed(repo, KIND_MAIN_FORCE_MOVE, 70)
+        resp = client.get("/api/behavior-screener/latest")
+        assert resp.status_code == 200
+        data = resp.json()
+        group = next(
+            g for g in data["groups"] if g["kind"] == KIND_MAIN_FORCE_MOVE
+        )
+        assert group["count"] == 70          # 真实命中数
+        assert len(group["picks"]) == 60     # 明细只带前 60
+        assert data["run"]["total_picks"] == 70
+
+    async def test_run_exposes_trust_fields(self, client):
+        from app.modules.behavior_screener import repository as repo
+
+        await self._seed(repo, KIND_DIP_BUY, 3)
+        data = client.get("/api/behavior-screener/latest").json()
+        # ⚠️ 后端出 **snake_case**;驼峰由前端 axios 拦截器转换(见 frontend/src/lib/api.ts)。
+        assert data["run"]["hit_counts"] == {KIND_DIP_BUY: 3}
+        assert data["run"]["data_as_of"] == "2026-10-30"
+        assert data["run"]["is_intraday"] is False
+
+    async def test_pagination_returns_next_page(self, client):
+        from app.modules.behavior_screener import repository as repo
+
+        await self._seed(repo, KIND_MAIN_FORCE_MOVE, 70)
+        resp = client.get(
+            "/api/behavior-screener/latest",
+            params={"kind": KIND_MAIN_FORCE_MOVE, "limit": 10, "offset": 60},
+        )
+        assert resp.status_code == 200
+        page = resp.json()["page"]
+        assert page["kind"] == KIND_MAIN_FORCE_MOVE
+        assert page["total"] == 70
+        assert len(page["picks"]) == 10      # 60..69 共 10 条
+
+    async def test_legacy_run_without_counts_falls_back_to_loaded_rows(self, client):
+        """存量批次行(没有 hit_counts_json)→ count 回退到**已载入条数**。
+
+        铁律「缺数据 → 回退,绝不编数字」:既不写 0,也不凭空造一个总数。
+        同时钉死 R1:`is_intraday` 缺失时是 `null`(未知),**不塌缩成 false**。
+        """
+        from app.modules.behavior_screener import repository as repo
+
+        hit = logic.SignalHit(
+            stock_code="600519.SH", stock_name="贵州茅台", kind=KIND_DIP_BUY,
+            signal_date="2026-10-28", days_ago=2, reason="依据",
+            metrics={}, score=88.0,
+        )
+        run = await repo.upsert_run(
+            date(2026, 10, 30),
+            pool_size=5574, main_board_count=3193, non_st_count=3053,
+            after_filters_count=1941, candidates_considered=1817,
+            total_picks=1, elapsed_sec=53.1, note=None,
+            # 存量行:三个新字段都没写
+        )
+        await repo.replace_picks(
+            run.id, [{**hit.to_dict(), "run_date": date(2026, 10, 30)}]
+        )
+        data = client.get("/api/behavior-screener/latest").json()
+        group = next(g for g in data["groups"] if g["kind"] == KIND_DIP_BUY)
+        assert group["count"] == 1           # 回退到已载入条数,不是 0
+        assert data["run"]["hit_counts"] == {}
+        assert data["run"]["data_as_of"] is None
+        assert data["run"]["is_intraday"] is None   # 未知 = null,不是 False

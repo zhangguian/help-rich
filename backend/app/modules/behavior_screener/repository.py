@@ -145,8 +145,35 @@ async def get_picks_by_run(run_id: int) -> list[BehaviorSignalPick]:
         return list((await session.execute(stmt)).scalars().all())
 
 
+async def get_picks_by_kind_offset(
+    run_id: int,
+    kind: str,
+    limit: int,
+    offset: int,
+) -> list[BehaviorSignalPick]:
+    """某批次**某一类**命中的分页(按分数降序)。
+
+    ⚠️ `count` 不从这里取 —— 真实命中数来自批次表的 `hit_counts_json`,
+    分页只负责「取明细」。两者分离是闸 1 的核心:展示层可以只给 60 条,
+    但口径必须报真实总数。
+    """
+    async with async_session() as session:
+        stmt = (
+            select(BehaviorSignalPick)
+            .where(
+                BehaviorSignalPick.run_id == run_id,
+                BehaviorSignalPick.kind == kind,
+            )
+            .order_by(BehaviorSignalPick.score.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+
 __all__ = [
     "get_latest_run",
+    "get_picks_by_kind_offset",
     "get_picks_by_run",
     "get_run_by_date",
     "list_runs",
