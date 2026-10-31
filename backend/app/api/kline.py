@@ -6,8 +6,6 @@
     追加 `behavior_markers`:四类异动行为标注(主力异动/低吸/锁仓/高抛)
 - 数据源失败 → 502 DATA_SOURCE_UNAVAILABLE(无 mock 兜底)
 """
-from datetime import date as _date, timedelta as _td
-
 from fastapi import APIRouter, HTTPException
 
 from app.core.config import BEHAVIOR_MARKERS_LOOKBACK_DAYS
@@ -17,7 +15,11 @@ from app.services.behavior_fund_flow_service import (
     align_by_date,
     fetch_flow_daily,
 )
-from app.services.behavior_signal_service import detect_behavior_markers
+from app.services.behavior_signal_service import (
+    base_date_from_klines,
+    detect_behavior_markers,
+    filter_markers_by_window,
+)
 from app.services.kline_service import KLineSourceUnavailable, fetch_intraday, fetch_klines
 from app.services.overview_service import get_overview
 from app.services.ta_service import TaError, compute_indicators
@@ -50,18 +52,24 @@ async def _build_behavior_markers(
     flows_by_date = align_by_date(flows)
     result = detect_behavior_markers(items, flows_by_date)
 
-    # 只回传最近 N 日的标注(避免响应体过大)
+    # 只回传最近 N 个**日历天**的标注(避免响应体过大)
+    #
+    # ⚠️ **两条路径共用 `filter_markers_by_window`**(闸 2 完备闸):
+    # 旧版这里自己算阈值,基准日取不到时还**全量返回**(窗口闸门形同虚设);
+    # 找股路径用的是「跑批日」—— 两边口径不同
+    # (实测 61% 的信号找股页有、K 线上找不到)。
+    # 现在两边都用「该票自己的 K 线末根日期」作基准日、走同一个过滤函数,
+    # 一致性由**同一实现**物理保证。
     if not result.markers:
         return [], False
-    # 以 K 线末根日期为基准回看 N 个日历日
-    try:
-        last = _date.fromisoformat(items[-1].get("date") or "")
-    except ValueError:
-        last = None
-    if last is not None:
-        threshold = (last - _td(days=BEHAVIOR_MARKERS_LOOKBACK_DAYS)).isoformat()
-        return [m.to_dict() for m in result.markers if m.date >= threshold], False
-    return [m.to_dict() for m in result.markers], False
+    base = base_date_from_klines(items)
+    if base is None:
+        # 基准日取不到 → 无法判断窗口 → **不产出标注**(不编数字)
+        return [], False
+    windowed = filter_markers_by_window(
+        result.markers, base, BEHAVIOR_MARKERS_LOOKBACK_DAYS
+    )
+    return [m.to_dict() for m in windowed], False
 
 
 @router.get("/{stock_code}/indicators")

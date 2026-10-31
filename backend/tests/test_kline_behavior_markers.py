@@ -150,3 +150,123 @@ class TestBehaviorMarkersInKlineApi:
         resp = client.get("/api/kline/600519.SH/indicators?period=daily&limit=130")
         assert resp.status_code == 200
         assert resp.json()["behavior_markers"] == []
+
+
+class TestLookbackWindow:
+    """K 线路径的回看窗口必须与找股路径一致(闸 2 完备闸)。
+
+    实测:旧版 K 线只回看 60 日历天,找股页用 120 根 K 线(≈168 日历天)
+    → 61% 的信号「找股页有、K 线上找不到」。
+
+    ⚠️ **基准日取不到时必须返回空标注**(本组测试的核心):
+    旧实现是「`last` 解析失败 → **不过滤,全量返回**」——
+    基准日都算不出来还把全部历史标注倒给前端,等于窗口闸门形同虚设。
+    新实现统一走 `filter_markers_by_window`,基准日取不到 → 不产出标注。
+    """
+
+    @staticmethod
+    def _days(n: int) -> list[str]:
+        import datetime as _dt
+
+        out: list[str] = []
+        d = _dt.date(2026, 1, 1)
+        while len(out) < n:
+            if d.weekday() < 5:
+                out.append(d.isoformat())
+            d += _dt.timedelta(days=1)
+        return out
+
+    class _M:
+        """最小的标注替身(只需 date 与 to_dict)。"""
+
+        def __init__(self, date_: str):
+            self.date = date_
+            self.kind = "main_force_move"
+            self.date_index = 0
+            self.text = "⚡ 主力异动"
+            self.position = "aboveBar"
+            self.color = "#f59e0b"
+            self.reason = "依据"
+
+        def to_dict(self):
+            return {
+                "kind": self.kind, "date": self.date,
+                "date_index": self.date_index, "text": self.text,
+                "position": self.position, "color": self.color,
+                "reason": self.reason, "metrics": {},
+            }
+
+    async def test_markers_outside_120_days_are_filtered(self, monkeypatch):
+        """距基准日远超 120 日历天的标记 → 剔除;基准日当天的 → 保留。"""
+        from app.api import kline as kline_api
+
+        days = self._days(200)
+        base = days[-1]
+        old = days[0]
+        items = [
+            {
+                "date": dd, "open": "10.0", "high": "10.1", "low": "9.9",
+                "close": "10.0", "volume": 100000,
+            }
+            for dd in days
+        ]
+
+        async def fake_flows(code, count=120, **k):
+            return [{"date": dd, "net_amount": 1.0} for dd in days]
+
+        class _Res:
+            markers = [TestLookbackWindow._M(old), TestLookbackWindow._M(base)]
+            degraded = []
+
+        def fake_detect(ks, flows, **k):
+            return _Res()
+
+        monkeypatch.setattr("app.api.kline.fetch_flow_daily", fake_flows)
+        monkeypatch.setattr("app.api.kline.detect_behavior_markers", fake_detect)
+
+        markers, unavailable = await kline_api._build_behavior_markers(
+            "600519.SH", items, "daily"
+        )
+        assert unavailable is False
+        # 200 个工作日 ≈ 280 日历天前 → 被过滤掉
+        assert all(m["date"] != old for m in markers)
+        # 基准日当天保留
+        assert any(m["date"] == base for m in markers)
+
+    async def test_unparsable_base_date_yields_no_markers(self, monkeypatch):
+        """⚠️ **本组测试的核心** —— 基准日取不到 → **不产出标注**。
+
+        旧实现:基准日解析失败 → 走 `return [m.to_dict() for m in result.markers], False`
+        → **全量返回,窗口闸门形同虚设**。新实现必须返回空。
+        """
+        from app.api import kline as kline_api
+
+        days = self._days(200)
+        items = [
+            {
+                "date": dd, "open": "10.0", "high": "10.1", "low": "9.9",
+                "close": "10.0", "volume": 100000,
+            }
+            for dd in days
+        ]
+        # 末根日期不可解析 → 基准日取不到
+        items[-1] = {**items[-1], "date": "不是日期"}
+
+        async def fake_flows(code, count=120, **k):
+            return [{"date": dd, "net_amount": 1.0} for dd in days]
+
+        class _Res:
+            markers = [TestLookbackWindow._M(days[0]), TestLookbackWindow._M(days[-1])]
+            degraded = []
+
+        def fake_detect(ks, flows, **k):
+            return _Res()
+
+        monkeypatch.setattr("app.api.kline.fetch_flow_daily", fake_flows)
+        monkeypatch.setattr("app.api.kline.detect_behavior_markers", fake_detect)
+
+        markers, unavailable = await kline_api._build_behavior_markers(
+            "600519.SH", items, "daily"
+        )
+        assert unavailable is False
+        assert markers == [], "基准日取不到时不得回传任何标注"
