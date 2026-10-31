@@ -23,11 +23,11 @@ from datetime import date, datetime
 from typing import Any
 
 from app.core.config import (
+    BEHAVIOR_MARKERS_LOOKBACK_DAYS,
     BEHAVIOR_SCREENER_CANDIDATE_LIMIT,
     BEHAVIOR_SCREENER_CONCURRENCY,
     BEHAVIOR_SCREENER_FLOW_COUNT,
     BEHAVIOR_SCREENER_KLINE_COUNT,
-    BEHAVIOR_SCREENER_TOP_N,
     POOL_MIN_AMOUNT_YI,
 )
 from app.data.market_snapshot import MarketSnapshotUnavailable, fetch_market_snapshot
@@ -44,7 +44,11 @@ from app.services.behavior_fund_flow_service import (
     align_by_date,
     fetch_flow_daily,
 )
-from app.services.behavior_signal_service import detect_behavior_markers
+from app.services.behavior_signal_service import (
+    base_date_from_klines,
+    detect_behavior_markers,
+    filter_markers_by_window,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +107,8 @@ class ScanResult:
     universe: UniverseStats = field(default_factory=UniverseStats)
     candidates_considered: int = 0
     elapsed_sec: float = 0.0
+    # 每类**真实**命中数(闸 1):{"main_force_move": 268, "dip_buy": 96, ...}
+    hit_counts: dict[str, int] = field(default_factory=dict)
     degraded: list[str] = field(default_factory=list)
 
 
@@ -167,7 +173,7 @@ def _pick_candidates(
 async def scan_market(
     run_date: date | None = None,
     *,
-    candidate_limit: int = BEHAVIOR_SCREENER_CANDIDATE_LIMIT,
+    candidate_limit: int | None = BEHAVIOR_SCREENER_CANDIDATE_LIMIT,
 ) -> ScanResult:
     """跑一次全市场找股扫描(不落库)。
 
@@ -188,7 +194,12 @@ async def scan_market(
         )
 
     candidates, stats = filter_universe(rows, min_amount_yi=POOL_MIN_AMOUNT_YI)
-    precands = candidates[:candidate_limit]
+    # ⚠️ **不再截断**(闸 2 完备闸):旧的「取前 120」是筛选维度与被筛目标
+    # 的时间窗错配 —— 候选池按「当日资金异动强度」排序,打分对象却是
+    # 历史窗口内的信号,「20 天前有强信号、今天资金平淡」的票压根进不了池子。
+    # 成交额闸门(POOL_MIN_AMOUNT_YI)保留 —— 那是合理的业务闸门。
+    # `candidate_limit` 仅供测试与小规模分级验证(传 300 / 600)时使用。
+    precands = candidates if candidate_limit is None else candidates[:candidate_limit]
     if not precands:
         return ScanResult(
             universe=stats,
@@ -216,7 +227,23 @@ async def scan_market(
         result = detect_behavior_markers(ks, flows_by_date)
         if result.degraded:
             continue
-        for marker in result.markers:
+        # ⚠️ **窗口过滤在 scan_market 内部**(闸 2),不在落库时滤 ——
+        # 否则批次表里存的仍是超窗口信号,只是展示时被藏起来,
+        # `count` 与明细依然对不上(把问题从「展示层」挪到「存储层」,没解决)。
+        #
+        # ⚠️ **基准日必须是「该票自己的 K 线末根日期」**,不是 run_date:
+        # K 线路径(`api/kline.py`)用的是 K 线末根日期 —— 若这边用 run_date,
+        # 两者基准日差一天(停牌/停更时差更多)→ 窗口边界错位 →
+        # 找股页有的信号在 K 线上找不到(闸 3 要守的 S_A ⊆ S_B 会被打破)。
+        # 统一用 `base_date_from_klines`,与 K 线路径**逐字同源**。
+        base = base_date_from_klines(ks)
+        if base is None:
+            # 基准日取不到 → 无法判断窗口 → 该票不产出标注(与 K 线路径同口径)
+            continue
+        windowed = filter_markers_by_window(
+            result.markers, base, BEHAVIOR_MARKERS_LOOKBACK_DAYS
+        )
+        for marker in windowed:
             try:
                 signal_day = datetime.strptime(marker.date, "%Y-%m-%d").date()
             except ValueError:
@@ -241,19 +268,24 @@ async def scan_market(
     if not any(flows_map.get(c) for c in codes):
         degraded.append("逐日资金流全部不可用,本次无行为信号命中")
 
+    hit_counts: dict[str, int] = {}
+    for h in hits:
+        hit_counts[h.kind] = hit_counts.get(h.kind, 0) + 1
+
     return ScanResult(
         hits=sort_hits(hits),
         universe=stats,
         candidates_considered=len(codes),
         elapsed_sec=round(time.time() - t0, 2),
         degraded=degraded,
+        hit_counts=hit_counts,
     )
 
 
 async def run_daily_scan(
     target_date: date | None = None,
     *,
-    candidate_limit: int = BEHAVIOR_SCREENER_CANDIDATE_LIMIT,
+    candidate_limit: int | None = BEHAVIOR_SCREENER_CANDIDATE_LIMIT,
 ) -> tuple[Any, list[SignalHit]] | None:
     """跑批并落库(同日重复跑覆盖)。
 
@@ -266,8 +298,12 @@ async def run_daily_scan(
         logger.warning("[behavior_screener] 扫描失败(快照不可用),不落库")
         return None
 
-    # 只保留分数最高的前 N 条入库
-    top = result.hits[:BEHAVIOR_SCREENER_TOP_N]
+    # ⚠️ **全量入库,不再截断**(闸 1 数字闸):
+    # 旧的 `result.hits[:60]` 是**全局按分数截断** —— 但四类信号的分数本就
+    # 不可跨类型比较(类型权重不同),于是全局截断系统性偏向高权重类型。
+    # 实测:真实 663 条 → 入库 60 条;锁仓真实 58 条 → 显示 2 条(差 29 倍)。
+    hits = result.hits
+    counts = result.hit_counts or {}
     run = await repo.upsert_run(
         target,
         pool_size=result.universe.total,
@@ -275,9 +311,12 @@ async def run_daily_scan(
         non_st_count=result.universe.non_st,
         after_filters_count=result.universe.after_filters,
         candidates_considered=result.candidates_considered,
-        total_picks=len(top),
+        total_picks=len(hits),
         elapsed_sec=result.elapsed_sec,
         note="; ".join(result.degraded) if result.degraded else None,
+        hit_counts_json=json.dumps(counts, ensure_ascii=False) if counts else None,
+        data_as_of=None,
+        is_intraday=None,
     )
 
     await repo.replace_picks(
@@ -288,10 +327,10 @@ async def run_daily_scan(
                 "run_date": target,
                 "metrics": h.metrics,
             }
-            for h in top
+            for h in hits
         ],
     )
-    return run, top
+    return run, hits
 
 
 def pick_to_dict(p: Any) -> dict[str, Any]:

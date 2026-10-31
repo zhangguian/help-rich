@@ -469,3 +469,176 @@ class TestRunTrustFields:
         assert second.hit_counts_json == '{"main_force_move": 9}'
         assert second.data_as_of == date(2026, 10, 27)
         assert second.is_intraday is False
+
+
+class TestTrustGates:
+    """闸 1(数字闸)+ 闸 2(完备闸)的落库口径。
+
+    真机踩过的坑:旧的 `hits[:60]` 全局截断让「真实 455 条」显示成「47 条」
+    (差 29 倍),且 91% 的命中人间蒸发。这组测试把「不截断 + 真实计数」钉死。
+
+    ⚠️ **造数与期望值都是实测反推的**(2026-10-31,写计划时用真实判定层跑过):
+    - 「平价 + 逐日缩量 10% + 连续主力净流入」→ 只触发 `lock_position`,
+      130 根 K 线产出 **103** 条原始命中;
+    - 基准日 = K 线末根 = 2026-07-01,120 日历天窗口 = 2026-03-03 起
+      → 窗口内 **70** 条、窗口外 **33** 条;
+    - 70 > 60(旧上限)→ 数字能证明「没被截断」。
+    """
+
+    @staticmethod
+    def _lock_shape(n: int = 130):
+        """造「平价 + 逐日缩量 + 连续主力净流入」的数据。
+
+        只触发 `lock_position`:
+        - `change_ratio=0.0` → 主力异动要求涨跌幅 ≥2%,不达标
+        - `net_amount` 恒正 → 低吸要求「由负转正」、高抛要求「由正转负」,都不达标
+        - 逐日缩量 10% → 锁仓的「期间缩量」成立
+        """
+        dates = _dates(n)
+        vol = 100000.0
+        ks, flows = [], []
+        for d in dates:
+            ks.append({
+                "date": d, "open": "10.0", "high": "10.1", "low": "9.9",
+                "close": "10.0", "volume": int(vol),
+            })
+            flows.append({
+                "date": d, "net_amount": 1.0e8, "r0_net": 1.0e8,
+                "r0x_ratio": 0.0, "r0_ratio": 0.0, "turnover": 20.0,
+                "change_ratio": 0.0,
+            })
+            vol *= 0.9
+        return dates, ks, flows
+
+    async def test_all_hits_persisted_not_truncated(self, monkeypatch):
+        """命中 70 条(> 旧上限 60)→ 全部入库,total_picks = 70。"""
+        import json as _json
+
+        dates, ks, flows = self._lock_shape(130)
+
+        snapshot = [
+            {
+                "code": "600519.SH", "name": "贵州茅台", "price": 10.0,
+                "change_pct": 0.0, "prev_close": 10.0, "amount_yi": 50.0,
+                "limit_pct": 10.0, "volume": 100000,
+            }
+        ]
+
+        async def fake_snapshot(*a, **k):
+            return snapshot
+
+        async def fake_klines(code, period="daily", count=120):
+            return ks
+
+        async def fake_flows(code, count=120, **k):
+            return flows
+
+        monkeypatch.setattr(
+            "app.modules.behavior_screener.service.fetch_market_snapshot",
+            fake_snapshot,
+        )
+        monkeypatch.setattr(
+            "app.modules.behavior_screener.service.kline_service.fetch_klines",
+            fake_klines,
+        )
+        monkeypatch.setattr(
+            "app.modules.behavior_screener.service.fetch_flow_daily", fake_flows
+        )
+
+        from app.modules.behavior_screener import repository as repo
+
+        result = await behavior_service.run_daily_scan(date(2026, 7, 1))
+        assert result is not None
+        run, hits = result
+        # 全部入库,不截断(70 > 旧上限 60)
+        assert len(hits) == 70
+        assert run.total_picks == 70
+        stored = await repo.get_picks_by_run(run.id)
+        assert len(stored) == 70
+        # 分组真实计数已落库
+        counts = _json.loads(run.hit_counts_json)
+        assert counts[KIND_LOCK_POSITION] == 70
+        assert sum(counts.values()) == 70
+
+    async def test_candidate_pool_not_truncated(self, monkeypatch):
+        """候选池不再取前 120 —— 全部成交额达标的票都进逐票精算。"""
+        # ⚠️ 代码必须是 **6 位**:`600000 + i`,不能写成 `f"6005{i:02d}.SH"`
+        # (i ≥ 100 时会变成 7 位数 → 主板判定失败 → 只过 100 只,实测踩过)
+        snapshot = [
+            {
+                "code": f"{600000 + i:06d}.SH", "name": f"票{i}", "price": 10.0,
+                "change_pct": 1.0, "prev_close": 10.0, "amount_yi": 50.0,
+                "limit_pct": 10.0, "volume": 1000,
+            }
+            for i in range(150)
+        ]
+
+        async def fake_snapshot(*a, **k):
+            return snapshot
+
+        async def fake_klines(code, period="daily", count=120):
+            return []
+
+        async def fake_flows(code, count=120, **k):
+            return []
+
+        monkeypatch.setattr(
+            "app.modules.behavior_screener.service.fetch_market_snapshot",
+            fake_snapshot,
+        )
+        monkeypatch.setattr(
+            "app.modules.behavior_screener.service.kline_service.fetch_klines",
+            fake_klines,
+        )
+        monkeypatch.setattr(
+            "app.modules.behavior_screener.service.fetch_flow_daily", fake_flows
+        )
+
+        result = await behavior_service.scan_market(date(2026, 7, 1))
+        # 150 只全部进入精算(旧版只取 120)
+        assert result.candidates_considered == 150
+        assert result.universe.after_filters == 150
+
+    async def test_hits_outside_window_filtered_out(self, monkeypatch):
+        """超过 120 日历天的命中不进入 hits(过滤在 scan_market 内部)。"""
+        dates, ks, flows = self._lock_shape(130)
+
+        snapshot = [
+            {
+                "code": "600519.SH", "name": "贵州茅台", "price": 10.0,
+                "change_pct": 0.0, "prev_close": 10.0, "amount_yi": 50.0,
+                "limit_pct": 10.0, "volume": 100000,
+            }
+        ]
+
+        async def fake_snapshot(*a, **k):
+            return snapshot
+
+        async def fake_klines(code, period="daily", count=120):
+            return ks
+
+        async def fake_flows(code, count=120, **k):
+            return flows
+
+        monkeypatch.setattr(
+            "app.modules.behavior_screener.service.fetch_market_snapshot",
+            fake_snapshot,
+        )
+        monkeypatch.setattr(
+            "app.modules.behavior_screener.service.kline_service.fetch_klines",
+            fake_klines,
+        )
+        monkeypatch.setattr(
+            "app.modules.behavior_screener.service.fetch_flow_daily", fake_flows
+        )
+
+        result = await behavior_service.scan_market(date(2026, 7, 1))
+        # 原始命中 103 条 → 窗口内 70 条(窗口外 33 条被滤掉)
+        assert len(result.hits) == 70
+        # 每一条都在 120 日历天窗口内
+        base = date(2026, 7, 1)
+        threshold = base - timedelta(days=120)
+        for h in result.hits:
+            assert date.fromisoformat(h.signal_date) >= threshold
+        # 分组计数与命中数一致
+        assert sum(result.hit_counts.values()) == 70

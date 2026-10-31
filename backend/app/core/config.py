@@ -223,7 +223,14 @@ BEHAVIOR_MA_WINDOW = 20
 
 # --- 找股模块(behavior_screener) ---
 # 全市场快照粗筛后进入逐票算信号的候选数上限
-BEHAVIOR_SCREENER_CANDIDATE_LIMIT = 120
+#
+# ⚠️ **None = 不截断**(2026-10-31 修复):
+# 旧的「取前 120」是**筛选维度与被筛目标的时间窗错配** ——
+# 候选池按「当日资金异动强度」排序,打分对象却是历史窗口内的信号,
+# 于是「20 天前有强信号、今天资金平淡」的票压根进不了池子。
+# 成交额闸门(POOL_MIN_AMOUNT_YI)保留 —— 那是合理的业务闸门。
+# 保留该参数供测试与小规模分级验证(传 300 / 600)。
+BEHAVIOR_SCREENER_CANDIDATE_LIMIT: int | None = None
 # 逐票拉 K 线 / 资金流历史的根数
 BEHAVIOR_SCREENER_KLINE_COUNT = 120
 BEHAVIOR_SCREENER_FLOW_COUNT = 120
