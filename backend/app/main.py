@@ -161,12 +161,15 @@ async def lifespan(app: FastAPI):
         from app.modules.alert.scheduler import start_price_alert_scheduler
         from app.services.sector_fund_flow_service import start_sector_scheduler
         from app.modules.analysis.workflow_scheduler import start_workflow_scheduler
+        from app.services.quote_poller import start_quote_poller
 
         _spawn(start_sina_scheduler(interval_sec=60))
         # v0.4.1:板块资金异动检测(60s 拉一次,异动 publish)
         _spawn(start_sector_scheduler(interval_sec=60))
         # 阶段1:价格提醒扫描(60s 一次,交易时段内)
         _spawn(start_price_alert_scheduler(interval_sec=60))
+        # 秒级盯盘行情轮询(2s 一轮,交易时段内;快照经 SSE 推前端)
+        _spawn(start_quote_poller(interval_sec=2))
         # 阶段3:模拟盘收盘后净值快照
         _spawn(start_paper_scheduler(interval_sec=1800))
         # 阶段4:三段式 Agent(盘前 08:30 / 盘中 11:30,14:50)

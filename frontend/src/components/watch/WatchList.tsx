@@ -9,6 +9,7 @@ import { ChevronDown, Edit, Star } from 'reicon-react';
 
 import { apiDelete, apiPatch, apiPost } from '@/lib/api';
 import { useUIStore } from '@/stores/useUIStore';
+import { useQuote, useQuoteStore, useQuotes } from '@/stores/useQuoteStore';
 import type { Quote } from '@/lib/types';
 
 import { GlassCard } from '@/components/ui/GlassCard';
@@ -103,7 +104,12 @@ const WatchRow = memo(function WatchRow({
   onToggleFavorite,
   onClear,
 }: WatchRowProps) {
-  const halted = it.quote != null && Number(it.quote.currentPrice) === 0;
+  // 秒级盯盘(2026-10-29 ADR-0006):**行级订阅** store 里的实时报价。
+  // 只订阅自己这一只 → 别的票变价时这一行不重渲染(44 行列表不会被 2s 一次
+  // 的推送整片刷掉)。`quote` 是 REST 兜底价(SSE 未到/非交易时段时用)。
+  const liveQuote = useQuote(it.code);
+  const quote = liveQuote ?? it.quote;
+  const halted = quote != null && Number(quote.currentPrice) === 0;
   return (
     <motion.li
       layout
@@ -187,25 +193,25 @@ const WatchRow = memo(function WatchRow({
             </span>
           </span>
           <span className="text-[12px] font-mono tabular-nums text-text-pri w-[44px] text-right shrink-0">
-            {!it.quote ? '--' : halted ? '停牌' : it.quote.currentPrice}
+            {!quote ? '--' : halted ? '停牌' : quote.currentPrice}
           </span>
           <span
             className={clsx(
               'text-[10.5px] font-mono tabular-nums w-[48px] text-right shrink-0',
-              !it.quote || halted
+              !quote || halted
                 ? 'text-text-ter'
-                : it.quote.changePct > 0
+                : quote.changePct > 0
                   ? 'text-up'
-                  : it.quote.changePct < 0
+                  : quote.changePct < 0
                     ? 'text-down'
                     : 'text-text-ter',
             )}
           >
-            {!it.quote
+            {!quote
               ? '--'
               : halted
                 ? '停牌'
-                : `${it.quote.changePct > 0 ? '+' : ''}${it.quote.changePct.toFixed(2)}%`}
+                : `${quote.changePct > 0 ? '+' : ''}${quote.changePct.toFixed(2)}%`}
           </span>
           <button
             type="button"
@@ -307,26 +313,26 @@ const WatchRow = memo(function WatchRow({
           </button>
         </div>
         <div className="text-sm font-mono font-medium text-text-pri w-24 text-right shrink-0">
-          {!it.quote ? '--' : halted ? '停牌' : it.quote.currentPrice}
+          {!quote ? '--' : halted ? '停牌' : quote.currentPrice}
         </div>
         <div className="w-20 flex justify-end shrink-0">
           <span
             className={clsx(
               'px-2 py-1 rounded-lg text-xs font-mono font-semibold',
-              !it.quote || halted
+              !quote || halted
                 ? 'bg-bg-subtle text-text-ter'
-                : it.quote.changePct > 0
+                : quote.changePct > 0
                   ? 'bg-up-bg text-up'
-                  : it.quote.changePct < 0
+                  : quote.changePct < 0
                     ? 'bg-down-bg text-down'
                     : 'bg-bg-subtle text-text-ter',
             )}
           >
-            {!it.quote
+            {!quote
               ? '--'
               : halted
                 ? '停牌'
-                : `${it.quote.changePct > 0 ? '+' : ''}${it.quote.changePct.toFixed(2)}%`}
+                : `${quote.changePct > 0 ? '+' : ''}${quote.changePct.toFixed(2)}%`}
           </span>
         </div>
         {it.inPosition && (
@@ -367,6 +373,8 @@ export function WatchList({
   const showToast = useUIStore((s) => s.showToast);
   const [showAdd, setShowAdd] = useState(false);
   const [clearTarget, setClearTarget] = useState<WatchItem | null>(null);
+  // 清仓弹窗里的"实时价":随 SSE 推送实时更新(弹窗开着时价格也在跳)
+  const clearLiveQuote = useQuote(clearTarget?.code);
   const [addForm, setAddForm] = useState({ stockCode: '', stockName: '' });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: WatchItem } | null>(null);
   const [removeTarget, setRemoveTarget] = useState<WatchItem | null>(null);
@@ -389,19 +397,26 @@ export function WatchList({
     else localStorage.setItem('watchlist-sort', sortDir);
   }, [sortDir]);
   // 没 quote 的 items 排最后
+  //
+  // ⚠️ 排序用**实时价**(store),不是 `it.quote`:
+  // `it.quote` 是 REST 兜底价(5 分钟缓存),按它排序会给出**过期**的涨跌幅顺序。
+  // 注意:这里订阅整个 quotes map → 任意一只变价都会重算排序。
+  // 这是刻意的:排序本来就是全局视图,只有"按涨跌幅排"开着时才需要跟随实时价。
+  const liveQuotes = useQuotes();
   const sortedItems = useMemo(() => {
     if (sortDir === 'default') return items;
     const arr = [...items];
+    const pctOf = (it: WatchItem) => liveQuotes[it.code]?.changePct ?? it.quote?.changePct ?? null;
     arr.sort((a, b) => {
-      const ac = a.quote?.changePct ?? null;
-      const bc = b.quote?.changePct ?? null;
+      const ac = pctOf(a);
+      const bc = pctOf(b);
       if (ac == null && bc == null) return 0;
       if (ac == null) return 1;
       if (bc == null) return -1;
       return sortDir === 'desc' ? bc - ac : ac - bc;
     });
     return arr;
-  }, [items, sortDir]);
+  }, [items, sortDir, liveQuotes]);
 
   // 渲染弹窗到 body:绕开 GlassCard.backdrop-filter 创建的 containing block,
   // 否则 fixed 定位相对 aside 收缩,无法在全宽显示
@@ -430,7 +445,10 @@ export function WatchList({
 
   const submitClear = async () => {
     if (!clearTarget) return;
-    const price = clearTarget.quote?.currentPrice;
+    // ⚠️ 清仓价必须用**实时价**:`it.quote` 是 REST 兜底价(走 5 分钟缓存),
+    // 用它结算盈亏会按几分钟前的价格算错。实时价来自 store(SSE 推送)。
+    const price = useQuoteStore.getState().quotes[clearTarget.code]?.currentPrice
+      ?? clearTarget.quote?.currentPrice;
     if (!price || Number(price) <= 0) {
       showToast({
         type: 'warning',
@@ -697,7 +715,7 @@ export function WatchList({
           <p className="text-sm text-text-sec">
             将以实时价
             <span className="font-mono text-text-pri">
-              {' '}{clearTarget?.quote?.currentPrice ?? '--'}{' '}
+              {' '}{clearLiveQuote?.currentPrice ?? clearTarget?.quote?.currentPrice ?? '--'}{' '}
             </span>
             生成卖出流水并结算实际盈亏。确认?
           </p>

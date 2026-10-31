@@ -34,6 +34,7 @@ import { DecisionColumn } from '@/components/desk/DecisionColumn';
 import { DeskTopBar, type DeskTab } from '@/components/desk/DeskTopBar';
 import { KeyLevels } from '@/components/desk/KeyLevels';
 import { useAssistantActions } from '@/components/assistant/AssistantProvider';
+import { useQuoteStream } from '@/hooks/useQuoteStream';
 import IntradayReviewPanel from '@/components/plan/IntradayReviewPanel';
 import { useIntradayStore } from '@/stores/useIntradayStore';
 import { HoldingsHealthPanel } from '@/components/holdings-health/HoldingsHealthPanel';
@@ -434,6 +435,15 @@ export default function Workbench() {
       // 报价一次性并进来。
       // 原来分两次 setState(先没报价的一版、再有报价的一版)→ 每轮多一次全页重渲染;
       // 合成一次后,列表带着报价一起出现,也不会闪一帧「—」。
+      //
+      // ⚠️ 报价**不再以这里为准**(2026-10-29 秒级盯盘改造):
+      // 盘中报价改由 `useQuoteStream` 走 SSE 推送(3 秒快照档),存在
+      // `useQuoteStore` 里,列表行按代码订阅。
+      // 这里保留的 REST 取价是**降级兜底** —— 非交易时段后端轮询器不跑,
+      // SSE 没有数据可推,行就回落到 `it.quote`。
+      //
+      // ⚠️ 兜底价**故意不灌进 store**:REST 走的是 5 分钟缓存,
+      // 灌进去会把 SSE 推来的新鲜价覆盖成旧价。
       const codes = Array.from(merged.keys());
       const quotes = codes.length
         ? await apiGet<Quote[]>(`/quotes?codes=${codes.join(',')}`).catch(() => [] as Quote[])
@@ -467,6 +477,13 @@ export default function Workbench() {
     fetchMarketOverview();
     fetchMarketSentiment();
   }, [fetchBase, fetchMarketOverview, fetchMarketSentiment]);
+
+  // 秒级盯盘(2026-10-29 ADR-0006):订阅服务端行情流(SSE,3 秒快照档)
+  //
+  // 代码集合 = 自选 ∪ 持仓(与 fetchBase 合并后的集合一致)。
+  // 报价本身存在 `useQuoteStore`,列表行按代码订阅 → 只有变价的那一行重渲染。
+  const watchCodes = useMemo(() => watchAll.map((it) => it.code), [watchAll]);
+  useQuoteStream(watchCodes);
 
   // P1(阶段10):轮询节奏 —— 分档频率 + 可见性暂停 + 失败退避
   //

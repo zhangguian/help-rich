@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 
 from app.core.logging import logger
+from app.core.trading_time import is_trading_time
 from app.modules.alert.engine import AlertContext
 from app.modules.alert.service import price_alert_service
 
@@ -18,36 +19,33 @@ INTERVAL_SEC = 60
 
 
 def _is_trading_time() -> bool:
-    """粗粒度交易时段判断:工作日 9:15-11:35 / 12:55-15:10。
+    """盘中时段判断。
 
-    不含法定节假日日历(现有项目也没有),宁可多跑几轮也不漏提醒。
+    实现已上提到 `app/core/trading_time.py` —— 秒级盯盘轮询器
+    (`app/services/quote_poller.py`)需要**同一份**口径,两处各写一份必然漂移。
+    这里保留同名薄封装,避免改动本模块其余调用点。
     """
-    from datetime import datetime, time as dtime
-
-    now = datetime.now()
-    if now.weekday() >= 5:  # 周末
-        return False
-    t = now.time()
-    return (
-        dtime(9, 15) <= t <= dtime(11, 35)
-        or dtime(12, 55) <= t <= dtime(15, 10)
-    )
+    return is_trading_time()
 
 
 async def _scan_once() -> int:
     """扫描一轮,返回触发条数。"""
     from app.modules.alert.repository import price_alert_repo
-    from app.services.quote_service import QuoteService
+    from app.services.quote_service import get_quote_service
 
     alerts = await price_alert_repo.list_enabled_active()
     if not alerts:
         return 0
 
     codes = list({a.stock_code for a in alerts})
-    quote_svc = QuoteService()
+    # 复用进程级单例:每次 new 一个 QuoteService 会重建 httpx 连接池,
+    # 连接既不复用、缓存也各算各的(2026-10-29 秒级盯盘改造时顺带修掉)。
+    quote_svc = get_quote_service()
     contexts: dict[str, AlertContext] = {}
     try:
-        quotes = await quote_svc.get_quotes(codes)
+        # ⚠️ 必须走 **fresh 路径**(跳过 5 分钟缓存):
+        # 价格提醒的价值全在"及时" —— 用缓存价判触达,最多会晚 5 分钟才响。
+        quotes = await quote_svc.get_quotes_fresh(codes)
     except Exception as e:  # noqa: BLE001 — 行情失败就跳过本轮
         logger.warning(f"[price-alert] 行情拉取失败,本轮跳过: {e}")
         return 0

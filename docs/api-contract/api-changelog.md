@@ -28,6 +28,37 @@
 
 ## 历史记录
 
+### 2026-10-29 | v0.13 | 秒级盯盘:行情 SSE 推送 + 热路径零缓存(ADR-0006)
+
+#### Added(新增)
+- **`GET /api/quotes/stream`(SSE)**:盘中行情推送。服务端单例轮询器(盘中 2s 一轮)拉
+  「自选 ∪ 持仓」,经事件总线广播;首帧 `quote_snapshot`(含 `stale` / `updated_at`),
+  后续 `quote_update` 增量,30s `:heartbeat` 保活;`?codes=` 可过滤。
+- **`GET /api/quotes` 新增 `fresh` 查询参数**:`fresh=true` 走
+  `QuoteService.get_quotes_fresh()` —— **跳过 5 分钟缓存**直取数据源(盯盘热路径)。
+  降级路径(前端 SSE 断开)按 3s 轮询该端点。
+- **`app/services/quote_poller.py`**:常驻轮询器 + 内存快照。
+  连续失败退避 2→5→10→30s 封顶;无人订阅且无 REST 命中时降到 15s;非交易时段完全停拉。
+- **`app/core/trading_time.py`**:盘中时段口径上提到 core(原在 `modules/alert/scheduler.py`),
+  供告警扫描与行情轮询器共用同一份口径。
+
+#### Changed(修改)
+- **`QuoteService` 缓存分层**:新增 `get_quotes_fresh()`(跳过缓存)。
+  `get_quote` / `get_quotes` 的 300s 缓存行为**完全不变**(研究/历史路径不受影响)。
+- **价格提醒扫描改走 fresh 路径**:原先用 5 分钟缓存价判触达,最多会晚 5 分钟才响。
+- **`modules/alert/scheduler.py` 复用进程级 `QuoteService` 单例**:此前每次 `new` 一个实例,
+  httpx 连接池不复用、缓存各算各的。
+- **错误码 `AKSHARE_FAILED` → `QUOTE_SOURCE_UNAVAILABLE`**:2026-10-29 评估 akshare 后
+  **决定不引入**(东财系接口全部带 `ut` 令牌,在公司网络下被网关直接 RST),错误码按实际实现改名。
+
+#### Fixed(修复)
+- **首页报价不再只拉一次**:此前 `page.tsx` 的报价只在首屏取一次(之后价格不再更新);
+  现在由 SSE 持续推送,端到端 ≤3s(3 秒快照档 / Level-1,**不是逐笔 Tick**)。
+- **止损检查改实时价驱动**:此前用 `/positions` 的 5 分钟缓存价判定,盘中跌破止损线时
+  弹窗可能晚数分钟;现主路径订阅实时价(SSE),15s 轮询降为兜底。
+
+---
+
 ### 2026-10-27 | v0.12 | 盘中复盘面板:调度器容错 + 缺档明示 + 产出自动可见
 
 #### Fixed(修复)

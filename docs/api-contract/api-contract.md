@@ -110,9 +110,46 @@
 
 **目的**:批量获取行情,最多 50 只,返回数组。
 
+**查询参数**:
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| codes | str | 是 | 逗号分隔,最多 200 只 |
+| fresh | bool | 否 | `true` = **跳过 5 分钟缓存**直取数据源(盯盘热路径,ADR-0006) |
+
 **错误码**:同上(422 含具体非法代码)。
 
----
+### 2.5.3 GET /api/quotes/stream(SSE,2026-10-29 新增)
+
+**目的**:盘中行情推送。服务端单例轮询器(盘中 2s 一轮)拉「自选 ∪ 持仓」,
+经事件总线广播,本端点把增量推给前端 —— 端到端 ≤3s(3 秒快照档 / Level-1,
+**不是逐笔 Tick**,见 ADR-0006)。
+
+**查询参数**:
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| codes | str | 否 | 逗号分隔;不传 = 推全部 watchlist |
+
+**响应**:`text/event-stream`,每帧形如 `data: {json}\n\n`
+
+| 帧 | 时机 | payload |
+|---|---|---|
+| `quote_snapshot` | 首帧 | `{event, quotes[], updated_at, stale, source, last_error}` |
+| `quote_update` | 每轮轮询后 | `{event, quotes[], updated_at, stale, source}` |
+| `:heartbeat` | 30s 无数据 | 注释行,保活 |
+
+**失败语义**:行情源不可用 → 轮询器保留上一轮快照并置 `stale=true`,
+前端据此提示"数据可能滞后";**不会**收到编造的价格。
+
+**降级(可逆)**:前端 SSE 连续失败 3 次 → 退回 `GET /api/quotes?codes=...&fresh=true` 轮询(3s)。
+
+降级**不是单向的**:
+- 降级时前端**不关闭** EventSource —— 浏览器自己按 ~3s 重连,后端一恢复就重新收到帧
+  → 停掉 REST 轮询 + 清掉降级标记 → 自动回切 SSE;
+- 页面**刷新后照样建立 SSE**(降级标记只决定"要不要同时开 REST 兜底",不决定"要不要连流"),
+  否则标记一旦落下就再也回不到 SSE 模式(除非清站点数据)。
+
+> 验收实测(2026-10-29):SSE 被断开后前端 3 次失败即切 REST 轮询(每 3s,`fresh=true` 跳过 5 分钟缓存);
+> 后端恢复后 1.7s 内自动回切 SSE 且轮询停止。
 
 ## 3. 交易流水
 
@@ -785,7 +822,7 @@ data: {"event":"ping","ts":1690890000}   ← 前端过滤
 | INVALID_PRICE | 422 | 流水/计算器 | "价格似乎有问题,核对一下" |
 | STOCK_NOT_FOUND | 404 | 流水 | "找不到这只股票" |
 | LLM_FAILED | 500 | 诊断 | "AI 评语暂时不可用" |
-| AKSHARE_FAILED | 503 | 持仓 | "行情源不可用,显示陈旧数据" |
+| QUOTE_SOURCE_UNAVAILABLE | 503 | 持仓 | "行情源不可用,显示陈旧数据" |(原 `AKSHARE_FAILED`:2026-10-29 ADR-0006 评估后不引入 akshare,错误码按实际实现改名)|
 | INTERNAL_ERROR | 500 | 全局 | "服务异常,请重试" |
 | INVALID_PROVIDER | 422 | LLM | "Provider 名称无效" |
 | NO_KEY | 400 | LLM | "请先在设置页配置 Key" |
