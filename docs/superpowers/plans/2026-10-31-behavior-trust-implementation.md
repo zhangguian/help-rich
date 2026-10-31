@@ -67,6 +67,34 @@
 **顺带记一条 Task 8 的排序前提**：前端「展开更多」的 offset 依赖「分组列表的前 N」与「分页查询的前 N」是**同一个集合** ——
 这条前提现在由上面的次级排序保证。
 
+### R3 —— Task 6 周末分支：plan 代码块与 plan 自己的测试互相矛盾（2026-10-31，Task 6 评审后 controller 判定）
+
+**背景**：Task 6 的 brief（从本计划 Task 6 抽取）里，**Step 3 的代码块**与 **Step 1 的测试**对「周末的
+`data_as_of`」给出了两个互相排斥的答案：
+
+| 来源 | 写法 | 周六 `2026-10-31` 的结果 |
+|---|---|---|
+| Step 3 代码块 | `_prev_weekday(date(...) - timedelta(days=1))` | **周四 10-29**（`_prev_weekday` 契约是「d 之前最近的工作日」，多减一天就退到周四） |
+| Step 1 测试（逐字） | `assert data_as_of == date(2026, 10, 30)` | **周五 10-30** |
+
+按 R1 / R2 的先例 —— **plan 自身矛盾 → Global Constraints 治理**，不需要 human 拍板，
+因为同一份 plan 里有**三处**一致指向「周五」：函数 docstring（「周末 → `data_as_of` = 上周五」）、
+`test_weekend_is_not_intraday`（周六 → 周五）、`test_monday_before_open_skips_weekend`（周一盘前 → 上周五，
+即周末要被跳过）。**代码块是那个 outlier。**
+
+**裁定**：周末分支统一为 `_prev_weekday(today)`（不加那一天），并把 `today` 的提取提到分支之前。
+Step 1 的测试**逐字保留**（不变断言），改动只落在实现代码的那一行 + 就地注释原因。
+
+**连锁修订（已落到下面各 Task 的正文里）**：
+
+| 位置 | 修订 |
+|---|---|
+| Task 6 Step 3 代码块 | 周末分支改为 `_prev_weekday(today)`；`today = date(...)` 提到 `if now.weekday() >= 5` 之前（消除重复构造） |
+| 下游 Task 7 | Task 7 会消费 `resolve_batch_time_marks`（守门脚本要核对两条路径的基准日）→ **必须**以本修订后的口径为准：**周末 → 上周五**，不要再写「`today - 1 天`」的旧推导 |
+
+> ⚠️ **这条修订的由来**：plan 里的陈旧文字会顺着任务链复活 —— Task 6 的 brief 从 Step 3 代码块抽，
+> Task 7 的 brief 又从 Task 6 的产出抽。只改代码不改 plan，下游会再撞一次同一个坑。
+
 ---
 
 ## File Structure
@@ -1737,9 +1765,12 @@ def resolve_batch_time_marks(
     - 周末 → `data_as_of` = 上周五,`is_intraday` = False
     """
     now = now or datetime.now()
-    if now.weekday() >= 5:  # 周末
-        return _prev_weekday(date(now.year, now.month, now.day) - timedelta(days=1)), False
     today = date(now.year, now.month, now.day)
+    if now.weekday() >= 5:  # 周末
+        # ⚠️ `_prev_weekday(today)`(不是 `today - 1 天`):`_prev_weekday` 本身
+        # 就只回退到**最近的工作日** —— 周六/周日都落到上周五。
+        # 多减一天会落到周四(周六)→ 与「周末 data_as_of = 上周五」口径矛盾。
+        return _prev_weekday(today), False
     if now.hour >= 15:  # 已收盘
         return today, False
     return _prev_weekday(today), True
