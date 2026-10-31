@@ -1357,7 +1357,7 @@ class TestLatestApiTruth:
 
         await self._seed(repo, KIND_DIP_BUY, 3)
         data = client.get("/api/behavior-screener/latest").json()
-        assert data["run"]["hitCounts"] == {KIND_DIP_BUY: 3}
+        assert data["run"]["hit_counts"] == {KIND_DIP_BUY: 3}
         assert data["run"]["dataAsOf"] == "2026-10-30"
         assert data["run"]["isIntraday"] is False
 
@@ -2166,6 +2166,9 @@ git -C D:\zga-study\rich commit -m "test(behavior): 闸3 一致性守门 —— 
   - `BehaviorRun` 增加 `hitCounts: Record<string, number>`、`dataAsOf: string | null`、`isIntraday: boolean | null`（`null` = 时点未知，见 **R1**）。
   - `BehaviorGroup.count` 语义改为**真实命中数**。
   - `fetchBehaviorLatestPage(kind, limit, offset)` —— 分页拉取。
+  - 🚨 **按类取真实数一律走 `groups[]`**（`groups[].kind` 是**值**、不会被驼峰化；`groups[].count` 就是该类真实命中数）。
+    **不要**用 `hitCounts[kind]` —— axios 拦截器会把字典的**键**也驼峰化
+    （`main_force_move` → `mainForceMove`），运行期 `undefined` 而 TS 不报错 → 静默退回 `picks.length` → 闸 1 白做。详见 Step 1 类型注释。
 
 - [ ] **Step 1: 改 API 类型**
 
@@ -2193,6 +2196,18 @@ export interface BehaviorRun {
    * ⚠️ 必须是**驼峰**:axios 响应拦截器会递归把 snake_case 转 camelCase
    * (`snakeToCamel`,见 lib/api.ts),运行期拿到的就是 `hitCounts`。
    * 写成 snake_case 的话 TS 不报错(泛型只是断言),但页面读出来全是 `undefined`。
+   *
+   * 🚨🚨 **更隐蔽的坑:字典的「键」也会被驼峰化**。
+   * `snakeToCamel` 递归处理**每一个对象的键**(lib/api.ts 的 `camelKey`),
+   * 所以后端 `hit_counts = {"main_force_move": 268}` 到前端变成
+   * **`{mainForceMove: 268}`** —— 键跟后端的 kind 常量(`main_force_move`)对不上了。
+   * 于是 `hitCounts[kind]`(kind 是蛇形)在运行期是 **`undefined`**,
+   * 而 TS 的 `Record<string, number>` **不会报错** → 静默退回到 `picks.length`,
+   * 闸 1 白做。
+   *
+   * ✅ **要按类取真实数,一律从 `groups[]` 取**:`groups[].kind` 是**值**(不是键),
+   * 不会被驼峰化;`groups[].count` 就是该类真实命中数。
+   * `hitCounts` 只当「机器可读的原始披露」,**不要**用它做按 kind 的索引查找。
    */
   hitCounts: Record<string, number>;
   /** 本批数据中已收盘的最后交易日 */
