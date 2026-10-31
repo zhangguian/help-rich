@@ -29,6 +29,33 @@
 
 ---
 
+## ⚠️ 修订记录（human 拍板，2026-10-31）
+
+### R1 —— `is_intraday` 的「未传值」语义：`False` → `None`（NULL = 未知）
+
+**背景**：Task 1 审查（round 1）发现一条 plan-mandated 缺陷 —— 计划把 `is_intraday` 默认成
+`False`，即把「未知」编码成「确定不是盘中」。这与**项目铁律**「缺数据 → 不产出，**绝不编数字**」
+直接冲突：今天的生产调用点不传这个参数 → **盘中跑的批次会被落库成「盘后完整数据」**，
+而那恰恰是闸 4 稳定闸要拦的「半成品被当完整数据」。
+
+**human 裁定**：**改为 `bool | None = None` —— NULL = 未知**，与同批的 `hit_counts_json` /
+`data_as_of`（None = 未知）语义一致。生产端**必须显式传真值**。
+
+**连锁修订（已落到下面各 Task 的正文里）**：
+
+| 位置 | 修订 |
+|---|---|
+| Task 1 | ORM `Mapped[bool | None]`；迁移列**无** server default；`upsert_run` 默认 `None`；测试断言 `is None` + 新增 update 分支用例 |
+| Task 3 | 占位值 `is_intraday=False` → **`None`**（⚠️ 不写 `False`：占位批次会被 Task 6 的调度器当成「盘后完整数据」而跳过今天的真实跑批）；`data_as_of=target` → **`None`** |
+| Task 5 | API 序列化**不得**把 `None` 塌缩成 `False`：`"is_intraday": r.is_intraday`（原样透出 `null`） |
+| Task 6 | 跳过条件收紧为「今天的批次存在 **且 `is_intraday` 明确为 `False`**」；`None`（未知）与 `True`（盘中半成品）**都要重跑** |
+| Task 8 | 前端类型 `isIntraday: boolean \| null`；盘中提示只在 `=== true` 时出现，`null` 不谎称盘后 |
+
+> 贯穿全线的一句话：**算不出来就留 `None`，不要用 `False` 冒充「没有」。**
+> 这条在存储层、API 层、调度判断、前端展示四层都成立。
+
+---
+
 ## File Structure
 
 **新建**
@@ -76,7 +103,7 @@
 - Produces:
   - ORM 字段 `BehaviorSignalRun.hit_counts_json: str | None`（JSON 字符串，键为 kind，值为该类**真实**命中数）
   - ORM 字段 `BehaviorSignalRun.data_as_of: date | None`（本批数据中已收盘的最后交易日）
-  - ORM 字段 `BehaviorSignalRun.is_intraday: bool`（本批是否额外包含当日未收盘数据；默认 `False`）
+  - ORM 字段 `BehaviorSignalRun.is_intraday: bool | None`（本批是否额外包含当日未收盘数据；**`None` = 未知**，不编成 `False` —— 见上文 **R1**）
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -102,8 +129,8 @@ class TestRunTrustFields:
         assert run.data_as_of == date(2026, 10, 30)
         assert run.is_intraday is False
 
-    async def test_is_intraday_defaults_false(self):
-        """不传 is_intraday → False(存量批次行不因缺字段而崩)。"""
+    async def test_is_intraday_defaults_none(self):
+        """不传 is_intraday → None(未知),**不编成「确定不是盘中」**。"""
         from app.modules.behavior_screener import repository as repo
 
         run = await repo.upsert_run(
@@ -112,9 +139,40 @@ class TestRunTrustFields:
             after_filters_count=1, candidates_considered=1,
             total_picks=0, elapsed_sec=0.1, note=None,
         )
-        assert run.is_intraday is False
+        assert run.is_intraday is None
         assert run.hit_counts_json is None
         assert run.data_as_of is None
+
+    async def test_upsert_run_updates_existing_row(self):
+        """同日再 upsert → **覆盖同一行**(不是新增),三字段一起被更新。
+
+        覆盖 Step 6 要求的「两条分支都赋值」里的 update 分支:
+        同 `run_date` 二次 upsert 必须落回同一行,且三字段被新值覆盖。
+        """
+        from app.modules.behavior_screener import repository as repo
+
+        first = await repo.upsert_run(
+            date(2026, 10, 28),
+            pool_size=1, main_board_count=1, non_st_count=1,
+            after_filters_count=1, candidates_considered=1,
+            total_picks=1, elapsed_sec=0.1, note=None,
+            hit_counts_json='{"main_force_move": 1}',
+            data_as_of=date(2026, 10, 28),
+            is_intraday=True,
+        )
+        second = await repo.upsert_run(
+            date(2026, 10, 28),
+            pool_size=2, main_board_count=2, non_st_count=2,
+            after_filters_count=2, candidates_considered=2,
+            total_picks=2, elapsed_sec=0.2, note=None,
+            hit_counts_json='{"main_force_move": 9}',
+            data_as_of=date(2026, 10, 27),
+            is_intraday=False,
+        )
+        assert first.id == second.id
+        assert second.hit_counts_json == '{"main_force_move": 9}'
+        assert second.data_as_of == date(2026, 10, 27)
+        assert second.is_intraday is False
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
@@ -137,7 +195,7 @@ Expected: FAIL —— `TypeError: upsert_run() got an unexpected keyword argumen
 - `data_as_of`:本批数据中已收盘的最后交易日(闸 4 稳定闸)
 - `is_intraday`:本批是否额外包含当日未收盘数据(闸 4 稳定闸)
 
-三列全部 nullable / 有默认值 → 存量批次行不需要回填。
+三列全部 nullable / **无默认值** → 存量批次行不需要回填,且省略该列时自然落成 NULL(未知)。
 """
 from typing import Sequence, Union
 
@@ -166,7 +224,6 @@ def upgrade() -> None:
             "is_intraday",
             sa.Boolean(),
             nullable=True,
-            server_default=sa.false(),
         ),
     )
 
@@ -211,9 +268,9 @@ Expected: 列里能看到 `hit_counts_json` / `data_as_of` / `is_intraday`。
     # 本批数据中**已收盘**的最后交易日(闸 4:批次的数据时点)
     data_as_of: Mapped[date | None] = mapped_column(Date, nullable=True)
     # 本批是否额外包含当日**未收盘**数据(闸 4:区分盘后完整数据与盘中半成品)
-    is_intraday: Mapped[bool] = mapped_column(
-        Boolean, nullable=True, default=False, server_default="0"
-    )
+    # ⚠️ **None = 未知**,不是「确定不是盘中」—— 缺数据不编值(human 2026-10-31 拍板)。
+    # 因此**不设** default / server_default:省略该列时自然落成 NULL。
+    is_intraday: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 ```
 
 并在文件顶部的 SQLAlchemy import 里确认包含 `Boolean`：
@@ -242,10 +299,15 @@ async def upsert_run(
     note: str | None = None,
     hit_counts_json: str | None = None,
     data_as_of: date | None = None,
-    is_intraday: bool = False,
+    is_intraday: bool | None = None,
 ) -> BehaviorSignalRun:
     ...  # 原有函数体不变,只加三个新参数的赋值(见下一步)
 ```
+
+> ⚠️ 三个新参数的默认值**一律是「未知」**(`None`),不是「确定的值」。
+> `is_intraday` 若默认 `False`,就等于把「没传」编码成「确定不是盘中」——
+> 违反铁律「缺数据 → 绝不编数字」,也与 `hit_counts_json` / `data_as_of` 语义不一致。
+> **生产端调用点(Task 6)必须显式传真值。**
 
 在 `upsert_run` 函数体的**两条分支**（`if existing:` 与新建 `BehaviorSignalRun(...)`）里补上这三个字段：
 
@@ -932,8 +994,8 @@ async def run_daily_scan(
         elapsed_sec=result.elapsed_sec,
         note="; ".join(result.degraded) if result.degraded else None,
         hit_counts_json=json.dumps(counts, ensure_ascii=False) if counts else None,
-        data_as_of=target,
-        is_intraday=False,
+        data_as_of=None,
+        is_intraday=None,
     )
 
     await repo.replace_picks(
@@ -950,7 +1012,13 @@ async def run_daily_scan(
     return run, hits
 ```
 
-> ⚠️ `data_as_of=target` 与 `is_intraday=False` 是**占位** —— 闸 4（Task 6）会把它们改成真实计算。Task 3 只需保证字段存在且不报错。
+> ⚠️ `data_as_of=None` 与 `is_intraday=None` 是**占位（= 未知）** —— 闸 4（Task 6）会把它们改成真实计算。Task 3 只需保证字段存在且不报错。
+>
+> 🚨 **这里必须写 `None`,不能写 `False`/`target`**（见上文 **R1**）：
+> 若这里写 `is_intraday=False`，今天的批次就会带着「确定不是盘中」落库 →
+> Task 6 的调度器判定「今天的批次存在 且 `is_intraday` 明确为 `False`」→ **跳过盘后跑批** →
+> 盘中半成品/占位批次被当成盘后完整数据当最新批次展示，闸 4 直接失效。
+> `None`（未知）不会被跳过 → 盘后跑批照常发生，并覆盖成真值。
 
 - [ ] **Step 6: 运行测试确认通过**
 
@@ -1221,7 +1289,7 @@ git -C D:\zga-study\rich commit -m "fix(behavior): 闸2 K线路径回看窗口�
 **Interfaces:**
 - Consumes: Task 1 的 `hit_counts_json` / `data_as_of` / `is_intraday`；Task 3 的真实计数。
 - Produces:
-  - `GET /api/behavior-screener/latest` 响应新增：`run.hitCounts`（dict）、`run.dataAsOf`（str|null）、`run.isIntraday`（bool）；`groups[].count` = 该类**真实**命中数（不是 `picks` 长度）。
+  - `GET /api/behavior-screener/latest` 响应新增：`run.hitCounts`（dict）、`run.dataAsOf`（str|null）、`run.isIntraday`（bool|**null**；`null` = 未知，**不得塌缩成 `false`** —— 见 **R1**）；`groups[].count` = 该类**真实**命中数（不是 `picks` 长度）。
   - `GET /api/behavior-screener/latest?kind=<kind>&limit=<n>&offset=<n>`：当 `kind` 非空时，额外返回 `page: {kind, picks, total, offset, limit}`。
   - `repo.get_picks_by_kind_offset(run_id, kind, limit, offset) -> list[BehaviorSignalPick]`。
 
@@ -1336,7 +1404,9 @@ def run_to_dict(r: Any) -> dict[str, Any]:
         "total_picks": r.total_picks,
         "hit_counts": counts,
         "data_as_of": r.data_as_of.isoformat() if r.data_as_of else None,
-        "is_intraday": bool(r.is_intraday) if r.is_intraday is not None else False,
+        # ⚠️ **原样透出**,不塌缩成 False(None = 未知,见 R1)。
+        # 前端据此区分「盘后完整数据」(false) / 「盘中半成品」(true) / 「时点未知」(null)。
+        "is_intraday": r.is_intraday,
         "elapsed_sec": r.elapsed_sec,
         "note": r.note,
     }
@@ -1474,7 +1544,7 @@ git -C D:\zga-study\rich commit -m "feat(behavior): 闸1 API 披露真实计数 
 - Consumes: Task 1 的 `data_as_of` / `is_intraday` 字段。
 - Produces:
   - `resolve_batch_time_marks(now: datetime | None = None) -> tuple[date, bool]` —— 返回 `(data_as_of, is_intraday)`。`data_as_of` = 最近一个**已收盘**交易日；`is_intraday` = 本批是否含当日未收盘数据（工作日 15:00 前 = True）。
-  - `should_run_behavior_batch(run: Any, now: datetime | None = None) -> bool` —— 跳过条件 = 「今天的批次存在 **且** `is_intraday == False`」。
+  - `should_run_behavior_batch(run: Any, now: datetime | None = None) -> bool` —— 跳过条件 = 「今天的批次存在 **且** `is_intraday` 明确为 `False`」。`None`（未知）与 `True`（盘中半成品）**都要重跑**（见 **R1**）。
   - `start_behavior_scheduler() -> None` —— 每日 15:30 后跑一次。
 
 - [ ] **Step 1: 写失败的测试**
@@ -1499,7 +1569,7 @@ from app.modules.behavior_screener.service import (
 
 
 class _Run:
-    def __init__(self, run_date: date, is_intraday: bool):
+    def __init__(self, run_date: date, is_intraday: bool | None):
         self.run_date = run_date
         self.is_intraday = is_intraday
 
@@ -1562,6 +1632,16 @@ class TestShouldRun:
         """昨天有批次 → 今天照跑。"""
         now = datetime(2026, 10, 30, 15, 30)
         run = _Run(date(2026, 10, 29), is_intraday=False)
+        assert should_run_behavior_batch(run, now) is True
+
+    def test_runs_when_today_batch_is_intraday_unknown(self):
+        """今天的批次 `is_intraday` 是 **None(未知)** → **要跑**。
+
+        ⚠️ 见 R1:未知 ≠ 「确定不是盘中」。若把 None 当成 False 跳过,
+        一个占位/未知批次就能把当天的盘后跑批挡掉。
+        """
+        now = datetime(2026, 10, 30, 15, 30)
+        run = _Run(date(2026, 10, 30), is_intraday=None)
         assert should_run_behavior_batch(run, now) is True
 
     def test_does_not_run_before_1530(self):
@@ -1630,9 +1710,13 @@ def resolve_batch_time_marks(
 def should_run_behavior_batch(run: Any, now: datetime | None = None) -> bool:
     """今天是否需要跑批。
 
-    ⚠️ **跳过条件必须是「今天的批次存在 且 `is_intraday == False`」**:
+    ⚠️ **跳过条件必须是「今天的批次存在 且 `is_intraday` 明确为 `False`**」:
     盘中手动跑的那份带 `is_intraday=true`,若被当成「今天已跑」,
     盘后调度器就会跳过 → 盘中那份会一直留着当最新批次。
+
+    🚨 **`None`(未知)不跳过**(见 R1):只有**明确**知道是盘后完整数据才跳过。
+    `None` = 时点未知(比如 Task 3 的占位批次、迁移前的老批次)→ 不信任它,重跑。
+    `True` = 盘中半成品 → 必须重跑。
 
     纯函数(只吃 `now` 与批次行),便于单测 —— 不打桩时钟。
     """
@@ -1645,7 +1729,8 @@ def should_run_behavior_batch(run: Any, now: datetime | None = None) -> bool:
         return True
     if run.run_date != date(now.year, now.month, now.day):
         return True
-    return bool(run.is_intraday)
+    # 只有明确是盘后完整数据(False)才跳过;None(未知)/True(盘中)都要重跑。
+    return run.is_intraday is not False
 
 
 async def start_behavior_scheduler() -> None:
@@ -1676,11 +1761,11 @@ async def start_behavior_scheduler() -> None:
 
 - [ ] **Step 4: 改 `run_daily_scan` 用真实时点**
 
-在 `run_daily_scan` 里，把 Task 3 留下的占位：
+在 `run_daily_scan` 里，把 Task 3 留下的占位（**未知**，见 R1）：
 
 ```python
-        data_as_of=target,
-        is_intraday=False,
+        data_as_of=None,
+        is_intraday=None,
 ```
 
 改成：
@@ -2068,7 +2153,7 @@ git -C D:\zga-study\rich commit -m "test(behavior): 闸3 一致性守门 —— 
 **Interfaces:**
 - Consumes: Task 5 的 API 形状。
 - Produces:
-  - `BehaviorRun` 增加 `hitCounts: Record<string, number>`、`dataAsOf: string | null`、`isIntraday: boolean`。
+  - `BehaviorRun` 增加 `hitCounts: Record<string, number>`、`dataAsOf: string | null`、`isIntraday: boolean | null`（`null` = 时点未知，见 **R1**）。
   - `BehaviorGroup.count` 语义改为**真实命中数**。
   - `fetchBehaviorLatestPage(kind, limit, offset)` —— 分页拉取。
 
@@ -2102,8 +2187,8 @@ export interface BehaviorRun {
   hitCounts: Record<string, number>;
   /** 本批数据中已收盘的最后交易日 */
   dataAsOf: string | null;
-  /** 本批是否含当日未收盘数据(盘中跑批) */
-  isIntraday: boolean;
+  /** 本批是否含当日未收盘数据(盘中跑批);null = 时点未知(见 R1) */
+  isIntraday: boolean | null;
   elapsedSec: number | null;
   note: string | null;
 }
@@ -2191,7 +2276,7 @@ export function fetchBehaviorLatestPage(
 在口径条 `<Card className="p-4">` 内部（`{pool?.universe && (...)}` 之后）追加：
 
 ```typescript
-        {run.isIntraday && (
+        {run.isIntraday === true && (
           <p className="text-orange-500 mt-2 text-xs">
             ⚠ 本批次含未收盘的当日数据(盘中跑批),收盘后会自动重算。
           </p>
@@ -2203,6 +2288,12 @@ export function fetchBehaviorLatestPage(
 
 > ⚠️ JSX 文本里**不能**用 `**未收盘**` 这种 Markdown 语法 —— 会被当字面量渲染。
 > 要强调就用 `<span className="font-medium">未收盘</span>`。
+
+> 🚨 **必须写 `run.isIntraday === true`，不能写 `run.isIntraday &&`**（见 **R1**）：
+> `isIntraday` 现在是 `boolean | null`。`null && (...)` 在 React 里会渲染出 `null`（什么都不显示），
+> 但语义上「未知」和「false」不能混为一谈 —— 显式 `=== true` 才能表达「只在这一种情况下提示盘中」。
+> `null`（时点未知）**不显示盘中提示**，也**不谎称盘后完整**：下面的「数据截止 {dataAsOf}」仍如实展示。
+> 若要显式告知「时点未知」，可加一行中性提示（灰字），但**不要**复用橙色的盘中警告样式。
 
 - [ ] **Step 4: 改分组卡 —— 真实 count + 展开更多**
 

@@ -361,13 +361,17 @@ behavior **不能这样** —— 盘中手动跑过的那份带 `is_intraday=tru
 `backend/migrations/versions/<rev>_add_behavior_trust_fields.py`
 
 ```python
-op.add_column("behavior_signal_runs", sa.Column("hit_counts_json", sa.Text(), nullable=True))
-op.add_column("behavior_signal_runs", sa.Column("data_as_of", sa.Date(), nullable=True))
-op.add_column("behavior_signal_runs", sa.Column("is_intraday", sa.Boolean(), nullable=True, server_default=sa.false()))
+op.add_column("behavior_signal_run", sa.Column("hit_counts_json", sa.Text(), nullable=True))
+op.add_column("behavior_signal_run", sa.Column("data_as_of", sa.Date(), nullable=True))
+op.add_column("behavior_signal_run", sa.Column("is_intraday", sa.Boolean(), nullable=True))
 ```
 
 - `down_revision` = `b3c4d5e6f708`
-- 新列全部 nullable / 有默认值 → **存量批次行不需要回填**(读时按空处理)
+- ⚠️ **表名是 `behavior_signal_run`（单数）** —— 已于 2026-10-31 实测确认（`sqlite_master` + ORM `__tablename__`）。
+- 新列全部 nullable / **无默认值** → **存量批次行不需要回填**，且省略该列时自然落成 `NULL`（未知）。
+- 🚨 **`is_intraday` 不设 `server_default`**（2026-10-31 human 拍板）：设 `DEFAULT 0` 等于把「未知」
+  编码成「确定不是盘中」，与项目铁律「缺数据 → 绝不编数字」冲突。`NULL` = 未知，
+  与 `hit_counts_json` / `data_as_of` 的 `None` 语义一致；生产端必须显式传真值。
 
 ---
 
