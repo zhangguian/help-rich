@@ -3,6 +3,7 @@
 - POST /api/diagnose/{trade_id} → 立即返回,异步评分 + 评语(SSE 推送)
 - GET  /api/diagnose/{trade_id} → 查询当前评分状态(降级轮询用)
 - PUT  /api/diagnose/{trade_id}/feedback → 评语价值反馈(P4.9:useful/useless/null)
+- POST /api/diagnose/backfill → 补评 / 全量重算(force=True)
 
 一键复盘(v2.3):
 - POST /api/diagnose/stock/{stock_code}/summary?window=X → 强制 LLM 重算 + 写库
@@ -25,7 +26,12 @@ from app.api.stock import (
 )
 from app.core.db_lock import safe_write
 from app.core.stock_code import normalize_code
-from app.models.schemas import DiagnoseOut, FeedbackUpdate, ReplaySummaryOut
+from app.models.schemas import (
+    BackfillRequest,
+    DiagnoseOut,
+    FeedbackUpdate,
+    ReplaySummaryOut,
+)
 from app.repositories.trade_score_repo import trade_score_repo
 from app.modules.portfolio.repository import transaction_repo
 from app.services.daily_analysis_service import (
@@ -45,6 +51,49 @@ from app.services.replay_service import (
 )
 
 router = APIRouter(prefix="/diagnose", tags=["diagnose"])
+
+
+@router.post("/backfill")
+async def backfill_scores(
+    payload: BackfillRequest,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    """补评 / 全量重算(持仓侧「每一条流水都有评分」)
+
+    ⚠️ 本路由必须**注册在** `POST /{trade_id}` **之前** —— 否则 "backfill"
+    会被当成 trade_id 去解析 int → 422。
+
+    - force=False → 只补**没有评分记录**的流水
+      (漏评来源:一键清仓、截图导入流水、评分功能之前的老流水)
+    - force=True  → 全部重算(评分口径升级后必须走这条,否则新旧分数不可比)
+
+    评分在后台跑(SSE 推 trade.scored / trade.commented),本接口立即返回。
+    幂等:重复执行安全。
+    """
+    from app.services.diagnose_service import find_backfill_candidates
+
+    stock_code = payload.stock_code
+    if stock_code:
+        stock_code = normalize_code(stock_code) or stock_code
+
+    trade_ids = await find_backfill_candidates(
+        stock_code=stock_code,
+        force=payload.force,
+        limit=payload.limit,
+    )
+    for tid in trade_ids:
+        background_tasks.add_task(
+            diagnose_service.score_and_notify,
+            tid,
+            payload.include_comment,
+        )
+    return {
+        "candidates": len(trade_ids),
+        "submitted": len(trade_ids),
+        "trade_ids": trade_ids,
+        "force": payload.force,
+        "include_comment": payload.include_comment,
+    }
 
 
 @router.post("/{trade_id}")

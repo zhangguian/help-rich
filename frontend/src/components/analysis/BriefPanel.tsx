@@ -129,7 +129,7 @@ export function BriefPanel() {
             {windows.map((w) => (
               <div
                 key={w.kind}
-                className="flex items-start gap-3 rounded-md border border-border-base bg-bg-elev px-3 py-2"
+                className="flex items-start gap-3 rounded-md border border-border-def bg-bg-elevated px-3 py-2"
               >
                 <span className="font-mono text-sm text-accent">{w.at}</span>
                 <div className="min-w-0">
@@ -145,7 +145,7 @@ export function BriefPanel() {
           </div>
         )}
 
-        <div className="rounded-md border border-warning/35 bg-warning/10 px-3 py-2 text-[11px] leading-relaxed text-warning">
+        <div className="rounded-md border border-warn/35 bg-warn/10 px-3 py-2 text-[11px] leading-relaxed text-warn">
           自动推送依赖后端进程常驻。后端没开着(比如电脑关机、服务停了),
           对应时段的简报不会补发 —— 这时手动点「生成并推送」即可。
         </div>
@@ -160,7 +160,7 @@ export function BriefPanel() {
             {loading === 'gen' ? '生成中…' : '生成盘前简报'}
           </button>
 
-          <div className="flex items-center gap-1 rounded-md border border-border-base p-0.5">
+          <div className="flex items-center gap-1 rounded-md border border-border-def p-0.5">
             {(['11:30', '14:00', '14:50'] as const).map((s) => (
               <button
                 key={s}
@@ -169,7 +169,7 @@ export function BriefPanel() {
                 className={clsx(
                   'rounded px-2 py-1 text-xs transition',
                   slot === s
-                    ? 'bg-bg-elev text-text-pri'
+                    ? 'bg-bg-elevated text-text-pri'
                     : 'text-text-ter hover:text-text-sec',
                 )}
               >
@@ -221,7 +221,7 @@ export function BriefPanel() {
               {brief.stockCodes.map((c) => (
                 <span
                   key={c}
-                  className="rounded border border-border-base bg-bg-elev px-1.5 py-0.5 font-mono text-[11px] text-text-sec"
+                  className="rounded border border-border-def bg-bg-elevated px-1.5 py-0.5 font-mono text-[11px] text-text-sec"
                 >
                   {c}
                 </span>
@@ -230,7 +230,7 @@ export function BriefPanel() {
           )}
 
           {/* 推送:必须二次确认,因为真的会打扰到手机 */}
-          <div className="border-t border-border-base pt-3">
+          <div className="border-t border-border-def pt-3">
             {confirmPush ? (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs text-text-sec">
@@ -258,7 +258,7 @@ export function BriefPanel() {
                 type="button"
                 onClick={() => setConfirmPush(true)}
                 disabled={busy}
-                className="rounded-md border border-border-base px-3 py-1.5 text-xs text-text-sec transition hover:border-accent/50 hover:text-text-pri disabled:opacity-50"
+                className="rounded-md border border-border-def px-3 py-1.5 text-xs text-text-sec transition hover:border-accent/50 hover:text-text-pri disabled:opacity-50"
               >
                 推送这份简报
               </button>

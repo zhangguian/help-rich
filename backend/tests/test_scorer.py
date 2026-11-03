@@ -1,10 +1,10 @@
 """P4.1 scorer 单测(目标 100% 覆盖 core/scorer.py)
 
 结构:
-- 5 个维度每个:满分支测试
+- 6 个维度每个:满分支测试
 - 0 数据降级
 - 边界(score clamp、日期兼容、无同向操作)
-- ground truth 对照(10 样本,差 <= 10 分)
+- ground truth 对照(10 样本,5 维小计差 <= 10 分)
 """
 import json
 from datetime import date, datetime
@@ -18,7 +18,9 @@ from app.core.scorer import (
     INTERVAL,
     MARKET_ENV,
     PRICE_REASON,
+    SCORE_MAX,
     SECTOR_HEAT,
+    TIMING,
     score_trade,
 )
 
@@ -346,16 +348,16 @@ class TestScoreAggregation:
         )
         assert r["score"] >= 0
 
-    def test_max_clamped_to_100(self):
+    def test_max_clamped_to_120(self):
         r = score_trade(_trade(), {"shares": 100, "avg_cost": "1400.000"}, _RECENT_5,
                         {"index_change_pct": 0.0, "sector_rank": 1}, True, _POS_4)
-        assert r["score"] <= 100
+        assert r["score"] <= 120
         assert r["score"] == sum(r["score_breakdown"].values())
 
-    def test_breakdown_has_all_5_dimensions(self):
+    def test_breakdown_has_all_6_dimensions(self):
         r = score_trade(_trade(), {"shares": 100, "avg_cost": "1400.000"}, _RECENT_5, _MKT, True, _POS_4)
         assert set(r["score_breakdown"].keys()) == {
-            CONCENTRATION, PRICE_REASON, INTERVAL, MARKET_ENV, SECTOR_HEAT,
+            CONCENTRATION, PRICE_REASON, INTERVAL, MARKET_ENV, SECTOR_HEAT, TIMING,
         }
 
     def test_is_in_watchlist_does_not_affect_score(self):
@@ -383,7 +385,12 @@ class TestScoreAggregation:
 
 
 class TestGroundTruth:
-    """验收:10 样本与人工打分差 <= 10 分(P4.1)"""
+    """验收:10 样本与人工打分差 <= 10 分(P4.1)
+
+    ⚠️ 评分口径已升级为 6 维(新增「交易时机」),但 ground_truth 夹具是
+    **5 维人工打分** → 对照时先把「交易时机」这一维减掉,只比原来的 5 维小计,
+    保持 P4.1 的验收语义不变。
+    """
 
     def test_all_samples(self):
         data = json.loads(FIXTURES.read_text(encoding="utf-8"))
@@ -399,8 +406,9 @@ class TestGroundTruth:
                 s["all_positions"],
             )
             exp = s["expected"]
-            assert abs(r["score"] - exp["score"]) <= 10, (
-                f"{s['name']}: got {r['score']}, expected {exp['score']} "
+            five_dim_score = r["score"] - r["score_breakdown"][TIMING]
+            assert abs(five_dim_score - exp["score"]) <= 10, (
+                f"{s['name']}: got {five_dim_score}, expected {exp['score']} "
                 f"(breakdown {r['score_breakdown']} vs {exp['breakdown']})"
             )
             for dim, val in exp["breakdown"].items():

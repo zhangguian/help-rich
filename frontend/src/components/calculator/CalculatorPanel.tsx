@@ -383,7 +383,7 @@ export function CalculatorPanel({
               </b>
             </span>
             <span>
-              新均价{' '}
+              新摊薄成本{' '}
               <b className="font-mono text-[13.5px] text-text-pri font-semibold">
                 {result.after.costPrice ? priceFormat(result.after.costPrice) : '—'}
               </b>

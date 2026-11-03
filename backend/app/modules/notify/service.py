@@ -10,6 +10,7 @@ from app.modules.notify.base import (
     CHANNEL_LABELS,
     NotifyChannel,
     NotifyError,
+    NotifyLevel,
     NotifyMessage,
     NotifyResult,
     Notifier,
@@ -97,7 +98,15 @@ class NotifyService:
         return results
 
     async def enabled_channels(self) -> list[str]:
-        """返回用户已启用的渠道名(按配置顺序)。读不到配置时返回空。"""
+        """返回用户已启用的渠道名(按 `NotifyChannel` 枚举顺序)。
+
+        ⚠️ 口径必须与 `config_service.list_channels()`(通知设置面板)一致:
+        **console 没有数据库行时也算启用**(面板默认给它打勾)。
+        两处口径不一致的代价:面板上勾着的渠道收不到消息,
+        或者没勾的渠道一直在收 —— 「我明明开了桌面通知怎么没弹窗」就是这么来的。
+
+        读不到配置时返回空(调用方自己决定兜底)。
+        """
         from app.modules.notify.config_repository import notify_config_repo
 
         try:
@@ -105,7 +114,14 @@ class NotifyService:
         except Exception as e:  # noqa: BLE001 — 配置读不到按"未启用"处理
             logger.warning(f"[notify] 读取渠道列表失败: {e}")
             return []
-        return [r.channel for r in rows if r.enabled]
+        known = {r.channel: r for r in rows}
+        out: list[str] = []
+        for ch in NotifyChannel:
+            row = known.get(ch.value)
+            enabled = bool(row.enabled) if row else (ch is NotifyChannel.CONSOLE)
+            if enabled:
+                out.append(ch.value)
+        return out
 
     async def send_to_enabled(self, message: NotifyMessage) -> list[NotifyResult]:
         """推送到全部已启用渠道。跨域调用方(如 workflow)用这一个方法即可。"""
@@ -147,16 +163,10 @@ notify_service = NotifyService()
 
 # 跨域契约:其他模块(如 alert)只允许 import `app.modules.notify.service`,
 # 因此消息 DTO 与等级枚举必须从这里再导出,而不是让调用方去碰 base/channels。
-from app.modules.notify.base import (  # noqa: E402
-    CHANNEL_LABELS,
-    NotifyChannel,
-    NotifyError,
-    NotifyLevel,
-    NotifyMessage,
-    NotifyResult,
-    Notifier,
-)
-
+#
+# ⚠️ 这里**不再重复 import** —— 上面已经把这批名字全导进来了,
+# 再导一遍是同名重定义(F811),而且会把「到底哪个是权威」的信号搞乱。
+# `__all__` 列出它们即可(NotifyService / notify_service 是本模块自己定义的)。
 __all__ = [
     "CHANNEL_LABELS",
     "Notifier",

@@ -1,10 +1,11 @@
 """LLM 数据脱敏(backend-arch §9.5 / project-book §4.3.3)
 
-传给 LLM 前只保留 5 项字段:
+传给 LLM 前只保留 6 项字段:
 - 股票代码 / 名称
 - 操作方向
 - 股数区间(不分桶到精确股数)
 - 交易日期
+- 交易时间点(HH:MM)—— 时段不是敏感信息,但「尾盘追单」这类判断要用
 - 持仓占比
 
 不传:精确价格、金额、持仓成本。
@@ -28,18 +29,20 @@ def sanitize_for_llm(trade: dict, concentration_pct: float | None = None) -> dic
     """交易信息脱敏
 
     Args:
-        trade: 原始交易 dict(stock_code / stock_name / action / shares / trade_date)
+        trade: 原始交易 dict(stock_code / stock_name / action / shares / trade_date / trade_time?)
         concentration_pct: 持仓占比百分比(0~100 或 None)
 
     Returns:
-        只含 5 项脱敏字段的 dict
+        只含 6 项脱敏字段的 dict
     """
+    trade_time = trade.get("trade_time") or ""
     return {
         "stock_code": trade.get("stock_code", ""),
         "stock_name": trade.get("stock_name", ""),
         "action": trade.get("action", ""),
         "shares_bucket": bucket_shares(int(trade.get("shares", 0))),
         "trade_date": trade.get("trade_date", ""),
+        "trade_time": trade_time,
         "concentration_pct": (
             f"{concentration_pct:.1f}" if concentration_pct is not None else "未知"
         ),

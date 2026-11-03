@@ -1,4 +1,4 @@
-"""持仓主数据 service(v0.5.0 事件溯源重构)
+"""持仓主数据 service(v0.5.0 事件溯源重构 / v0.11 摊薄成本口径)
 
 v0.5.0(方案B·每笔流水存持仓快照)设计:
 - positions 表 = 基准(base_*) + 当前状态(shares / total_cost / realized_pnl)
@@ -6,24 +6,47 @@ v0.5.0(方案B·每笔流水存持仓快照)设计:
 
 真相公式:
     当前持仓 = 基准(base_*) + 其后所有 id > base_tx_id 的流水
-               按 (trade_date, id) 顺序逐笔加权平均应用
+               按 (trade_date, trade_time, id) 顺序逐笔应用
+               (时间点未知(NULL)排在同日有时间者之前 → 存量流水顺序不变)
 
 任何一笔流水的增 / 删 / 改 → 从基准全量重放链尾 → 重写所有受影响快照 + 持仓行。
 因为基准是「导入那一刻的真实持仓」,历史流水不会被重复计算。
+
+═══════════════════════════════════════════════════════════════════════
+v0.11 成本口径:改为**券商摊薄口径**(净投入追踪)
+═══════════════════════════════════════════════════════════════════════
+
+券商持仓页显示的「成本价」= **摊薄成本** = 累计净投入 ÷ 当前持股数:
+
+    摊薄成本 = (累计买入金额 − 累计卖出金额) ÷ 持股数
+
+本模块的 `total_cost` 从 v0.11 起就是这个「净投入」(摊薄总额):
+- 买入:净投入 += 成交价 × 股数
+- 卖出:净投入 −= 成交价 × 股数(按成交价回收,不是按成本冲减)
+- 卖出确认的已实现 = (成交价 − 卖出前摊薄成本) × 股数
+
+⚠️ v0.10 及以前用的是「加权平均剩余成本」(卖出按均价等比例冲减),
+展示时又用 `(total_cost − realized_pnl) ÷ shares` 反推摊薄成本。
+当基准里带了券商给的**累计已实现盈亏**(base_realized_pnl ≠ 0)时,
+这个反推会把已实现**二次扣减** —— 正是「成本和券商对不上」的根因:
+    豫能控股:基准净投入 9346.80、已实现 1293.00
+    → 旧口径摊薄成本 = (6231.20 + 50.60) ÷ 400 = 15.704(券商 18.940)
+    → 新口径摊薄成本 = 7574.80 ÷ 400 = 18.937 ✓
+直接追踪净投入,摊薄成本与券商**恒等**,不再靠反推。
+
+纯函数职责划分(backend-arch §5.1):
+- `apply_transaction` / `replay_chain`:纯计算,零 IO
+- `recalc_position` / `upsert_position`:落库路径
 
 v0.4.0 旧模型(已作废):
     持仓 = delta(持仓行现值 − 从 0 开始的流水聚合) + 全部流水聚合
     → 导入快照已含历史流水效果,流水又在其上重放一遍 = 双算
     → 华天科技 002185 卖出 100 股时少冲成本 1058.72 元,均价从 16.959 掉到 15.900
-
-纯函数职责划分(backend-arch §5.1):
-- `apply_transaction` / `replay_chain`:纯计算,零 IO
-- `recalc_position` / `upsert_position`:落库路径
 """
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 from sqlalchemy import select
 
@@ -34,10 +57,16 @@ from app.models.orm import Transaction
 
 @dataclass
 class Position:
-    """单只股票的持仓汇总(兼容旧接口:avg_cost / total_cost / realized_pnl)"""
+    """单只股票的持仓汇总(兼容旧接口:avg_cost / total_cost / realized_pnl)
+
+    v0.11:`total_cost` = **摊薄总额(净投入)**,`avg_cost` = 摊薄成本价
+    (= 券商持仓页显示的「成本价」)。语义见模块文档。
+    """
+
     stock_code: str
-    stock_name: Optional[str] = None
+    stock_name: str | None = None
     shares: int = 0
+    # 摊薄总额(净投入)= 累计买入金额 − 累计卖出金额
     total_cost: Decimal = field(default_factory=lambda: Decimal("0"))
     realized_pnl: Decimal = field(default_factory=lambda: Decimal("0"))
     # 持仓行落库时间(v0.10:决策层「持有天数」的兜底起点口径)
@@ -48,7 +77,7 @@ class Position:
 
     @property
     def avg_cost(self) -> Decimal:
-        """加权平均成本"""
+        """摊薄成本价(券商口径:净投入 ÷ 持股数)"""
         if self.shares <= 0:
             return Decimal("0")
         # 保留 3 位小数(与中国券商对齐)
@@ -65,14 +94,19 @@ class Position:
 
 @dataclass(frozen=True)
 class ChainState:
-    """链上某一点(或基准)的持仓状态"""
+    """链上某一点(或基准)的持仓状态
+
+    v0.11:`total_cost` = 摊薄总额(净投入),不是加权平均剩余成本。
+    """
+
     shares: int = 0
+    # 摊薄总额(净投入)= 累计买入金额 − 累计卖出金额
     total_cost: Decimal = field(default_factory=lambda: Decimal("0"))
     realized_pnl: Decimal = field(default_factory=lambda: Decimal("0"))
 
     @property
     def avg_cost(self) -> Decimal:
-        """未量化的加权平均成本(重放内部用,避免 3 位量化累计误差)"""
+        """未量化的摊薄成本价(重放内部用,避免 3 位量化累计误差)"""
         if self.shares <= 0:
             return Decimal("0")
         return self.total_cost / self.shares
@@ -86,7 +120,31 @@ class TxSpec:
     action: str
     shares: int
     price: Decimal
-    stock_name: Optional[str] = None
+    stock_name: str | None = None
+    # 时间节点(HH:MM:SS);None = 未知(存量流水 / 截图导入 / 用户留空)
+    trade_time: time | None = None
+
+
+def chain_sort_key(
+    trade_date: date,
+    trade_time: time | None,
+    tx_id: int,
+) -> tuple:
+    """链全序键:(交易日, 时间点, id)
+
+    ⚠️ 这是成本链的**唯一**排序口径 —— 链重放 / 试算 / 校验 / 「交易前持仓」
+    四处必须共用它,否则会出现「校验顺序 ≠ 重放顺序」的错位(历史上踩过)。
+
+    时间点未知(None)排在同日**有时间的流水之前**:
+    - 存量流水全是 NULL → 相对顺序与引入时间节点前(按 id)完全一致,
+      任何历史持仓成本都不受影响;
+    - 同一用户录的「09:35 卖」一定排在「14:00 买」之前 —— 盘中次序可表达。
+    """
+    return (trade_date, trade_time or time.min, tx_id)
+
+
+def _spec_sort_key(spec: TxSpec) -> tuple:
+    return chain_sort_key(spec.trade_date, spec.trade_time, spec.id)
 
 
 class PositionChainError(ValueError):
@@ -99,13 +157,14 @@ def apply_transaction(
     shares: int,
     price: Decimal,
 ) -> ChainState:
-    """纯函数:加权平均法应用一笔交易
+    """纯函数:摊薄口径(净投入追踪)应用一笔交易
 
-    买:shares += n;total_cost += price × n
-    卖:已实现盈亏 += (price − 均价) × n;剩余成本按均价等比例冲减
+    买:shares += n;净投入 += price × n
+    卖:已实现盈亏 += (price − 摊薄成本) × n;净投入 −= price × n(按成交价回收)
 
-    均价用**未量化**的 total_cost / shares —— 量化到 3 位再回乘会累计误差
-    (华天科技 16.95852 会被算成 16.959 → 总成本差 0.02 元/次)。
+    ⚠️ 摊薄成本 = 净投入 ÷ 股数,**卖出后会变**(低于成本卖 → 摊薄成本抬高),
+    这正是券商「摊薄成本价」的行为。均价用**未量化**的 net_invested / shares ——
+    量化到 3 位再回乘会累计误差。
     """
     if shares <= 0:
         raise PositionChainError(f"交易股数必须 > 0,实际 {shares}")
@@ -136,7 +195,8 @@ def apply_transaction(
     new_shares = state.shares - shares
     return ChainState(
         shares=new_shares,
-        total_cost=avg * new_shares,
+        # 按成交价回收净投入(不是按成本等比例冲减)→ 摊薄成本随卖出价变化
+        total_cost=state.total_cost - price * shares,
         realized_pnl=state.realized_pnl + realized,
     )
 
@@ -181,7 +241,10 @@ def aggregate_positions(
       False 不过滤(需要返回供 delta 计算)。
     """
     by_code: dict[str, Position] = {}
-    sorted_tx = sorted(transactions, key=lambda t: (t.trade_date, t.id))
+    sorted_tx = sorted(
+        transactions,
+        key=lambda t: chain_sort_key(t.trade_date, getattr(t, "trade_time", None), t.id),
+    )
 
     for tx in sorted_tx:
         if tx.stock_code not in by_code:
@@ -203,9 +266,12 @@ def aggregate_positions(
                     f"卖出 {tx.shares} 股超过持仓 {pos.shares} 股 "
                     f"(stock={tx.stock_code}, tx_id={tx.id})"
                 )
-            realized_per_share = price - pos.avg_cost
+            # ⚠️ 用**未量化**的摊薄成本算已实现(与 ChainState.avg_cost 同口径),
+            # 量化到 3 位再回乘会累计误差。
+            realized_per_share = price - (pos.total_cost / pos.shares)
             pos.realized_pnl += realized_per_share * tx.shares
-            pos.total_cost -= pos.avg_cost * tx.shares
+            # 摊薄口径:按成交价回收净投入
+            pos.total_cost -= price * tx.shares
             pos.shares -= tx.shares
 
     if keep_zero:
@@ -219,7 +285,12 @@ def _lenient_flow_realized(txs: list[Transaction]) -> Decimal:
     仅用于「用户没给已实现盈亏、且该票没有持仓行」时的兜底。
     """
     state = ChainState()
-    for tx in sorted(txs, key=lambda t: (t.trade_date, t.id)):
+    for tx in sorted(
+        txs,
+        key=lambda t: chain_sort_key(
+            t.trade_date, getattr(t, "trade_time", None), t.id
+        ),
+    ):
         price = Decimal(tx.price)
         if tx.action == "buy":
             state = ChainState(
@@ -231,7 +302,8 @@ def _lenient_flow_realized(txs: list[Transaction]) -> Decimal:
             avg = state.avg_cost
             state = ChainState(
                 state.shares - tx.shares,
-                state.total_cost - avg * tx.shares,
+                # 摊薄口径:按成交价回收净投入
+                state.total_cost - price * tx.shares,
                 state.realized_pnl + (price - avg) * tx.shares,
             )
     return state.realized_pnl
@@ -260,6 +332,7 @@ def _spec_of(tx: Transaction) -> TxSpec:
         shares=tx.shares,
         price=Decimal(tx.price),
         stock_name=tx.stock_name,
+        trade_time=getattr(tx, "trade_time", None),
     )
 
 
@@ -267,7 +340,7 @@ async def _load_chain(
     session,
     code: str,
     account_id: int,
-) -> tuple[Optional[PositionRow], ChainState, list[TxSpec], list[Transaction]]:
+) -> tuple[PositionRow | None, ChainState, list[TxSpec], list[Transaction]]:
     """加载某股票的基准 + 链尾流水 + 全部流水行
 
     Returns:
@@ -296,6 +369,9 @@ async def _load_chain(
         .scalars()
         .all()
     )
+    # 链的权威顺序 = 全序键(交易日, 时间点, id);SQL 的 order_by 只是预排序,
+    # 真正的口径在 Python 侧统一(链重放 / 校验 / 交易前持仓共用同一个 key)。
+    tx_rows.sort(key=lambda t: _spec_sort_key(_spec_of(t)))
 
     if row is None:
         base = ChainState()
@@ -346,7 +422,7 @@ def _replay_chain_into_row(
 async def recalc_position(
     stock_code: str,
     account_id: int | None = None,
-) -> Optional[Position]:
+) -> Position | None:
     """流水变动后重算该股票持仓(一致性核心)
 
     流程:基准 + 链尾全量重放 → 重写每笔快照 → 更新持仓行。
@@ -411,8 +487,8 @@ async def upsert_position(
     cost_price: Decimal,
     stock_name: str | None = None,
     account_id: int | None = None,
-    realized_pnl: Optional[Decimal] = None,
-    base_date: Optional[date] = None,
+    realized_pnl: Decimal | None = None,
+    base_date: date | None = None,
 ) -> Position:
     """手动录入 / 截图导入:**重置基准**(以用户提供为准)
 
@@ -420,6 +496,11 @@ async def upsert_position(
     - base_* = 用户提供的股数 / 每股成本价 / 已实现盈亏(缺省沿用当前累计)
     - base_tx_id = 基准已吸收的流水 id 上界
     - 被吸收的流水不再参与重放 → 历史流水不会被重复计算(旧双算 bug 的根治点)
+
+    v0.11 摊薄口径:
+    - `cost_price` = 券商持仓页的**摊薄成本价** → base_total_cost = 摊薄总额(净投入)
+    - 基准的已实现盈亏(base_realized_pnl)**独立**存放,不从摊薄总额里扣
+      → 录入的摊薄成本价就是展示的摊薄成本价,不会被二次扣减
 
     base_date(可选)= **这份持仓快照是哪一天的**:
     - 给了 → 只吸收 trade_date <= base_date 的流水(该快照里已经包含的效果),
@@ -515,6 +596,25 @@ async def upsert_position(
         return _row_to_position(row)
 
 
+async def load_chain_context(
+    stock_code: str,
+    account_id: int | None = None,
+) -> tuple[ChainState, list[TxSpec], list[Transaction], int]:
+    """某只票的「基准 + 活链 + 全部流水」公开入口。
+
+    返回:
+        (基准状态, 活链规格(id > base_tx_id, 已按链全序排序), 全部流水行, 基准吸收上界)
+
+    活链规格与全部流水行同序 —— 做T历史等「逐笔成本」分析按这个顺序走。
+    """
+    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
+
+    acct = account_id or DEFAULT_ACCOUNT_ID
+    async with async_session() as session:
+        row, base, chain, tx_rows = await _load_chain(session, stock_code, acct)
+    return base, chain, tx_rows, (row.base_tx_id if row is not None else 0)
+
+
 async def get_all_positions(
     account_id: int | None = None,
     include_closed: bool = False,
@@ -547,7 +647,7 @@ async def get_position(
     stock_code: str,
     account_id: int | None = None,
     include_closed: bool = False,
-) -> Optional[Position]:
+) -> Position | None:
     """读 positions 表单条。account_id 省略 = 只看默认账户。
 
     include_closed=False(默认):已清仓(shares <= 0)返回 None —— 与旧行为一致。
@@ -575,7 +675,7 @@ async def position_before_trade(
     stock_code: str,
     tx_id: int,
     account_id: int | None = None,
-) -> Optional[Position]:
+) -> Position | None:
     """目标交易**之前**该股票的持仓(基准 + 链尾前缀重放)
 
     给诊断服务用:判断「这笔交易之前的仓位/成本」,必须走链重放而不是
@@ -589,11 +689,11 @@ async def position_before_trade(
         target = next((t for t in tx_rows if t.id == tx_id), None)
         if target is None:
             return None
-        prefix = [
-            spec
-            for spec in chain
-            if (spec.trade_date, spec.id) < (target.trade_date, target.id)
-        ]
+        # 前缀 = 严格排在目标之前的那些笔(同一套全序键,不能各用各的)
+        target_key = chain_sort_key(
+            target.trade_date, getattr(target, "trade_time", None), target.id
+        )
+        prefix = [spec for spec in chain if _spec_sort_key(spec) < target_key]
         state, _ = replay_chain(base, prefix)
         name = next(
             (t.stock_name for t in reversed(tx_rows) if t.stock_name), None
@@ -658,7 +758,8 @@ async def check_chain(
     if insert is not None:
         # 新流水 id 恒大于既有 id → 同日排序它排最后
         specs.append(replace(insert, id=insert.id or 2**62))
-        specs.sort(key=lambda s: (s.trade_date, s.id))
+        # 排序键必须与链重放一致(全序键),否则「校验顺序 ≠ 重放顺序」
+        specs.sort(key=_spec_sort_key)
 
     state, _ = replay_chain(base, specs)
     return state
@@ -796,6 +897,7 @@ __all__ = [
     "ChainState",
     "TxSpec",
     "PositionChainError",
+    "chain_sort_key",
     "aggregate_positions",
     "apply_transaction",
     "replay_chain",

@@ -4,6 +4,7 @@ import { ExportImportCard } from '@/components/settings/ExportImportCard';
 import { HistoryToolsCard } from '@/components/settings/HistoryToolsCard';
 import { LlmKeysCard } from '@/components/settings/LlmKeysCard';
 import { LlmProviderCard } from '@/components/settings/LlmProviderCard';
+import { LocalNotifyCard } from '@/components/settings/LocalNotifyCard';
 import { NotifySettings } from '@/components/settings/NotifySettings';
 import { SignalSettings } from '@/components/settings/SignalSettings';
 import { ScreenshotPanel } from '@/components/screenshot/ScreenshotPanel';
@@ -31,7 +32,7 @@ export function SettingsPanel() {
       <header className="space-y-1">
         <h2 className="text-2xl font-bold">设置</h2>
         <p className="text-text-sec text-sm">
-          数据备份 · LLM Provider · API Key · 截图识别 · 历史工具 · 关于
+          数据备份 · LLM Provider · API Key · 截图识别 · 通知 · 历史工具 · 关于
         </p>
       </header>
 
@@ -47,6 +48,8 @@ export function SettingsPanel() {
         <ScreenshotPanel />
 
         <NotifySettings />
+
+        <LocalNotifyCard />
 
         <SignalSettings />
 

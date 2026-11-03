@@ -2,7 +2,7 @@
 
 核心不变量:
     当前持仓 = 基准(base_*) + 其后所有 id > base_tx_id 的流水
-               按 (trade_date, id) 顺序逐笔加权平均应用
+               按 (trade_date, id) 顺序逐笔应用(摊薄口径:净投入追踪)
 
 覆盖:
 - 每笔流水存自己的 after 快照(事件溯源)
@@ -100,9 +100,11 @@ class TestPureChain:
         ]
         final, snaps = replay_chain(base, specs)
         assert final.shares == 1000
-        # 均价不量化到 3 位再回乘 —— 否则总成本会漂 0.02/次
-        assert final.total_cost == Decimal("16958.5200")
-        assert (final.total_cost / final.shares).quantize(Decimal("0.001")) == Decimal("16.959")
+        # 摊薄口径:净投入 = 13896.80 + 200×15.680 − 100×16.420 + 100×16.290
+        #           = 13896.80 + 3136.00 − 1642.00 + 1629.00 = 17019.80
+        assert final.total_cost == Decimal("17019.8000")
+        assert (final.total_cost / final.shares).quantize(Decimal("0.001")) == Decimal("17.020")
+        # 卖出时的已实现 = (16.420 − 卖出前摊薄成本 17.0328) × 100 = −61.28
         assert final.realized_pnl == Decimal("-61.2800")
         assert [s.shares for _, s in snaps] == [1000, 900, 1000]
 
@@ -141,8 +143,9 @@ class TestTransactionSnapshots:
         assert txs[0]["total_cost_after"] == "10500.00"
         assert txs[0]["realized_after"] == "0.00"
         # 卖 400 @ 12 → 已实现 (12 - 10.5) * 400 = 600,剩余 600 股
+        # 摊薄口径:净投入 10500 − 400×12 = 5700
         assert txs[1]["shares_after"] == 600
-        assert txs[1]["total_cost_after"] == "6300.00"
+        assert txs[1]["total_cost_after"] == "5700.00"
         assert txs[1]["realized_after"] == "600.00"
 
     def test_snapshot_chain_ends_at_position(self, client):
@@ -169,7 +172,8 @@ class TestRollback:
 
         p = _pos(client, "000001.SZ")
         assert p["shares"] == 600
-        assert p["avg_cost"] == "10.500"
+        # 摊薄成本:净投入 10500 − 400×13 = 5300 ÷ 600 = 8.833
+        assert p["avg_cost"] == "8.833"
         assert p["realized_pnl"] == "1000.00"
         assert _txs(client, "000001.SZ")[1]["realized_after"] == "1000.00"
 
@@ -238,7 +242,8 @@ class TestBaselineAbsorbsHistory:
         10-22 买 200 @ 15.680 / 10-23 卖 100 @ 16.420 / 10-23 买 100 @ 16.290
 
         旧模型:导入快照已含历史效果,历史流水又重放 → 卖出时少冲成本 1058.72 元
-        新模型:基准吸收历史,链尾只重放这 3 笔 → 均价 16.959
+        摊薄口径(v0.11):基准吸收历史,链尾只重放这 3 笔 →
+        净投入 = 13896.80 + 200×15.680 − 100×16.420 + 100×16.290 = 17019.80 → 摊薄成本 17.020
         """
         _baseline(
             client, "002185", 800, "17.371",
@@ -250,8 +255,8 @@ class TestBaselineAbsorbsHistory:
 
         p = _pos(client, "002185.SZ")
         assert p["shares"] == 1000
-        assert p["avg_cost"] == "16.959"
-        assert p["total_cost"] == "16958.52"
+        assert p["avg_cost"] == "17.020"
+        assert p["total_cost"] == "17019.80"
         # 基准 -198.63 + 本段卖出 -61.28
         assert p["realized_pnl"] == "-259.91"
 
@@ -394,9 +399,9 @@ class TestBaseDateAnchor:
 
         p = _pos(client, "002185.SZ")
         assert p["shares"] == 1000
-        assert p["avg_cost"] == "16.959"
-        # 精确总成本 16958.52(不是 3 位均价反推的 16959.00)
-        assert p["total_cost"] == "16958.52"
+        assert p["avg_cost"] == "17.020"
+        # 精确摊薄总额 17019.80(不是 3 位均价反推的 17020.00)
+        assert p["total_cost"] == "17019.80"
         assert p["realized_pnl"] == "-259.91"
 
     def test_base_date_keeps_flows_editable(self, client):
@@ -430,7 +435,7 @@ class TestBaseDateAnchor:
         assert txs[0]["shares_after"] == 1000
         assert txs[0]["total_cost_after"] == "17032.80"
         assert txs[1]["shares_after"] == 900
-        assert txs[1]["total_cost_after"] == "15329.52"
+        assert txs[1]["total_cost_after"] == "15390.80"
         assert txs[1]["realized_after"] == "-259.91"
 
     def test_without_base_date_absorbs_everything(self, client):

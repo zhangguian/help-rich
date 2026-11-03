@@ -46,7 +46,7 @@ class AssistantUnavailable(Exception):
 
 
 async def _load_positions() -> tuple[list[dict[str, Any]], bool]:
-    """持仓(代码 / 名称 / 股数 / 加权成本)→ (数据, 是否取到)"""
+    """持仓(代码 / 名称 / 股数 / 摊薄成本)→ (数据, 是否取到)"""
     out: list[dict[str, Any]] = []
     try:
         positions = await get_all_positions()

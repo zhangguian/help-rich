@@ -22,6 +22,9 @@ import { Button } from '../ui/Button';
  *
  * 每笔流水带自己应用后的持仓(shares_after / total_cost_after)。
  * 没有快照 = 已被持仓基准吸收 或 历史数据 → 显示「—」。
+ *
+ * v0.17:total_cost_after = 摊薄总额(净投入)→ 除以股数得到**摊薄成本价**
+ * (= 券商持仓页口径),与持仓页/决策台的成本列同源。
  */
 function snapshotOf(tx: Transaction): { shares: number; avg: string } | null {
   if (tx.sharesAfter == null) return null;
@@ -34,6 +37,23 @@ function snapshotOf(tx: Transaction): { shares: number; avg: string } | null {
     }
   }
   return { shares: tx.sharesAfter, avg };
+}
+
+/**
+ * 列表加载失败的原因文案(与 lib/api.ts 的拦截器口径一致)
+ *
+ * 区分「加载失败」与「没有数据」:两者在页面上必须显示不同的东西,
+ * 否则一次超时会伪装成「流水丢了」。
+ */
+function loadErrorText(e: unknown): string {
+  const err = e as {
+    code?: string;
+    response?: { status?: number };
+  };
+  if (err?.code === 'ECONNABORTED') return '请求超时,请重试';
+  if (err?.code === 'ERR_NETWORK') return '网络错误:后端可能未启动';
+  if (err?.response?.status) return `加载失败 (HTTP ${err.response.status})`;
+  return '加载失败,请重试';
 }
 
 /**
@@ -51,6 +71,10 @@ export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: numbe
 
   const [data, setData] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
+  // 加载失败与「确实没有记录」必须区分:失败时不能显示空态,
+  // 否则用户会误以为流水没录入(v0.8 实测踩过)。
+  const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
   const [detailData, setDetailData] = useState<DiagnoseOut | null>(null);
@@ -69,6 +93,7 @@ export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: numbe
     let cancelled = false;
     const fetchData = async () => {
       setLoading(true);
+      setError(null);
       try {
         const url = stockCode
           ? `/transactions?stock_code=${encodeURIComponent(stockCode)}&limit=200`
@@ -85,6 +110,8 @@ export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: numbe
             }
           }
         }
+      } catch (e) {
+        if (!cancelled) setError(loadErrorText(e));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -93,7 +120,7 @@ export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: numbe
     return () => {
       cancelled = true;
     };
-  }, [refreshKey, stockCode, reset, setComment, setScore]);
+  }, [refreshKey, retryKey, stockCode, reset, setComment, setScore]);
 
   const handleDelete = async (id: number) => {
     if (!window.confirm(`确认删除交易 #${id}?`)) return;
@@ -150,6 +177,16 @@ export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: numbe
     );
   }
 
+  if (error) {
+    return (
+      <div className="text-text-sec text-center py-12 space-y-3">
+        <p>{error}</p>
+        <p className="text-text-ter text-xs">流水可能仍在库里,重试或刷新页面确认</p>
+        <Button onClick={() => setRetryKey((k) => k + 1)}>重试</Button>
+      </div>
+    );
+  }
+
   if (data.length === 0) {
     return (
       <div className="text-text-ter text-center py-12">
@@ -167,6 +204,7 @@ export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: numbe
           <thead className="border-b border-border-def text-text-sec">
             <tr>
               <th className="text-left py-2 px-2">日期</th>
+              <th className="text-left py-2 px-2">时间</th>
               <th className="text-left py-2 px-2">代码</th>
               <th className="text-left py-2 px-2">名称</th>
               <th className="text-left py-2 px-2">操作</th>
@@ -195,6 +233,15 @@ export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: numbe
                   className="border-b border-border-def hover:bg-bg-subtle"
                 >
                   <td className="py-2 px-2 font-mono text-xs">{tx.tradeDate}</td>
+                  <td className="py-2 px-2 font-mono text-xs whitespace-nowrap">
+                    {tx.tradeTime ? (
+                      tx.tradeTime.slice(0, 5)
+                    ) : (
+                      <span className="text-text-ter" title="时间未知(未录入 / 历史流水)">
+                        —
+                      </span>
+                    )}
+                  </td>
                   <td className="py-2 px-2 font-mono">{tx.stockCode}</td>
                   <td className="py-2 px-2">{tx.stockName ?? '—'}</td>
                   <td className="py-2 px-2">

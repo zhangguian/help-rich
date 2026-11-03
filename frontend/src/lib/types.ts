@@ -46,6 +46,8 @@ export interface Transaction {
   shares: number;
   price: string;
   tradeDate: string;
+  /** 时间节点(HH:MM:SS);null = 未知(存量流水 / 用户留空) */
+  tradeTime: string | null;
   note: string | null;
   score: number | null;
   createdAt: string;
@@ -61,6 +63,8 @@ export interface TransactionCreate {
   shares: number;
   price: string;
   tradeDate: string;
+  /** 时间节点(HH:MM);留空 = 未知 */
+  tradeTime?: string;
   stockName?: string;
   note?: string;
 }
@@ -130,7 +134,7 @@ export interface HoldingsHealth {
 /** 诊断(P4.4) */
 export interface DiagnoseOut {
   tradeId: number;
-  status: 'pending' | 'success' | 'no_key' | 'failed';
+  status: 'pending' | 'success' | 'no_key' | 'failed' | 'scored';
   score: number | null;
   breakdown: Record<string, number> | null;
   aiComment: string | null;

@@ -81,7 +81,7 @@ export function OnboardingPanel() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <div className="h-1.5 w-28 overflow-hidden rounded-full bg-bg-elev">
+          <div className="h-1.5 w-28 overflow-hidden rounded-full bg-bg-elevated">
             <div
               className={clsx(
                 'h-full rounded-full transition-all',
@@ -111,7 +111,7 @@ export function OnboardingPanel() {
               'flex flex-wrap items-center gap-2 rounded-md border px-2.5 py-2',
               s.done
                 ? 'border-success/30 bg-success/5'
-                : 'border-border-base bg-bg-elev/30',
+                : 'border-border-def bg-surface-2/30',
             )}
           >
             <span className="text-xs">{s.done ? '✅' : '○'}</span>
@@ -126,7 +126,7 @@ export function OnboardingPanel() {
                   {s.title}
                 </span>
                 {s.optional && (
-                  <span className="rounded bg-bg-elev px-1 py-0.5 text-[10px] text-text-ter">
+                  <span className="rounded bg-bg-elevated px-1 py-0.5 text-[10px] text-text-ter">
                     可选
                   </span>
                 )}
@@ -138,7 +138,7 @@ export function OnboardingPanel() {
             {!s.done && (
               <a
                 href={s.actionHref}
-                className="rounded border border-border-base px-2 py-1 text-[11px] text-text-sec transition hover:bg-bg-elev"
+                className="rounded border border-border-def px-2 py-1 text-[11px] text-text-sec transition hover:bg-bg-elevated"
               >
                 {s.actionLabel}
               </a>

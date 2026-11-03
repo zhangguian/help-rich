@@ -131,13 +131,13 @@ export function AccountsPanel() {
           </p>
         </header>
 
-        <ul className="divide-y divide-border-base">
+        <ul className="divide-y divide-border-def">
           {accounts.map((a) => (
             <li
               key={a.id}
               className={clsx(
                 'flex flex-wrap items-center gap-3 py-2.5',
-                activeId === a.id && 'bg-bg-elev/40',
+                activeId === a.id && 'bg-surface-2/40',
               )}
             >
               <button
@@ -166,7 +166,7 @@ export function AccountsPanel() {
                   type="button"
                   onClick={() => void rename(a)}
                   disabled={busy || a.isDefault}
-                  className="rounded border border-border-base px-2 py-1 text-xs text-text-sec hover:bg-bg-elev disabled:opacity-40"
+                  className="rounded border border-border-def px-2 py-1 text-xs text-text-sec hover:bg-bg-elevated disabled:opacity-40"
                 >
                   改名
                 </button>
@@ -174,7 +174,7 @@ export function AccountsPanel() {
                   type="button"
                   onClick={() => void remove(a)}
                   disabled={busy || a.isDefault}
-                  className="rounded border border-border-base px-2 py-1 text-xs text-text-ter hover:text-danger disabled:opacity-40"
+                  className="rounded border border-border-def px-2 py-1 text-xs text-text-ter hover:text-danger disabled:opacity-40"
                 >
                   删除
                 </button>
@@ -188,7 +188,7 @@ export function AccountsPanel() {
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             placeholder="新账户名称"
-            className="w-48 rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
+            className="w-48 rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
           />
           <button
             type="button"
@@ -235,7 +235,7 @@ export function AccountsPanel() {
                 </thead>
                 <tbody>
                   {detail.positions.map((p) => (
-                    <tr key={p.stockCode} className="border-t border-border-base">
+                    <tr key={p.stockCode} className="border-t border-border-def">
                       <td className="py-1.5 font-mono">{p.stockCode}</td>
                       <td className="py-1.5">{p.stockName ?? '—'}</td>
                       <td className="py-1.5">{p.shares}</td>

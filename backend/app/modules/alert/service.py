@@ -21,8 +21,55 @@ from app.modules.alert.engine import (
     describe,
     evaluate,
     fingerprint,
+    notification_meta,
     validate,
 )
+from app.services.event_bus import event_bus
+
+# 前端 SSE 按事件名过滤(与 signal 模块的 EVENT_SIGNAL_FIRED 同一套路)
+EVENT_PRICE_ALERT_FIRED = "price_alert_fired"
+
+
+def build_fired_payload(
+    alert,
+    trig=None,
+    price: float | None = None,
+    conditions_text: str = "",
+    channels: list | None = None,
+    kind: str | None = None,
+) -> dict:
+    """构造「提醒响了」的事件负载。
+
+    **实时推送与断线补发必须共用这一个函数** —— 两边字段不一致的话,
+    前端就得写两套解析,迟早漏字段。两边都带 `trigger_id`,前端靠它去重。
+
+    `kind`:提醒种类(来自条件树顶层的 `kind`,如 `"pre_alert"` 预警)——
+    前端据此显示不同徽章,不靠猜 name 前缀。
+    """
+    price_txt = f"{price:.2f}" if price is not None else "?"
+    triggered_at = None
+    if trig is not None and getattr(trig, "triggered_at", None) is not None:
+        triggered_at = trig.triggered_at.isoformat()
+    return {
+        "event": EVENT_PRICE_ALERT_FIRED,
+        "trigger_id": trig.id if trig is not None else None,
+        "triggered_at": triggered_at,
+        "kind": kind,
+        "alert": {
+            "id": alert.id,
+            "stock_code": alert.stock_code,
+            "name": alert.name,
+            "conditions_text": conditions_text,
+            "price": price,
+            "title": f"价格提醒 · {alert.stock_code}",
+            "body": (
+                f"{alert.name}\n"
+                f"触发条件:{conditions_text}\n"
+                f"当前价:{price_txt}"
+            ),
+        },
+        "channels": channels or [],
+    }
 
 
 class PriceAlertService:
@@ -91,13 +138,14 @@ class PriceAlertService:
         except (json.JSONDecodeError, TypeError):
             return None
 
-        channels = self._channels_for(alert)
+        channels = await self._channels_for(alert)
 
         price_txt = f"{ctx.price:.2f}" if ctx.price is not None else "?"
+        conditions_text = describe(conditions)
         message = NotifyMessage(
             title=f"价格提醒 · {alert.stock_code}",
             body=(
-                f"{alert.name}\n触发条件:{describe(conditions)}\n"
+                f"{alert.name}\n触发条件:{conditions_text}\n"
                 f"当前价:{price_txt}"
             ),
             level=NotifyLevel.INFO,
@@ -122,13 +170,61 @@ class PriceAlertService:
             return None
 
         status = "matched" if any(r.ok for r in results) else "failed"
-        await price_alert_repo.record_trigger(
+        trig = await price_alert_repo.record_trigger(
             alert.id,
             status=status,
             snapshot={"price": ctx.price, "change_pct": ctx.change_pct},
             results=[{"channel": r.channel, "ok": r.ok, "detail": r.detail} for r in results],
         )
+        await self._publish_fired(alert, ctx, conditions_text, results, trig, conditions)
+        await self._disable_if_once(alert, conditions)
         return results
+
+    async def _disable_if_once(self, alert, conditions: dict) -> bool:
+        """**一次性**提醒:命中后自动停用(不删除,保留触发历史)。
+
+        用于「预警」:进了一次准备区就不该反复提醒 —— 价格再在预警线附近晃,
+        用户已经被提醒过��次了。价格离开预警区后,由清单同步逻辑**重新武装**它。
+        """
+        if not notification_meta(conditions).get("once"):
+            return False
+        try:
+            await price_alert_repo.update(int(alert.id), enabled=False)
+            return True
+        except Exception as e:  # noqa: BLE001 — 停用失败不该让提醒链路崩掉
+            logger.warning(f"[price-alert] 一次性提醒停用失败 {alert.id}: {e}")
+            return False
+
+    async def _publish_fired(
+        self,
+        alert,
+        ctx: AlertContext,
+        conditions_text: str,
+        results: list,
+        trig=None,
+        conditions: dict | None = None,
+    ) -> None:
+        """把「真的响了」这件事广播到事件总线,供前端 SSE 弹应用内提示。
+
+        ⚠️ 只在**通过冷却/日限流**(results is not None)时广播 —— 被限流的那次
+        用户什么都没收到,再弹一次应用内提示等于骗人。
+        """
+        try:
+            await event_bus.publish(
+                build_fired_payload(
+                    alert,
+                    trig=trig,
+                    price=ctx.price,
+                    conditions_text=conditions_text,
+                    channels=[
+                        {"channel": r.channel, "ok": r.ok, "detail": r.detail}
+                        for r in results
+                    ],
+                    kind=notification_meta(conditions or {}).get("kind"),
+                )
+            )
+        except Exception as e:  # noqa: BLE001 — 广播失败不该让提醒链路崩掉
+            logger.warning(f"[price-alert] 广播触发事件失败: {e}")
 
     async def scan(self, quotes: dict[str, AlertContext]) -> int:
         """批量评估所有启用规则。quotes: {stock_code: AlertContext}。
@@ -151,10 +247,82 @@ class PriceAlertService:
                 logger.warning(f"[price-alert] 规则 {alert.id} 评估异常: {e}")
         return fired
 
+    async def pre_alert_codes(self) -> set[str]:
+        """已停用的**预警提醒**对应的标的代码。
+
+        调度器要为它们拉行情,才能判断「价格是否已离开预警区」→ 重新武装。
+        停用的到价提醒(挂单消失导致的)不在其中 —— 那种不该再武装。
+        """
+        try:
+            rows = await price_alert_repo.list_disabled()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[price-alert] 读取停用规则失败: {e}")
+            return set()
+        codes: set[str] = set()
+        for row in rows:
+            try:
+                conditions = json.loads(row.conditions_json or "{}")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if notification_meta(conditions).get("kind") == "pre_alert":
+                codes.add(row.stock_code)
+        return codes
+
+    async def rearm_pre_alerts(self, contexts: dict[str, AlertContext]) -> int:
+        """**一次性预警提醒**离开预警区后重新武装,返回重新武装的条数。
+
+        为什么必须有这一步:预警命中后会自动停用(`once`),而「重新武装」
+        原本只挂在**清单页同步**里 —— 页面关着就不会重新武装,
+        预警响一次就哑了。用户要的恰恰是「页面关着也能收到」,
+        所以这一步必须由**后端调度器**承担,而不是依赖前端开着。
+
+        判据:**当前价不再满足预警条件**(与「命中」互为补集)。
+        不需要知道方向,也不需要知道预警线是多少 —— 条件树本身就是判据。
+
+        行情取不到 → 不做任何动作(宁可少武装一次,也不编数据)。
+        """
+        try:
+            rows = await price_alert_repo.list_disabled()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[price-alert] 读取停用规则失败: {e}")
+            return 0
+
+        rearmed = 0
+        for row in rows:
+            try:
+                conditions = json.loads(row.conditions_json or "{}")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if notification_meta(conditions).get("kind") != "pre_alert":
+                continue
+            ctx = contexts.get(row.stock_code)
+            if ctx is None or ctx.price is None:
+                continue  # 行情未知 → 不动它
+            if evaluate(conditions, ctx):
+                continue  # 还在预警区 → 保持停用
+            try:
+                if await price_alert_repo.update(int(row.id), enabled=True):
+                    rearmed += 1
+                    logger.info(
+                        f"[price-alert] 预警 {row.id}({row.stock_code}) 已离开预警区,重新武装"
+                    )
+            except Exception as e:  # noqa: BLE001 — 单条失败不拖垮整轮
+                logger.warning(f"[price-alert] 预警 {row.id} 重新武装失败: {e}")
+        return rearmed
+
     # ---------- 内部 ----------
 
-    def _channels_for(self, alert) -> list[str]:
-        """规则未指定渠道时,跟随全局已启用的渠道。"""
+    async def _channels_for(self, alert) -> list[str]:
+        """规则未指定渠道时,跟随全局已启用的渠道。
+
+        ⚠️ 这里必须真的去读全局配置 —— 早先的实现硬编码 `return ["console"]`,
+        与本函数的注释(以及用户在「通知设置」里的直觉)相反:
+        后果是「桌面通知」开着也**永远收不到**到价提醒,只有日志。
+        规则自己指定了渠道(`channels_json`)时以规则为准。
+
+        读不到配置 / 一个渠道都没启用时兜底到 console —— 至少写日志,
+        宁可「只有日志」也不要「什么都不发」。
+        """
         if alert.channels_json:
             try:
                 ch = json.loads(alert.channels_json)
@@ -162,7 +330,12 @@ class PriceAlertService:
                     return ch
             except (json.JSONDecodeError, TypeError):
                 pass
-        return ["console"]  # 兜底:至少写日志
+        try:
+            enabled = await notify_service.enabled_channels()
+        except Exception as e:  # noqa: BLE001 — 配置读不到不该让提醒整条链路崩掉
+            logger.warning(f"[price-alert] 读取已启用渠道失败,按 console 兜底: {e}")
+            enabled = []
+        return enabled or ["console"]
 
     @staticmethod
     def _to_dict(row) -> dict:

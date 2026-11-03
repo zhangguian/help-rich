@@ -209,7 +209,7 @@ export function AnalysisPanel({
                 </div>
               )}
               <OperationAdviceBlock analysis={analysis} />
-              <div className="text-xs text-text-ter leading-relaxed bg-warn-bg/30 border border-warn/20 rounded-lg p-3 space-y-1.5 whitespace-pre-wrap">
+              <div className="text-xs text-text-ter leading-relaxed bg-warn-bg border border-warn/20 rounded-lg p-3 space-y-1.5 whitespace-pre-wrap">
                 <p className="font-semibold text-warn">⚠ 风险提示</p>
                 <p>{analysis.ai.riskWarning}</p>
               </div>
@@ -881,7 +881,7 @@ function PositionRiskCard({
   > = {
     high: {
       label: '高位风险区',
-      chipCls: 'text-warn border-warn/40 bg-warn-bg/40',
+      chipCls: 'text-warn border-warn/40 bg-warn-bg',
       hint: '当前处于近 120 日高位区间,追涨风险偏高,注意止盈/减仓节奏',
       color: 'bg-warn',
     },
@@ -893,7 +893,7 @@ function PositionRiskCard({
     },
     low: {
       label: '低位机会区',
-      chipCls: 'text-accent border-accent/40 bg-accent-bg/40',
+      chipCls: 'text-accent border-accent/40 bg-accent-subtle',
       hint: '当前处于近 120 日低位区间,注意是否趋势下行,不宜盲目抄底',
       color: 'bg-accent',
     },
@@ -937,7 +937,7 @@ function PositionRiskCard({
             {pctInBand != null && (
               <div
                 className={clsx(
-                  'absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full ring-2 ring-bg-pri shadow-md',
+                  'absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full ring-2 ring-text-pri shadow-md',
                   band === 'high' ? 'bg-warn' : band === 'mid' ? 'bg-accent' : 'bg-accent',
                 )}
                 style={{ left: `calc(${pctInBand}% - 6px)` }}
@@ -1063,7 +1063,7 @@ export function BeginnersGuide({
   ];
 
   return (
-    <GlassCard padding="sm" className="space-y-2 border border-accent/25 bg-accent-subtle/40">
+    <GlassCard padding="sm" className="space-y-2 border border-accent/25 bg-accent-subtle">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -1092,7 +1092,7 @@ export function BeginnersGuide({
                 <span className="font-semibold text-accent shrink-0">{s.title}</span>
                 <span className="text-text-sec leading-relaxed flex-1">{s.hint}</span>
               </div>
-              <div className="ml-0 pl-0 rounded-lg bg-bg-subtle/60 border border-border-def/40 px-2.5 py-1.5">
+              <div className="ml-0 pl-0 rounded-lg bg-surface-3/60 border border-border-def/40 px-2.5 py-1.5">
                 <span className="text-[10px] text-text-ter mr-1.5">当前:</span>
                 <span className="font-mono text-text-pri">{s.example}</span>
               </div>
@@ -1128,7 +1128,7 @@ type RoleColor = {
 
 const ROLE_COLOR: Record<'empty' | 'profit' | 'loss', RoleColor> = {
   empty: {
-    cardCls: 'rounded bg-accent-subtle/60 border border-accent/20 p-3',
+    cardCls: 'rounded bg-accent-subtle border border-accent/20 p-3',
     labelCls: 'text-xs text-accent font-semibold',
   },
   profit: {

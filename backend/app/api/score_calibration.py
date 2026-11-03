@@ -14,7 +14,7 @@ router = APIRouter(prefix="/score-calibration", tags=["score-calibration"])
 async def get_score_calibration() -> dict:
     """评分校准表(GB-001 IR-3)
 
-    按分数段(0-59 / 60-79 / 80-100)聚合 BUY 评分后 20 个交易日的实际持有期收益。
+    按分数段(0-71 / 72-95 / 96-120)聚合 BUY 评分后 20 个交易日的实际持有期收益。
     样本不足(MIN_SAMPLES < 3)→ 桶内 insufficient=true,前端展示"样本不足"。
 
     字段命名 camelCase:响应在 API 层已是 snake_case,前端拦截器自动转。

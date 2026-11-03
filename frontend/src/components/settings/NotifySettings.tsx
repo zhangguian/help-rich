@@ -123,20 +123,20 @@ export function NotifySettings() {
           const fields = CHANNEL_FIELDS[ch.channel] ?? [];
           const draft = drafts[ch.channel] ?? {};
           return (
-            <li key={ch.channel} className="rounded-md border border-border-base p-3">
+            <li key={ch.channel} className="rounded-md border border-border-def p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">{ch.label}</span>
                   <span
                     className={clsx(
                       'rounded px-1.5 py-0.5 text-[10px]',
-                      ch.enabled ? 'bg-accent/15 text-accent' : 'bg-bg-elev text-text-ter',
+                      ch.enabled ? 'bg-accent/15 text-accent' : 'bg-bg-elevated text-text-ter',
                     )}
                   >
                     {ch.enabled ? '已启用' : '未启用'}
                   </span>
                   {ch.configured && (
-                    <span className="rounded bg-bg-elev px-1.5 py-0.5 text-[10px] text-text-sec">
+                    <span className="rounded bg-bg-elevated px-1.5 py-0.5 text-[10px] text-text-sec">
                       已配置凭据
                     </span>
                   )}
@@ -146,7 +146,7 @@ export function NotifySettings() {
                     type="button"
                     onClick={() => void doTest(ch.channel)}
                     disabled={busy === ch.channel}
-                    className="rounded border border-border-base px-2 py-1 text-xs text-text-sec hover:bg-bg-elev disabled:opacity-50"
+                    className="rounded border border-border-def px-2 py-1 text-xs text-text-sec hover:bg-bg-elevated disabled:opacity-50"
                   >
                     测试
                   </button>
@@ -157,7 +157,7 @@ export function NotifySettings() {
                     className={clsx(
                       'rounded px-2 py-1 text-xs transition disabled:opacity-50',
                       ch.enabled
-                        ? 'border border-border-base text-text-sec hover:bg-bg-elev'
+                        ? 'border border-border-def text-text-sec hover:bg-bg-elevated'
                         : 'bg-accent text-bg-base hover:opacity-90',
                     )}
                   >
@@ -184,7 +184,7 @@ export function NotifySettings() {
                         value={draft[f.key] ?? ''}
                         onChange={(e) => setField(ch.channel, f.key, e.target.value)}
                         placeholder={ch.configured ? '留空则不修改' : '尚未配置'}
-                        className="w-full rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
+                        className="w-full rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
                         autoComplete="off"
                       />
                     </label>
@@ -194,7 +194,7 @@ export function NotifySettings() {
                       type="button"
                       onClick={() => void save(ch.channel, ch.enabled)}
                       disabled={busy === ch.channel}
-                      className="rounded border border-border-base px-2 py-1 text-xs text-text-sec hover:bg-bg-elev disabled:opacity-50"
+                      className="rounded border border-border-def px-2 py-1 text-xs text-text-sec hover:bg-bg-elevated disabled:opacity-50"
                     >
                       保存凭据
                     </button>

@@ -9,9 +9,8 @@
 隐私:原图只存本地 uploads/,LLM 只接收 OCR 文本。
 """
 import json
-from typing import Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile
 
 from app.models.schemas import (
     ScreenshotConfirmRequest,
@@ -77,10 +76,17 @@ async def list_pending() -> dict:
 
 
 @router.post("/{record_id}/confirm")
-async def confirm_screenshot(record_id: int, payload: ScreenshotConfirmRequest) -> dict:
+async def confirm_screenshot(
+    record_id: int,
+    payload: ScreenshotConfirmRequest,
+    background_tasks: BackgroundTasks,
+) -> dict:
     """用户确认(可编辑)后入库 transactions / watchlist
 
     holdings/position 类型:持仓是视图,confirm 会抛 HOLDINGS_NOT_PERSISTED(422)
+
+    评分:导入的流水同样要走评分(与手工录入同口径)→ 后台触发,
+    否则截图导入的流水会永远没有分数。
     """
     record = await screenshot_repo.get_by_id(record_id)
     if record is None:
@@ -90,11 +96,19 @@ async def confirm_screenshot(record_id: int, payload: ScreenshotConfirmRequest) 
     if not payload.items:
         raise HTTPException(status_code=422, detail={"code": "EMPTY_ITEMS", "message": "没有可入库的数据"})
     try:
-        await screenshot_service.confirm(record_id, payload.items, payload.screenshot_type)
+        created_tx_ids = await screenshot_service.confirm(
+            record_id, payload.items, payload.screenshot_type
+        )
     except ScreenshotError as e:
         # holdings/position 拒绝入库 → 422 友好提示
         raise HTTPException(status_code=422, detail={"code": e.code, "message": str(e)}) from e
-    return {"ok": True, "record_id": record_id}
+
+    from app.services.diagnose_service import diagnose_service
+
+    for tx_id in created_tx_ids:
+        background_tasks.add_task(diagnose_service.score_and_notify, tx_id)
+
+    return {"ok": True, "record_id": record_id, "scored_trade_ids": created_tx_ids}
 
 
 @router.post("/{record_id}/reject")

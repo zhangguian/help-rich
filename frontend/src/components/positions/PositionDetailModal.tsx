@@ -7,6 +7,8 @@ import { Modal } from '../ui/Modal';
 
 import { KLineChart } from '../charts/KLineChart';
 
+import { THistoryPanel } from './THistoryPanel';
+
 interface FundFlowItem {
   id?: number;
   timestamp: string;
@@ -95,71 +97,76 @@ export function PositionDetailModal({
   }, [open, stockCode]);
 
   return (
-    <Modal open={open} onClose={onClose} title={`${stockName ?? stockCode} ${stockCode}`} size="lg">
-      <div className="space-y-4">
-        {/* K 线图 */}
-        <section>
-          <h4 className="text-sm font-semibold mb-2">日 K 线(最近 60 个交易日)</h4>
-          <KLineChart stockCode={stockCode} height={280} />
-        </section>
+    <Modal open={open} onClose={onClose} title={`${stockName ?? stockCode} ${stockCode}`} size="xl">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="space-y-4">
+          {/* K 线图 */}
+          <section>
+            <h4 className="text-sm font-semibold mb-2">日 K 线(最近 60 个交易日)</h4>
+            <KLineChart stockCode={stockCode} height={280} />
+          </section>
 
-        {/* 资金流 */}
-        <section>
-          <div className="flex items-center justify-between mb-2">
-            <h4 className="text-sm font-semibold">
-              资金流
-              <span
-                className={`ml-2 text-xs ${
-                  sseConnected ? 'text-down' : 'text-text-ter'
-                }`}
-              >
-                {sseConnected ? '● 实时' : '○ 已断开'}
-              </span>
-            </h4>
-          </div>
-          <div className="border border-border-def rounded-sm max-h-48 overflow-y-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-bg-subtle text-text-sec sticky top-0">
-                <tr>
-                  <th className="text-left px-2 py-1">时间</th>
-                  <th className="text-left px-2 py-1">方向</th>
-                  <th className="text-left px-2 py-1">类型</th>
-                  <th className="text-right px-2 py-1">金额(万)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {flows.length === 0 && (
+          {/* 资金流 */}
+          <section>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-semibold">
+                资金流
+                <span
+                  className={`ml-2 text-xs ${
+                    sseConnected ? 'text-down' : 'text-text-ter'
+                  }`}
+                >
+                  {sseConnected ? '● 实时' : '○ 已断开'}
+                </span>
+              </h4>
+            </div>
+            <div className="border border-border-def rounded-sm max-h-48 overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-bg-subtle text-text-sec sticky top-0">
                   <tr>
-                    <td colSpan={4} className="text-text-ter text-center py-4">
-                      暂无数据
-                    </td>
+                    <th className="text-left px-2 py-1">时间</th>
+                    <th className="text-left px-2 py-1">方向</th>
+                    <th className="text-left px-2 py-1">类型</th>
+                    <th className="text-right px-2 py-1">金额(万)</th>
                   </tr>
-                )}
-                {flows.map((f, i) => (
-                  <tr key={i} className="border-t border-border-def">
-                    <td className="px-2 py-1 font-mono text-text-sec">
-                      {new Date(f.timestamp).toLocaleTimeString('zh-CN', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </td>
-                    <td className={`px-2 py-1 ${f.direction === 'in' ? 'text-up' : 'text-down'}`}>
-                      {f.direction === 'in' ? '流入' : '流出'}
-                    </td>
-                    <td className="px-2 py-1 text-text-sec">{f.category}</td>
-                    <td className="px-2 py-1 text-right font-mono">{f.amount}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <div className="flex justify-end">
-          <Button variant="ghost" onClick={onClose}>
-            关闭
-          </Button>
+                </thead>
+                <tbody>
+                  {flows.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="text-text-ter text-center py-4">
+                        暂无数据
+                      </td>
+                    </tr>
+                  )}
+                  {flows.map((f, i) => (
+                    <tr key={i} className="border-t border-border-def">
+                      <td className="px-2 py-1 font-mono text-text-sec">
+                        {new Date(f.timestamp).toLocaleTimeString('zh-CN', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </td>
+                      <td className={`px-2 py-1 ${f.direction === 'in' ? 'text-up' : 'text-down'}`}>
+                        {f.direction === 'in' ? '流入' : '流出'}
+                      </td>
+                      <td className="px-2 py-1 text-text-sec">{f.category}</td>
+                      <td className="px-2 py-1 text-right font-mono">{f.amount}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
         </div>
+
+        {/* 右侧:做T操作历史 */}
+        <THistoryPanel stockCode={stockCode} />
+      </div>
+
+      <div className="flex justify-end">
+        <Button variant="ghost" onClick={onClose}>
+          关闭
+        </Button>
       </div>
     </Modal>
   );

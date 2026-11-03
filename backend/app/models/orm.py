@@ -2,7 +2,7 @@
 
 从 app.db 直接 import Base(避免循环导入)
 """
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from sqlalchemy import (
     Boolean,
@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    Time,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -99,6 +100,10 @@ class Transaction(Base):
     # 价格:Decimal 存为字符串(精度保护,backend-arch §12.5)
     price: Mapped[str] = mapped_column(String, nullable=False)  # 3 位小数
     trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # 时间节点(HH:MM:SS)。NULL = 未知(存量流水 / 用户留空 / 截图导入)——不编造。
+    # 作用:①同日流水的成本链排序键(trade_date, trade_time, id);
+    #      ②「交易时机」评分维度的时段输入。
+    trade_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now
@@ -162,11 +167,12 @@ class TradeScore(Base):
     trade_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("transactions.id", ondelete="CASCADE"), unique=True, nullable=False
     )
-    score: Mapped[int] = mapped_column(Integer, nullable=False)  # 0~100
-    # 5 维度评分明细:JSON {"集中度": 15, "价格合理性": 12, ...}
+    score: Mapped[int] = mapped_column(Integer, nullable=False)  # 0~120(6 维 × 20)
+    # 6 维度评分明细:JSON {"集中度": 15, "价格合理性": 12, "交易时机": 13, ...}
     score_breakdown: Mapped[str] = mapped_column(Text, nullable=False)  # JSON string
     ai_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
-    ai_status: Mapped[str] = mapped_column(String, default="pending")  # pending / success / failed / no_key
+    # pending / success / failed / no_key / scored(只算分未生成评语)
+    ai_status: Mapped[str] = mapped_column(String, default="pending")
     # v1.5 多 Provider 标签
     ai_provider: Mapped[str] = mapped_column(String, default="deepseek")
     ai_model: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -215,6 +221,8 @@ class Position(Base):
     stock_name: Mapped[str | None] = mapped_column(String, nullable=True)
     shares: Mapped[int] = mapped_column(Integer, nullable=False)
     # 总成本(金额):Decimal 存为字符串(精度保护,与 Transaction.price 一致)
+    # v0.11 口径:摊薄总额(净投入 = 累计买入金额 − 累计卖出金额),
+    # 摊薄成本价 = total_cost / shares(= 券商持仓页的「成本价」)
     total_cost: Mapped[str] = mapped_column(String, nullable=False)
     # 已实现盈亏(卖出流水累计)
     realized_pnl: Mapped[str] = mapped_column(String, default="0.00", nullable=False)
@@ -223,11 +231,12 @@ class Position(Base):
     # 基准 = 「导入/手动录入」那一刻的真实持仓状态,吸收当时已存在的全部流水。
     # 真相公式:
     #   当前持仓 = 基准(base_*) + 其后所有 id > base_tx_id 的流水
-    #             按 (trade_date, id) 顺序逐笔加权平均应用
+    #             按 (trade_date, id) 顺序逐笔应用(摊薄口径,v0.11)
     # base_tx_id = 基准已吸收的流水 id 上界(= 导入时该股票最大流水 id)。
     base_shares: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    # 基准摊薄总额(净投入)= 券商持仓页的「成本价」× 基准股数
     base_total_cost: Mapped[str] = mapped_column(
         String, nullable=False, default="0.00", server_default="0.00"
     )
@@ -433,7 +442,7 @@ class DailyAnalysis(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     stock_code: Mapped[str] = mapped_column(String, nullable=False)
     analysis_date: Mapped[date] = mapped_column(Date, nullable=False)
-    # 5 维度均值(Decimal-as-string 精度保护)
+    # 6 维度均值(Decimal-as-string 精度保护)
     score_avg: Mapped[str | None] = mapped_column(String, nullable=True)
     # JSON 字符串:d {集中度: 12, 价格合理性: 8, ...}
     dimension_avg: Mapped[str] = mapped_column(Text, nullable=False)

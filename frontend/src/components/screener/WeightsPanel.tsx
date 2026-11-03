@@ -161,7 +161,7 @@ export function WeightsPanel() {
           type="button"
           onClick={() => void doReset()}
           disabled={saving}
-          className="rounded-md border border-border-base px-3 py-1.5 text-sm text-text-sec transition hover:bg-bg-elev disabled:opacity-50"
+          className="rounded-md border border-border-def px-3 py-1.5 text-sm text-text-sec transition hover:bg-bg-elevated disabled:opacity-50"
         >
           恢复默认
         </button>

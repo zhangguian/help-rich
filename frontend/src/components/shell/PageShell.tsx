@@ -7,6 +7,11 @@ import Link from 'next/link';
  *
  * 收敛此前 5 份逐行雷同的页面模板(sector-fund-flow / risk-report / rebalance /
  * annual-report / provider-stats),它们只有 h1 文案不同。
+ *
+ * 底部留白:右下角有**固定定位**的 AI 助手悬浮球(`fixed bottom-5 right-5`,56px),
+ * 它盖在内容之上。内容刚好铺满视口时(表格类页面很常见),
+ * 最后一行右侧的操作按钮会正好落在球底下且**无法滚动出来**。
+ * 底部留一段空白,保证任何内容都能滚出悬浮球的覆盖范围。
  */
 export function PageShell({
   title,
@@ -36,8 +41,8 @@ export function PageShell({
     <main
       className={
         wide
-          ? 'p-4 max-w-[1560px] mx-auto space-y-3'
-          : 'p-5 max-w-6xl mx-auto space-y-4'
+          ? 'p-4 pb-16 max-w-[1560px] mx-auto space-y-3'
+          : 'p-5 pb-16 max-w-6xl mx-auto space-y-4'
       }
     >
       <header className="space-y-1.5">

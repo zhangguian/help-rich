@@ -40,11 +40,11 @@ class TestSanitizer:
         "trade_date": "2026-07-20",
     }
 
-    def test_only_5_fields(self):
+    def test_only_6_fields(self):
         out = sanitize_for_llm(self.TRADE, concentration_pct=12.345)
         assert set(out.keys()) == {
             "stock_code", "stock_name", "action", "shares_bucket",
-            "trade_date", "concentration_pct",
+            "trade_date", "trade_time", "concentration_pct",
         }
 
     def test_no_price_or_amount(self):

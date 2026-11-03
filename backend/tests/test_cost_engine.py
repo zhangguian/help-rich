@@ -80,10 +80,10 @@ class TestBuyScenario:
 # ============================================================
 
 class TestSellScenario:
-    """减仓:剩余成本不变,产生已实现盈亏"""
+    """减仓:摊薄口径(按成交价回收净投入),产生已实现盈亏"""
 
     def test_sell_partial_with_profit(self):
-        """1500@10.667,卖 300@12 → 剩 1200@10.667,realized=(12-10.667)×300=399.90"""
+        """1500@10.667,卖 300@12 → 剩 1200@10.334,realized=(12-10.667)×300=399.90"""
         result = calculate_after_transaction(
             shares_before=1500,
             cost_before=Decimal("10.667"),
@@ -92,18 +92,17 @@ class TestSellScenario:
             tx_price=Decimal("12.000"),
         )
         assert result["shares_after"] == 1200
-        assert result["cost_after"] == Decimal("10.667")  # 成本不变
-        # total_cost: 10.667 × 1200 = 12800.40(3 位精度 × 1200)
-        # 但实际:1500×10.667=16000.50;减去 300×12=3600 → 12400.50? 不对,应该按 avg 减
-        # 准确:原 total_cost = 1500×10.667 = 16000.50(理论)
-        # 卖 300@12:total_cost -= 10.667×300 = 3200.10 → 12800.40
-        assert result["total_cost_after"] == Decimal("12800.40")
+        # 摊薄口径:净投入 = 1500×10.667 − 300×12 = 16000.50 − 3600 = 12400.50
+        # → 新摊薄成本 = 12400.50 ÷ 1200 = 10.334(券商同口径:卖出后成本线会动)
+        assert result["total_cost_after"] == Decimal("12400.50")
+        assert result["cost_after"] == Decimal("10.334")
+        assert result["delta_cost"] == Decimal("-0.333")
         # realized = (12 - 10.667) × 300 = 1.333 × 300 = 399.90
         assert result["realized_pnl"] == Decimal("399.90")
         assert result["is_closed"] is False
 
     def test_sell_partial_with_loss(self):
-        """1000@10.5,卖 200@9 → 剩 800@10.5,realized=(9-10.5)×200=-300"""
+        """1000@10.5,卖 200@9 → 剩 800@10.875,realized=(9-10.5)×200=-300"""
         result = calculate_after_transaction(
             shares_before=1000,
             cost_before=Decimal("10.500"),
@@ -112,7 +111,8 @@ class TestSellScenario:
             tx_price=Decimal("9.000"),
         )
         assert result["shares_after"] == 800
-        assert result["cost_after"] == Decimal("10.500")
+        # 低于成本卖出 → 净投入回收得少 → 摊薄成本抬高(券商同口径)
+        assert result["cost_after"] == Decimal("10.875")
         assert result["realized_pnl"] == Decimal("-300.00")
 
     def test_sell_exact_full_clear(self):
@@ -126,6 +126,7 @@ class TestSellScenario:
         )
         assert result["shares_after"] == 0
         assert result["cost_after"] is None
+        # 净投入 10500 − 11000 = −500 → 按 0 记(已全部收回投入)
         assert result["total_cost_after"] == Decimal("0.00")
         assert result["realized_pnl"] == Decimal("500.00")
         assert result["is_closed"] is True
@@ -149,25 +150,27 @@ class TestDayTradingScenario:
             r1["shares_after"], r1["cost_after"], "sell", 500, Decimal("11.000")
         )
         assert r2["shares_after"] == 500
-        assert r2["cost_after"] == Decimal("10.500")  # 剩余成本不变
+        # 摊薄口径:净投入 10500 − 5500 = 5000 ÷ 500 = 10.000
+        assert r2["cost_after"] == Decimal("10.000")
         assert r2["realized_pnl"] == Decimal("250.00")  # (11-10.5)×500
 
         # 再买 500@10.8(加仓)
         r3 = calculate_after_transaction(
             r2["shares_after"], r2["cost_after"], "buy", 500, Decimal("10.800")
         )
-        # (500×10.5 + 500×10.8) / 1000 = 10.65
+        # (5000 + 500×10.8) / 1000 = 10.400
         assert r3["shares_after"] == 1000
-        assert r3["cost_after"] == Decimal("10.650")
+        assert r3["cost_after"] == Decimal("10.400")
 
         # 再卖 500@11.5
         r4 = calculate_after_transaction(
             r3["shares_after"], r3["cost_after"], "sell", 500, Decimal("11.500")
         )
         assert r4["shares_after"] == 500
-        assert r4["cost_after"] == Decimal("10.650")
-        # (11.5 - 10.65) × 500 = 0.85 × 500 = 425
-        assert r4["realized_pnl"] == Decimal("425.00")
+        # 净投入 10400 − 5750 = 4650 ÷ 500 = 9.300
+        assert r4["cost_after"] == Decimal("9.300")
+        # (11.5 - 10.4) × 500 = 1.1 × 500 = 550
+        assert r4["realized_pnl"] == Decimal("550.00")
 
 
 # ============================================================
@@ -318,9 +321,9 @@ class TestBrokerAlignment:
             1500, Decimal("10.000"), "sell", 300, Decimal("12.500")
         )
         assert result["realized_pnl"] == Decimal("750.00")
-        # 剩余 1200 股,成本 10.000(不变)
+        # 剩余 1200 股,摊薄成本 11250 ÷ 1200 = 9.375(卖出后成本线下移,券商同口径)
         assert result["shares_after"] == 1200
-        assert result["cost_after"] == Decimal("10.000")
+        assert result["cost_after"] == Decimal("9.375")
 
 
 # ============================================================

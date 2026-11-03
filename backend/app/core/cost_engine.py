@@ -1,25 +1,27 @@
 """交易成本计算器(Domain 层纯函数,backend-arch §5.1 / project-book §4.2)
 
-核心算法:加权平均法
+核心算法:**券商摊薄口径**(净投入追踪,v0.11)
 - 加仓:
     S' = S₀ + S₁
-    T' = T₀ + (S₁ × P₁)
-    C' = T' / S'
+    T' = T₀ + (S₁ × P₁)          # T = 摊薄总额(净投入)
+    C' = T' / S'                  # 摊薄成本价
 - 减仓:
     S' = S₀ - S₁
-    C' = C₀                              # 剩余持仓成本不变(成本法)
+    T' = T₀ - (S₁ × P₁)          # 按成交价回收净投入
+    C' = T' / S'                  # 摊薄成本价**会变**(低于成本卖 → 抬高)
     已实现盈亏 = (P₁ - C₀) × S₁
-    T' = C₀ × S'                         # 按成本冲减(非按成交价回收;差额计入 realized)
 - 清仓(S₁ = S₀):
     S' = 0
     C' = null
 
-21 档盈亏表(基准 = C' 新成本):
+21 档盈亏表(基准 = C' 新摊薄成本):
     21 个点,从 -10% 到 +10%,步长 1%
+
+⚠️ 口径与 portfolio.service 的成本链**必须一致**(v0.11 起两边都是摊薄口径)。
 """
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Literal, Optional
+from typing import Literal
 
 
 # 精度常量
@@ -64,7 +66,7 @@ class TradeFees:
         )
 
 
-def buy_fee(shares: int, price: Decimal, fees: Optional[TradeFees] = None) -> Decimal:
+def buy_fee(shares: int, price: Decimal, fees: TradeFees | None = None) -> Decimal:
     """买入费用 = max(佣金, 最低佣金) + 过户费"""
     if fees is None or not fees.enabled:
         return Decimal("0")
@@ -73,7 +75,7 @@ def buy_fee(shares: int, price: Decimal, fees: Optional[TradeFees] = None) -> De
     return commission + amount * fees.transfer_fee_rate
 
 
-def sell_fee(shares: int, price: Decimal, fees: Optional[TradeFees] = None) -> Decimal:
+def sell_fee(shares: int, price: Decimal, fees: TradeFees | None = None) -> Decimal:
     """卖出费用 = max(佣金, 最低佣金) + 印花税 + 过户费"""
     if fees is None or not fees.enabled:
         return Decimal("0")
@@ -98,13 +100,13 @@ def calculate_after_transaction(
     action: Literal["buy", "sell"],
     tx_shares: int,
     tx_price: Decimal,
-    fees: Optional[TradeFees] = None,
+    fees: TradeFees | None = None,
 ) -> dict:
     """计算交易后的持仓 + 已实现盈亏
 
     Args:
         shares_before: 交易前持仓股数(可为 0,表示空仓建仓)
-        cost_before: 交易前加权平均成本(Decimal,3 位小数;空仓时给 0)
+        cost_before: 交易前摊薄成本价(Decimal,3 位小数;空仓时给 0)
         action: 'buy' 或 'sell'
         tx_shares: 本次交易股数(必须 > 0)
         tx_price: 本次交易价格(Decimal,必须 > 0)
@@ -114,8 +116,8 @@ def calculate_after_transaction(
         {
           "shares_after": int,
           "cost_after": Optional[Decimal],   # 清仓时 None
-          "total_cost_after": Decimal,        # 剩余持仓的总成本
-          "delta_cost": Decimal,              # 新成本 - 旧成本(清仓时 None)
+          "total_cost_after": Decimal,        # 剩余持仓的摊薄总额(净投入)
+          "delta_cost": Decimal,              # 新摊薄成本 - 旧摊薄成本(清仓时 None)
           "realized_pnl": Decimal,            # 已实现盈亏(不含费用,兼容旧版)
           "realized_pnl_gross": Decimal,      # 已实现盈亏(不含费用)
           "realized_pnl_net": Decimal,        # 已实现盈亏净额(扣除交易费用)
@@ -159,17 +161,22 @@ def calculate_after_transaction(
             f"卖出 {tx_shares} 股超过持仓 {shares_before} 股"
         )
 
-    # 卖出前 avg_cost(未量化,避免累计精度损失)
+    # 卖出前摊薄成本(未量化,避免累计精度损失)
     avg_cost_before = cost_before  # shares_before > 0 时已保证非零
     new_shares = shares_before - tx_shares
-    new_cost = avg_cost_before  # 剩余持仓成本不变
-    new_total_cost = avg_cost_before * new_shares
     realized_pnl = (tx_price - avg_cost_before) * tx_shares
+    # 摊薄口径:按成交价回收净投入 → 摊薄成本随之变化
+    new_total_cost = (avg_cost_before * shares_before) - (tx_price * tx_shares)
+    if new_total_cost < 0:
+        # 净投入为负(卖出价高于成本、已把投入全收回来)→ 按 0 记,
+        # 避免出现负的「持仓资金」(与 portfolio.service.recalc_position 同一口径)
+        new_total_cost = Decimal("0")
+    new_cost = (new_total_cost / new_shares) if new_shares > 0 else Decimal("0")
     # IR-4:卖出费用从已实现盈亏中扣除
     fee_paid = sell_fee(tx_shares, tx_price, fees)
 
     is_closed = new_shares == 0
-    delta_cost = Decimal("0") if not is_closed else None
+    delta_cost = None if is_closed else _q_price(new_cost - avg_cost_before)
 
     return {
         "shares_after": new_shares,
@@ -185,7 +192,7 @@ def calculate_after_transaction(
 
 
 def build_pnl_grid(
-    cost_after: Optional[Decimal],
+    cost_after: Decimal | None,
     shares_after: int,
     pct_range: int = 10,
 ) -> list[dict]:

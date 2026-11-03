@@ -96,7 +96,7 @@ export function ReflectionCard() {
   const pnlClass = pnlNum > 0 ? 'text-up' : pnlNum < 0 ? 'text-down' : 'text-text-ter';
 
   return (
-    <Card padding="md" className="border-warn/40 bg-warn-bg/30">
+    <Card padding="md" className="border-warn/40 bg-warn-bg">
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
           <div className="font-semibold flex items-center gap-2">

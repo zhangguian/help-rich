@@ -95,7 +95,7 @@ export default function SignalsPage() {
           ) : (
             <ul className="space-y-2">
               {items.map((it) => (
-                <li key={it.id} className="rounded-md border border-border-base p-2.5">
+                <li key={it.id} className="rounded-md border border-border-def p-2.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-medium text-text-pri">
                       {kindLabel(it.kind)} · {it.stockName || it.stockCode}
@@ -104,7 +104,7 @@ export default function SignalsPage() {
                       className={
                         it.notified
                           ? 'rounded bg-accent/15 px-1.5 py-0.5 text-[10px] text-accent'
-                          : 'rounded bg-bg-elev px-1.5 py-0.5 text-[10px] text-text-ter'
+                          : 'rounded bg-bg-elevated px-1.5 py-0.5 text-[10px] text-text-ter'
                       }
                     >
                       {it.notified ? '已推送' : '未推送'}

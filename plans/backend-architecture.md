@@ -373,8 +373,10 @@ def score_trade(
     market_ctx: dict,
     is_in_watchlist: bool,
     all_positions: list,           # v1.3:用于 0 数据降级
+    day_bar: dict | None = None,   # v0.11:交易当日该股日 K(交易时机·价格位置)
+    trade_time: time | None = None,# v0.11:交易时间点(交易时机·时段适配)
 ) -> dict:
-    """5 维度评分,纯函数"""
+    """6 维度评分,纯函数(满分 120)"""
     breakdown = {}
     
     # 1. 集中度(0 数据降级)
@@ -385,10 +387,11 @@ def score_trade(
     
     # 2. 价格合理性
     # 3. 操作间隔(0 数据降级)
-    # 4. 市场环境(v1.3 三档)
+    # 4. 市场环境(v1.3 三档;v0.11 改按**交易当日**的大盘涨跌幅)
     # 5. 板块热度
+    # 6. 交易时机(v0.11 新增:日内价格位置 + 时段适配)
     
-    score = max(0, min(100, sum(breakdown.values())))
+    score = max(0, min(120, sum(breakdown.values())))
     return {"score": score, "score_breakdown": breakdown}
 ```
 

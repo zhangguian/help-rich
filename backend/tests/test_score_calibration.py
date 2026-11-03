@@ -28,17 +28,17 @@ from app.services.score_calibration import (
 
 class TestBucketFor:
     def test_low_bucket(self):
-        assert _bucket_for(0) == ("0-59", 0, 59)
-        assert _bucket_for(59) == ("0-59", 0, 59)
+        assert _bucket_for(0) == ("0-71", 0, 71)
+        assert _bucket_for(71) == ("0-71", 0, 71)
 
     def test_mid_bucket(self):
-        assert _bucket_for(60) == ("60-79", 60, 79)
-        assert _bucket_for(72) == ("60-79", 60, 79)
-        assert _bucket_for(79) == ("60-79", 60, 79)
+        assert _bucket_for(72) == ("72-95", 72, 95)
+        assert _bucket_for(80) == ("72-95", 72, 95)
+        assert _bucket_for(95) == ("72-95", 72, 95)
 
     def test_high_bucket(self):
-        assert _bucket_for(80) == ("80-100", 80, 100)
-        assert _bucket_for(100) == ("80-100", 80, 100)
+        assert _bucket_for(96) == ("96-120", 96, 120)
+        assert _bucket_for(120) == ("96-120", 96, 120)
 
 
 class TestPctReturn:
@@ -144,15 +144,15 @@ def _seed_buy_trades_bulk(rows: list[tuple[int, str, date, int]]):
 
 
 class TestCalibrationE2E:
-    def test_5_trades_in_60_79_bucket(self, monkeypatch):
-        """5 笔 60-79 评分 → 只该桶 calibrated"""
+    def test_5_trades_in_72_95_bucket(self, monkeypatch):
+        """5 笔 72-95 评分 → 只该桶 calibrated(120 分制桶边界)"""
         base = date(2026, 7, 1)
         _seed_buy_trades_bulk([
-            (1, "600519.SH", base, 60),
-            (2, "600519.SH", base, 65),
-            (3, "600519.SH", base, 70),
-            (4, "600519.SH", base, 75),
-            (5, "600519.SH", base, 78),
+            (1, "600519.SH", base, 72),
+            (2, "600519.SH", base, 80),
+            (3, "600519.SH", base, 85),
+            (4, "600519.SH", base, 90),
+            (5, "600519.SH", base, 95),
         ])
         fake_klines = _build_fake_klines(base, count=30)
         monkeypatch.setattr(
@@ -164,15 +164,15 @@ class TestCalibrationE2E:
 
         assert result["horizon_days"] == HORIZON_DAYS
         assert result["sample_count"] == 5
-        mid = next(b for b in result["buckets"] if b["label"] == "60-79")
+        mid = next(b for b in result["buckets"] if b["label"] == "72-95")
         assert mid["count"] == 5
         assert mid["insufficient"] is False
         assert mid["avg_return"] is not None
         assert mid["avg_return"] > 0  # 单调递增
         assert mid["win_rate"] == 1.0
-        # 0-59 与 80-100 样本为 0
-        low = next(b for b in result["buckets"] if b["label"] == "0-59")
-        high = next(b for b in result["buckets"] if b["label"] == "80-100")
+        # 0-71 与 96-120 样本为 0
+        low = next(b for b in result["buckets"] if b["label"] == "0-71")
+        high = next(b for b in result["buckets"] if b["label"] == "96-120")
         assert low["count"] == 0
         assert low["insufficient"] is True
         assert high["count"] == 0
@@ -189,7 +189,7 @@ class TestCalibrationE2E:
         )
 
         result = asyncio.run(compute_calibration())
-        low = next(b for b in result["buckets"] if b["label"] == "0-59")
+        low = next(b for b in result["buckets"] if b["label"] == "0-71")
         assert low["count"] == 1
         assert low["insufficient"] is True
         assert low["avg_return"] is None

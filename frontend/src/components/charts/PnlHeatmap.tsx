@@ -60,7 +60,7 @@ export function PnlHeatmap({ grid, currentPricePct, recommendedRange }: PnlHeatm
         {/* 加仓区间高亮背景 */}
         {recommendedRange && (
           <div
-            className="absolute top-0 bottom-0 bg-accent-subtle/30 -z-10 border-l border-r border-accent/30"
+            className="absolute top-0 bottom-0 bg-accent-subtle -z-10 border-l border-r border-accent/30"
             style={{
               left: `${((recommendedRange[0] + 10) / 20) * 100}%`,
               width: `${((recommendedRange[1] - recommendedRange[0]) / 20) * 100}%`,
@@ -116,11 +116,11 @@ export function PnlHeatmap({ grid, currentPricePct, recommendedRange }: PnlHeatm
         {/* 当前价标线 */}
         {markerStyle && (
           <div
-            className="absolute top-0 bottom-0 w-0.5 border-l-2 border-dashed border-orange pointer-events-none"
+            className="absolute top-0 bottom-0 w-0.5 border-l-2 border-dashed border-[color:var(--chart-ma5)] pointer-events-none"
             style={{ left: `${markerStyle.leftPct}%` }}
             title={markerStyle.label}
           >
-            <div className="absolute -bottom-5 -translate-x-1/2 text-[10px] font-mono text-orange whitespace-nowrap">
+            <div className="absolute -bottom-5 -translate-x-1/2 text-[10px] font-mono text-[color:var(--chart-ma5)] whitespace-nowrap">
               {markerStyle.label}
             </div>
           </div>

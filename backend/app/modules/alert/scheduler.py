@@ -34,10 +34,13 @@ async def _scan_once() -> int:
     from app.services.quote_service import get_quote_service
 
     alerts = await price_alert_repo.list_enabled_active()
-    if not alerts:
+    # 已停用的预警提醒也要拉行情 —— 判断「价格是否已离开预警区」需要现价,
+    # 否则页面关着时预警就只响一次,再也不武装。
+    codes = {a.stock_code for a in alerts}
+    codes |= await price_alert_service.pre_alert_codes()
+    if not codes:
         return 0
 
-    codes = list({a.stock_code for a in alerts})
     # 复用进程级单例:每次 new 一个 QuoteService 会重建 httpx 连接池,
     # 连接既不复用、缓存也各算各的(2026-10-29 秒级盯盘改造时顺带修掉)。
     quote_svc = get_quote_service()
@@ -45,7 +48,7 @@ async def _scan_once() -> int:
     try:
         # ⚠️ 必须走 **fresh 路径**(跳过 5 分钟缓存):
         # 价格提醒的价值全在"及时" —— 用缓存价判触达,最多会晚 5 分钟才响。
-        quotes = await quote_svc.get_quotes_fresh(codes)
+        quotes = await quote_svc.get_quotes_fresh(list(codes))
     except Exception as e:  # noqa: BLE001 — 行情失败就跳过本轮
         logger.warning(f"[price-alert] 行情拉取失败,本轮跳过: {e}")
         return 0
@@ -56,7 +59,12 @@ async def _scan_once() -> int:
             change_pct=float(q.change_pct),
             turnover=float(q.turnover_pct) if q.turnover_pct is not None else None,
         )
-    return await price_alert_service.scan(contexts)
+    fired = await price_alert_service.scan(contexts)
+    # 预警重新武装放在调度器里 —— 页面关着也能继续提醒
+    rearmed = await price_alert_service.rearm_pre_alerts(contexts)
+    if rearmed:
+        logger.info(f"[price-alert] 预警重新武装 {rearmed} 条")
+    return fired
 
 
 async def start_price_alert_scheduler(interval_sec: int = INTERVAL_SEC) -> None:

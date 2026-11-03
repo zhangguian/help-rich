@@ -1,7 +1,6 @@
-# -*- coding: utf-8 -*-
 """Tests for replay_service (v2.3).
 
-- summarize_stock: window filter + 5-dim aggregation
+- summarize_stock: window filter + 6-dim aggregation
 - force_replay UPSERT: same (stock, window) -> only latest kept
 - latest_tx_id invalidates cache when new transaction recorded
 - window validation: 1d/3d/5d/10d/20d/60d only
@@ -217,19 +216,24 @@ _DIM_NAMES = [
     "\u677f\u5757\u70ed\u5ea6",  # 板块热度
 ]
 
+# 第 6 维「交易时机」(2026-11-02 评分口径升级)—— 列表项用 \uXXXX 转义写,
+# 这里直接追加真实中文(同一批字符,Python 解析后完全一致)
+_DIM_NAMES.append("交易时机")
 
-def _full_breakdown(a, b, c, d, e):
+
+def _full_breakdown(a, b, c, d, e, f=0.0):
     return {
         _DIM_NAMES[0]: a,
         _DIM_NAMES[1]: b,
         _DIM_NAMES[2]: c,
         _DIM_NAMES[3]: d,
         _DIM_NAMES[4]: e,
+        _DIM_NAMES[5]: f,
     }
 
 
 class TestScoreAggregation:
-    def test_aggregates_5_dimension_scores(self, client):
+    def test_aggregates_6_dimension_scores(self, client):
         today = date.today().isoformat()
         # 3 buys with different breakdowns
         tx1 = _seed_tx(client, "600519", "buy", 100, "1450.000", today)

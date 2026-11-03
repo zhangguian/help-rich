@@ -10,7 +10,7 @@ import { fetchMultiAgentAnalysis, type DecisionReport } from '@/lib/api/advanced
 const ACTION_TONE: Record<string, string> = {
   strong_buy: 'border-danger/50 bg-danger/10 text-danger',
   buy: 'border-danger/35 bg-danger/5 text-danger',
-  hold: 'border-border-base bg-bg-elev text-text-sec',
+  hold: 'border-border-def bg-bg-elevated text-text-sec',
   reduce: 'border-success/35 bg-success/5 text-success',
   sell: 'border-success/50 bg-success/10 text-success',
 };
@@ -72,7 +72,7 @@ export function MultiAgentPanel({ defaultCode = '' }: { defaultCode?: string }) 
               if (e.key === 'Enter') void run();
             }}
             placeholder="如 600519.SH"
-            className="w-48 rounded-md border border-border-base bg-bg-elev px-3 py-2 text-sm text-text-pri outline-none focus:border-accent"
+            className="w-48 rounded-md border border-border-def bg-bg-elevated px-3 py-2 text-sm text-text-pri outline-none focus:border-accent"
           />
           <button
             type="button"
@@ -123,7 +123,7 @@ export function MultiAgentPanel({ defaultCode = '' }: { defaultCode?: string }) 
             </div>
 
             {report.degraded && (
-              <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+              <div className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
                 部分角色未能产出有效结论(见下方灰色标注),本次结果可信度下降。
               </div>
             )}
@@ -137,7 +137,7 @@ export function MultiAgentPanel({ defaultCode = '' }: { defaultCode?: string }) 
                 <h4 className="text-xs font-medium text-text-sec">风险提示</h4>
                 <ul className="mt-1 space-y-0.5">
                   {report.riskFlags.map((f, i) => (
-                    <li key={i} className="text-xs text-warning">
+                    <li key={i} className="text-xs text-warn">
                       · {f}
                     </li>
                   ))}

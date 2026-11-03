@@ -133,7 +133,7 @@ export function PaperTradingPanel() {
             <select
               value={activeId ?? ''}
               onChange={(e) => setActiveId(Number(e.target.value))}
-              className="rounded-md border border-border-base bg-bg-elev px-2 py-1 text-xs text-text-pri"
+              className="rounded-md border border-border-def bg-bg-elevated px-2 py-1 text-xs text-text-pri"
               aria-label="选择模拟账户"
             >
               {accounts.map((a) => (
@@ -155,7 +155,7 @@ export function PaperTradingPanel() {
                 tone: summary.totalReturnPct >= 0 ? 'up' : 'down',
               },
             ].map((item) => (
-              <div key={item.label} className="rounded-md border border-border-base p-2.5">
+              <div key={item.label} className="rounded-md border border-border-def p-2.5">
                 <dt className="text-[11px] text-text-ter">{item.label}</dt>
                 <dd
                   className={clsx(
@@ -177,7 +177,7 @@ export function PaperTradingPanel() {
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
                 placeholder="600519.SH"
-                className="w-40 rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
+                className="w-40 rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
               />
             </label>
             <label className="space-y-1 text-[11px]">
@@ -188,7 +188,7 @@ export function PaperTradingPanel() {
                 min={100}
                 value={shares}
                 onChange={(e) => setShares(Number(e.target.value))}
-                className="w-32 rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri"
+                className="w-32 rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri"
               />
             </label>
             <button
@@ -228,7 +228,7 @@ export function PaperTradingPanel() {
               </thead>
               <tbody>
                 {summary.positions.map((p) => (
-                  <tr key={p.stockCode} className="border-t border-border-base">
+                  <tr key={p.stockCode} className="border-t border-border-def">
                     <td className="py-1.5 font-mono">{p.stockCode}</td>
                     <td className="py-1.5">{p.shares}</td>
                     <td className="py-1.5 font-mono">{p.avgCost}</td>
@@ -255,7 +255,7 @@ export function PaperTradingPanel() {
         {orders.length === 0 ? (
           <div className="text-xs text-text-ter">还没有模拟成交</div>
         ) : (
-          <ul className="divide-y divide-border-base text-xs">
+          <ul className="divide-y divide-border-def text-xs">
             {orders.map((o) => (
               <li key={o.id} className="flex flex-wrap items-center gap-2 py-1.5">
                 <span

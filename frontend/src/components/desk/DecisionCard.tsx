@@ -67,7 +67,7 @@ const KIND_CLS: Record<DecisionAction['kind'], string> = {
 const ADVICE_ROLE_CLS: Record<StockDecision['positionStatus'], string> = {
   profit: 'text-up border-up/40 bg-up-bg',
   loss: 'text-warn border-warn/40 bg-warn-bg',
-  empty: 'text-accent border-accent/40 bg-accent-subtle/60',
+  empty: 'text-accent border-accent/40 bg-accent-subtle',
 };
 
 /** 六格固定顺序(设计文档 §6.10)——顺序是阅读顺序,不要随手改 */
@@ -372,7 +372,7 @@ export function DecisionCard({
                   className={clsx(
                     'text-[9.5px] font-semibold px-1.5 py-px rounded-sm border',
                     grid.suitable
-                      ? 'text-accent border-accent/40 bg-accent-subtle/60'
+                      ? 'text-accent border-accent/40 bg-accent-subtle'
                       : 'text-warn border-warn/40 bg-warn-bg',
                   )}
                 >

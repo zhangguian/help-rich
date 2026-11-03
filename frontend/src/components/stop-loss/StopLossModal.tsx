@@ -62,7 +62,7 @@ export function StopLossModal({
           <span className="font-mono text-xs">{position.stockCode}</span>
           <span className="ml-2 text-text-ter">·</span>
           <span className="ml-2">
-            持仓 {position.shares} 股 · 加权成本 ¥
+            持仓 {position.shares} 股 · 摊薄成本 ¥
             {decimalFormat(position.avgCost)}
             {position.currentPrice && (
               <> · 现价 ¥{decimalFormat(position.currentPrice)}</>

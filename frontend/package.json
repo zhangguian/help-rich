@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "check:classes": "node scripts/check-tailwind-classes.mjs",
     "gen-types": "openapi-typescript http://localhost:8000/openapi.json -o src/lib/types.ts"
   },
   "dependencies": {

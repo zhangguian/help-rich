@@ -156,7 +156,7 @@ export default function AssistantDialog() {
           data-testid="assistant-input"
           className="min-w-0 flex-1 rounded-lg border border-border-def bg-bg-base px-2.5 py-1.5
                      text-[12.5px] text-text-pri placeholder:text-text-ter
-                     focus:border-accent-primary focus:outline-none"
+                     focus:border-accent focus:outline-none"
         />
         <button
           type="button"

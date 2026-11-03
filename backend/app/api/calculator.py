@@ -187,8 +187,8 @@ async def calculator(req: CalculatorRequest) -> CalculatorResponse:
 
     position = await get_position(req.stock_code)
     shares_before = position.shares if position else 0
-    # ⚠️ 必须用**未量化**的均价做链计算(与 portfolio 的 ChainState.avg_cost 同源):
-    # Position.avg_cost 是 3 位小数量化值,而 v0.5 起真实均价可能有 6 位
+    # ⚠️ 必须用**未量化**的摊薄成本做链计算(与 portfolio 的 ChainState.avg_cost 同源):
+    # Position.avg_cost 是 3 位小数量化值,而 v0.5 起真实摊薄成本可能有 6 位
     # (002185 = 17021.46 / 1000 = 17.02146)。
     # 直接拿量化值算,每次试算都会把 total_cost 拉偏(17021.46 → 17021.00,差 0.46 元),
     # 且与 /calculator/review 的 position_after 对不上。

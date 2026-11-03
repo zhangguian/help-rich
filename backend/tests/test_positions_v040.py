@@ -89,9 +89,9 @@ class TestFlowSyncsPositions:
         r = client.get("/api/positions")
         p = r.json()["items"][0]
         assert p["shares"] == 600
-        # 成本 = 600 × 10.5(部分卖出不改变摊薄成本)
-        assert p["avg_cost"] == "10.500"
-        assert p["total_cost"] == "6300.00"
+        # 摊薄口径:净投入 10500 − 400×12 = 5700 → 摊薄成本 5700 ÷ 600 = 9.500
+        assert p["avg_cost"] == "9.500"
+        assert p["total_cost"] == "5700.00"
         assert p["realized_pnl"] == "600.00"  # (12 - 10.5) * 400
 
     def test_sell_all_removes_position(self, client):

@@ -27,13 +27,13 @@ export function Modal({
   open: boolean;
   onClose: () => void;
   title: string;
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
   maskClosable?: boolean;
   escToClose?: boolean;
   children: ReactNode;
   footer?: ReactNode;
 }) {
-  const widths = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-2xl' };
+  const widths = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-2xl', xl: 'max-w-5xl' };
 
   return (
     <AnimatePresence>

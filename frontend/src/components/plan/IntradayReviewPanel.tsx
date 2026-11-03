@@ -51,7 +51,7 @@ function stateClass(state: IntradayActionState): string {
       return 'bg-transparent text-warn border-warn/30 border-dashed';
     // 不适用 = 纪律类,不产生价格动作 → 最弱
     default:
-      return 'bg-bg-subtle/60 text-text-ter border-border-str';
+      return 'bg-surface-3/60 text-text-ter border-border-str';
   }
 }
 

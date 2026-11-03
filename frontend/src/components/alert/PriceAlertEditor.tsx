@@ -185,7 +185,7 @@ export function PriceAlertEditor() {
               value={stockCode}
               onChange={(e) => setStockCode(e.target.value)}
               placeholder="如 600519.SH"
-              className="w-full rounded-md border border-border-base bg-bg-elev px-3 py-2 text-sm text-text-pri outline-none focus:border-accent"
+              className="w-full rounded-md border border-border-def bg-bg-elevated px-3 py-2 text-sm text-text-pri outline-none focus:border-accent"
             />
           </label>
           <label className="space-y-1 text-xs">
@@ -194,7 +194,7 @@ export function PriceAlertEditor() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="如 跌破成本价提醒"
-              className="w-full rounded-md border border-border-base bg-bg-elev px-3 py-2 text-sm text-text-pri outline-none focus:border-accent"
+              className="w-full rounded-md border border-border-def bg-bg-elevated px-3 py-2 text-sm text-text-pri outline-none focus:border-accent"
             />
           </label>
         </div>
@@ -206,7 +206,7 @@ export function PriceAlertEditor() {
               <select
                 value={groupOp}
                 onChange={(e) => setGroupOp(e.target.value as 'and' | 'or')}
-                className="rounded-md border border-border-base bg-bg-elev px-2 py-1 text-xs text-text-pri"
+                className="rounded-md border border-border-def bg-bg-elevated px-2 py-1 text-xs text-text-pri"
                 aria-label="条件组合方式"
               >
                 <option value="and">{GROUP_OP_LABELS.and}</option>
@@ -220,7 +220,7 @@ export function PriceAlertEditor() {
               <select
                 value={leaf.metric}
                 onChange={(e) => patchLeaf(idx, { metric: e.target.value })}
-                className="rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri"
+                className="rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri"
                 aria-label="指标"
               >
                 {metrics.map((m) => (
@@ -232,7 +232,7 @@ export function PriceAlertEditor() {
               <select
                 value={leaf.op}
                 onChange={(e) => patchLeaf(idx, { op: e.target.value })}
-                className="rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri"
+                className="rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri"
                 aria-label="比较符"
               >
                 {ops.map((o) => (
@@ -245,7 +245,7 @@ export function PriceAlertEditor() {
                 type="number"
                 value={leaf.value}
                 onChange={(e) => patchLeaf(idx, { value: Number(e.target.value) })}
-                className="w-28 rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri"
+                className="w-28 rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri"
                 aria-label="阈值"
               />
               {leaves.length > 1 && (
@@ -291,7 +291,7 @@ export function PriceAlertEditor() {
         ) : rules.length === 0 ? (
           <div className="text-sm text-text-ter">还没有提醒规则</div>
         ) : (
-          <ul className="divide-y divide-border-base">
+          <ul className="divide-y divide-border-def">
             {rules.map((r) => (
               <li key={r.id} className="flex flex-wrap items-center gap-3 py-2.5">
                 <div className="min-w-0 flex-1">
@@ -303,7 +303,7 @@ export function PriceAlertEditor() {
                         'rounded px-1.5 py-0.5 text-[10px]',
                         r.enabled
                           ? 'bg-accent/15 text-accent'
-                          : 'bg-bg-elev text-text-ter',
+                          : 'bg-bg-elevated text-text-ter',
                       )}
                     >
                       {r.enabled ? '启用' : '停用'}
@@ -322,7 +322,7 @@ export function PriceAlertEditor() {
                     type="button"
                     onClick={() => void toggle(r)}
                     disabled={busy}
-                    className="rounded border border-border-base px-2 py-1 text-xs text-text-sec hover:bg-bg-elev disabled:opacity-50"
+                    className="rounded border border-border-def px-2 py-1 text-xs text-text-sec hover:bg-bg-elevated disabled:opacity-50"
                   >
                     {r.enabled ? '停用' : '启用'}
                   </button>
@@ -330,7 +330,7 @@ export function PriceAlertEditor() {
                     type="button"
                     onClick={() => void remove(r)}
                     disabled={busy}
-                    className="rounded border border-border-base px-2 py-1 text-xs text-text-ter hover:text-danger disabled:opacity-50"
+                    className="rounded border border-border-def px-2 py-1 text-xs text-text-ter hover:text-danger disabled:opacity-50"
                   >
                     删除
                   </button>

@@ -62,7 +62,7 @@ const VERDICT_META: Record<
     label: '数据不足',
     mark: '?',
     badgeCls: 'bg-transparent text-warn border-dashed border-text-ter',
-    borderCls: 'border-l-dashed border-l-text-ter',
+    borderCls: '[border-left-style:dashed] border-l-text-ter',
   },
 };
 

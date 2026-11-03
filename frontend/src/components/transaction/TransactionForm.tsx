@@ -26,19 +26,50 @@ const schema = z.object({
   shares: z.number().int().positive('股数必须 > 0'),
   price: z.string().regex(/^\d+(\.\d{1,3})?$/, '价格格式:数字,最多 3 位小数'),
   tradeDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式 YYYY-MM-DD'),
+  tradeTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, '时间格式 HH:MM')
+    .optional()
+    .or(z.literal('')),
   note: z.string().max(200).optional(),
 });
 
 type FormData = z.infer<typeof schema>;
+
+/** 今天(YYYY-MM-DD)—— 判断「日期是不是今天」用 */
+function todayStr(): string {
+  const d = new Date();
+  const off = d.getTimezoneOffset();
+  return new Date(d.getTime() - off * 60_000).toISOString().slice(0, 10);
+}
+
+/** 当前时刻(HH:MM) */
+function nowHm(): string {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
 
 interface TransactionFormProps {
   onSuccess?: (tx: Transaction) => void;
   onCancel?: () => void;
   /** 预填股票代码(外部弹窗场景,如持仓/自选录入流水);输入框将只读 */
   initialStockCode?: string;
+  /** 预填方向(补T接回场景 = buy) */
+  initialAction?: 'buy' | 'sell';
+  /** 预填股数(补T接回场景 = 待接回股数) */
+  initialShares?: number;
+  /** 预填价格(补T接回场景 = 不亏本接回线) */
+  initialPrice?: string;
 }
 
-export function TransactionForm({ onSuccess, onCancel, initialStockCode }: TransactionFormProps) {
+export function TransactionForm({
+  onSuccess,
+  onCancel,
+  initialStockCode,
+  initialAction,
+  initialShares,
+  initialPrice,
+}: TransactionFormProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
@@ -51,21 +82,36 @@ export function TransactionForm({ onSuccess, onCancel, initialStockCode }: Trans
     register,
     handleSubmit,
     watch,
+    setValue,
     formState: { errors },
     reset,
   } = useForm<FormData>({
     resolver: zodResolver(schema) as never, // exactOptionalPropertyTypes 兼容
     defaultValues: {
       stockCode: initialStockCode ?? '',
-      action: 'buy' as const,
-      shares: 500,
-      price: '',
-      tradeDate: new Date().toISOString().slice(0, 10),
+      action: initialAction ?? ('buy' as const),
+      shares: initialShares ?? 500,
+      price: initialPrice ?? '',
+      tradeDate: todayStr(),
+      tradeTime: nowHm(),
       note: '',
     },
   });
 
   const watched = watch();
+
+  // 时间点跟随日期:
+  // - 日期是今天且时间为空 → 填当前时刻(这笔交易就是当下发生的)
+  // - 日期改成非今天 → 清空时间(避免出现「昨天 14:38」这种不成立的组合)
+  useEffect(() => {
+    const date = String(watched.tradeDate ?? '');
+    const time = String(watched.tradeTime ?? '');
+    if (date === todayStr()) {
+      if (!time) setValue('tradeTime', nowHm());
+    } else if (time) {
+      setValue('tradeTime', '');
+    }
+  }, [watched.tradeDate, watched.tradeTime, setValue]);
 
   // 输入停 600ms 后试算一次「录入后持仓」
   //
@@ -118,6 +164,7 @@ export function TransactionForm({ onSuccess, onCancel, initialStockCode }: Trans
         shares: data.shares,
         price: data.price,
         tradeDate: data.tradeDate,
+        ...(data.tradeTime ? { tradeTime: data.tradeTime } : {}),
         ...(data.note ? { note: data.note } : {}),
       };
       const tx = await apiPost<Transaction>('/transactions', payload);
@@ -177,7 +224,7 @@ export function TransactionForm({ onSuccess, onCancel, initialStockCode }: Trans
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-3 gap-4">
         <div>
           <label className="block text-sm font-medium mb-1">交易日期</label>
           <input
@@ -187,6 +234,19 @@ export function TransactionForm({ onSuccess, onCancel, initialStockCode }: Trans
           />
           {errors.tradeDate && (
             <p className="text-up text-xs mt-1">{errors.tradeDate.message}</p>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">交易时间(可选)</label>
+          <input
+            type="time"
+            step="60"
+            className="w-full px-3 py-2 border border-border-str rounded-sm focus:outline-none focus:ring-2 focus:ring-accent bg-bg-surface font-mono"
+            {...register('tradeTime')}
+          />
+          {errors.tradeTime && (
+            <p className="text-up text-xs mt-1">{errors.tradeTime.message}</p>
           )}
         </div>
 
@@ -256,7 +316,7 @@ export function TransactionForm({ onSuccess, onCancel, initialStockCode }: Trans
                 </b>
               </span>
               <span>
-                新均价{' '}
+                新摊薄成本{' '}
                 <b className="font-mono text-text-pri">
                   {preview.after.costPrice ? priceFormat(preview.after.costPrice) : '—'}
                 </b>
@@ -292,6 +352,10 @@ export function TransactionForm({ onSuccess, onCancel, initialStockCode }: Trans
         <span className="text-warn">链自洽:</span>
         卖出超过「该日可卖额度」时,录入会被拒绝(422
         <code className="font-mono"> INSUFFICIENT_SHARES </code>),不会写坏成本链。
+        <br />
+        <span className="text-warn">时间点:</span>
+        同一交易日的多笔流水按「交易时间」先后计入成本(留空 = 时间未知,
+        排在同日有时间的流水之前)。填错会改变当天的成本顺序,录完可在流水列表里改。
       </div>
 
       {error && (

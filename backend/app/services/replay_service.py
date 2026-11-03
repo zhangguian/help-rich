@@ -17,7 +17,6 @@ import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Optional
 
 from app.core.prompts import REPLAY_SYSTEM, build_replay_user_prompt
 from app.core.stock_code import normalize_code
@@ -52,7 +51,7 @@ WINDOW_LABELS = {
 }
 
 # 维度名(scorer 同款,中文直接展示)
-DIMS = ["集中度", "价格合理性", "操作间隔", "市场环境", "板块热度"]
+DIMS = ["集中度", "价格合理性", "操作间隔", "市场环境", "板块热度", "交易时机"]
 
 # 维度一句话解释(给小白用户)— 前端复用 tooltip
 DIM_HINTS: dict[str, str] = {
@@ -61,6 +60,7 @@ DIM_HINTS: dict[str, str] = {
     "操作间隔": "距上次同向操作天数",
     "市场环境": "大盘顺势 / 中性 / 逆势",
     "板块热度": "当日板块排名",
+    "交易时机": "日内买卖位置 + 下单时段",
 }
 
 
@@ -76,7 +76,7 @@ class ReplaySnapshot:
     buy_count: int = 0
     sell_count: int = 0
     tx_lines: list[str] = field(default_factory=list)
-    score_avg: Optional[float] = None
+    score_avg: float | None = None
     dimension_avg: dict = field(default_factory=dict)
     top_issues: list = field(default_factory=list)
     concentration_pct: str = "0.00"
@@ -105,8 +105,8 @@ def _filter_tx_by_window(
     return [t for t in all_tx if t.trade_date >= cutoff]
 
 
-async def _aggregate_scores_async(tx_ids: list[int]) -> tuple[Optional[float], dict]:
-    """异步版聚合:窗口内 trade_scores → 平均分 + 5 维度均值"""
+async def _aggregate_scores_async(tx_ids: list[int]) -> tuple[float | None, dict]:
+    """异步版聚合:窗口内 trade_scores → 平均分 + 6 维度均值"""
     if not tx_ids:
         return None, {}
     async with async_session() as session:
@@ -116,8 +116,8 @@ async def _aggregate_scores_async(tx_ids: list[int]) -> tuple[Optional[float], d
         return None, {}
 
     avg_total = sum(s.score for s in scores) / len(scores)
-    dim_sums: dict[str, int] = {d: 0 for d in DIMS}
-    dim_counts: dict[str, int] = {d: 0 for d in DIMS}
+    dim_sums: dict[str, int] = dict.fromkeys(DIMS, 0)
+    dim_counts: dict[str, int] = dict.fromkeys(DIMS, 0)
     for s in scores:
         try:
             breakdown = json.loads(s.score_breakdown)
@@ -163,7 +163,7 @@ def _derive_suggestions(top_issues: list) -> list[str]:
     for it in top_issues[:2]:
         if it["score"] <= 10 and it["dim"] in rules:
             out.append(rules[it["dim"]])
-    return out or ["下次保持现有节奏,关注 5 维度均衡"]
+    return out or ["下次保持现有节奏,关注各维度均衡"]
 
 
 async def summarize_stock(stock_code: str, window: str) -> ReplaySnapshot:
@@ -199,7 +199,7 @@ async def summarize_stock(stock_code: str, window: str) -> ReplaySnapshot:
 
     # 4. Top 3 + 建议
     top_issues = _derive_top_issues(dim_avg)
-    suggestions = _derive_suggestions(top_issues)
+    # 建议文案由 LLM 生成(见 generate_replay_comment),此处不落库
 
     # 5. 持仓占比 + 窗口内已实现盈亏
     from app.modules.portfolio.service import get_position, aggregate_positions
@@ -389,7 +389,7 @@ async def force_replay(stock_code: str, window: str) -> ReplayRecord:
     )
 
 
-async def get_latest(stock_code: str, window: str) -> Optional[ReplayRecord]:
+async def get_latest(stock_code: str, window: str) -> ReplayRecord | None:
     """只读 DB,不调 LLM(切换窗口秒回)"""
     norm = normalize_code(stock_code) or stock_code
     return await replay_record_repo.get(norm, window)

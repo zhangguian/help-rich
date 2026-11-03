@@ -7,6 +7,8 @@ import { useEffect, useRef, useState } from 'react';
 
 import clsx from 'clsx';
 
+import { TReminderRailCard } from '@/components/treminder/TReminderRailCard';
+
 /**
  * 持久导航 rail(v0.7 Dark Terminal)
  *
@@ -145,6 +147,12 @@ export function NavRail() {
           📈
         </span>
         {!collapsed && <span className="text-[13px] font-semibold text-text-pri whitespace-nowrap">买股工具室</span>}
+      </div>
+
+      {/* 补T提醒 —— 置顶在所有导航项之前。
+          有时效的动作(今天卖出、明天接回)比任何浏览型入口都更该第一眼看到。 */}
+      <div className="pt-2 shrink-0">
+        <TReminderRailCard collapsed={collapsed} />
       </div>
 
       {/* 导航项 */}

@@ -50,12 +50,20 @@ def build_diagnose_user_prompt(
 
 
 def build_trade_line(sanitized: dict) -> str:
-    """交易行:600519 贵州茅台 买入 500-1000股 @2026-07-20"""
+    """交易行:600519 贵州茅台 买入 500-1000股 @2026-07-20 14:38
+
+    时间点可选:有就带上(评语里能看出「尾盘追单」这类时点语境),
+    没有就只留日期(**不编造**时间)。
+    """
     action_cn = "买入" if sanitized.get("action") == "buy" else "卖出"
-    return (
+    base = (
         f"{sanitized.get('stock_code')} {sanitized.get('stock_name')} "
         f"{action_cn} {sanitized.get('shares_bucket')}股 @{sanitized.get('trade_date')}"
     )
+    trade_time = sanitized.get("trade_time")
+    if trade_time:
+        base += f" {str(trade_time)[:5]}"
+    return base
 
 
 # ============================================================
@@ -113,7 +121,7 @@ REPLAY_USER_TEMPLATE = """数据窗口:{window_label}(共 {tx_count} 笔流水,�
 
 该窗口评分聚合:
 - 平均分 {score_avg}
-- 5 维度均值:{dimension_avg_lines}
+- 各维度均值:{dimension_avg_lines}
 
 Top 3 问题维度(低分优先):
 {top_issues_lines}

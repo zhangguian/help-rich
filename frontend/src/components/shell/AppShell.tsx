@@ -3,6 +3,8 @@
 import AssistantBall from '@/components/assistant/AssistantBall';
 import AssistantDialog from '@/components/assistant/AssistantDialog';
 import { AssistantProvider } from '@/components/assistant/AssistantProvider';
+import { PriceAlertPopup } from '@/components/alert/PriceAlertPopup';
+import { usePriceAlertStream } from '@/hooks/usePriceAlertStream';
 import { NavRail } from './NavRail';
 
 /**
@@ -18,8 +20,13 @@ import { NavRail } from './NavRail';
  * **阶段 10 改动**:挂上**全局 AI 助手**(右下角悬浮球 + 展开对话框)。
  * 放在 AppShell 是因为助手要**全站可见** —— 任何页面都能唤起它;
  * Provider 也在这里,所以助手拿得到盯盘页报上来的「当前选中的票」。
+ *
+ * **到价提醒弹窗**:同样挂全站 —— 提醒在哪一页触发都要看得见。
+ * Windows 托盘气泡在部分 Win11 上不渲染,应用内弹窗是唯一的可靠兜底。
  */
 export default function AppShell({ children }: { children: React.ReactNode }) {
+  usePriceAlertStream();
+
   return (
     <AssistantProvider>
       <div className="flex h-screen overflow-hidden bg-canvas">
@@ -27,6 +34,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden">{children}</main>
         <AssistantBall />
         <AssistantDialog />
+        <PriceAlertPopup />
       </div>
     </AssistantProvider>
   );

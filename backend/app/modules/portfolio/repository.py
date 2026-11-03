@@ -1,6 +1,5 @@
 """交易流水仓储(P2.1 实施)"""
-from datetime import date
-from typing import Optional
+from datetime import date, time
 
 from sqlalchemy import select
 
@@ -17,11 +16,15 @@ class TransactionRepository:
         shares: int,
         price: str,
         trade_date: date,
+        trade_time: time | None = None,
         stock_name: str | None = None,
         note: str | None = None,
         account_id: int | None = None,
     ) -> Transaction:
-        """创建一条交易流水(默认落到默认账户,保持存量调用方无需改动)"""
+        """创建一条交易流水(默认落到默认账户,保持存量调用方无需改动)
+
+        trade_time = None 表示时间未知(存量流水 / 截图导入 / 用户留空)。
+        """
         from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
 
         async with async_session() as session:
@@ -33,6 +36,7 @@ class TransactionRepository:
                 shares=shares,
                 price=price,
                 trade_date=trade_date,
+                trade_time=trade_time,
                 note=note,
             )
             session.add(row)
@@ -40,7 +44,7 @@ class TransactionRepository:
             await session.refresh(row)
             return row
 
-    async def get_by_id(self, tx_id: int) -> Optional[Transaction]:
+    async def get_by_id(self, tx_id: int) -> Transaction | None:
         async with async_session() as session:
             return await session.get(Transaction, tx_id)
 
@@ -51,7 +55,11 @@ class TransactionRepository:
         offset: int = 0,
         account_id: int | None = None,
     ) -> tuple[list[Transaction], int]:
-        """列出流水 + 总数(account_id=None 时只看默认账户,保持旧语义)"""
+        """列出流水 + 总数(account_id=None 时只看默认账户,保持旧语义)
+
+        排序:日期倒序 → 时间倒序(NULL 排最后)→ id 倒序。
+        时间倒序让「同一天里最后成交的那笔」排在最前,与直觉一致。
+        """
         from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
 
         scoped = account_id or DEFAULT_ACCOUNT_ID
@@ -59,7 +67,11 @@ class TransactionRepository:
             stmt = (
                 select(Transaction)
                 .where(Transaction.account_id == scoped)
-                .order_by(Transaction.trade_date.desc(), Transaction.id.desc())
+                .order_by(
+                    Transaction.trade_date.desc(),
+                    Transaction.trade_time.desc(),
+                    Transaction.id.desc(),
+                )
             )
             if stock_code:
                 stmt = stmt.where(Transaction.stock_code == stock_code)
@@ -71,7 +83,7 @@ class TransactionRepository:
             items = list((await session.execute(stmt)).scalars().all())
             return items, total
 
-    async def update(self, tx_id: int, **kwargs) -> Optional[Transaction]:
+    async def update(self, tx_id: int, **kwargs) -> Transaction | None:
         """更新流水(只能改 note / shares / price,不能改 stock_code / action)"""
         async with async_session() as session:
             row = await session.get(Transaction, tx_id)

@@ -107,6 +107,7 @@
   --surface-rgb: 13 19 29;
   --surface-2-rgb: 18 26 38;
   --surface-3-rgb: 24 33 47;
+  --bg-base-rgb: 7 11 18;
 }
 
 /* ============ 纸面终端(浅色)============ */
@@ -184,4 +185,5 @@ html[data-theme='light'] {
   --surface-rgb: 255 255 255;
   --surface-2-rgb: 247 249 251;
   --surface-3-rgb: 238 242 246;
+  --bg-base-rgb: 238 241 245;
 }

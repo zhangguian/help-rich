@@ -5,7 +5,8 @@ import clsx from 'clsx';
 /**
  * 评分维度条(P4.5 辅助)
  *
- * 5 维度(集中度/价格合理性/操作间隔/市场环境/板块热度)各 20 分
+ * 6 维度(集中度/价格合理性/操作间隔/市场环境/板块热度/交易时机)各 20 分
+ * ⚠️ 板块热度当前恒为 0(sector_rank 恒 None)→ 实际满分上限 100/120
  */
 export function ScoreBreakdown({
   breakdown,

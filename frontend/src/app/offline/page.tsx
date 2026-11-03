@@ -24,7 +24,7 @@ export default function OfflinePage() {
         </button>
         <Link
           href="/"
-          className="rounded-lg border border-border-base px-4 py-2 text-sm font-medium text-text-pri transition hover:bg-bg-elev"
+          className="rounded-lg border border-border-def px-4 py-2 text-sm font-medium text-text-pri transition hover:bg-bg-elevated"
         >
           返回首页
         </Link>

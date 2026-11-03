@@ -31,6 +31,7 @@
 | GET | /stock/{code}/decision-advice | 个股分析 | 操作建议白话(按钮触发,LLM 失败退回规则文案) |
 | GET | /stock/{code}/industry | 个股分析 | 行业归属(ETF 返回跟踪指数) |
 | POST | /diagnose/{trade_id} | 诊断 | 触发评分 + 评语 |
+| POST | /diagnose/backfill | 诊断 | 补评 / 全量重算(force=true) |
 | GET | /diagnose/{trade_id} | 诊断 | 获取评分(轮询降级) |
 | POST | /diagnose/{trade_id}/regenerate | 诊断 | A/B 用其他模型重新生成 |
 | GET | /stop-losses | 止损 | 止损列表 |
@@ -293,6 +294,7 @@
       "shares": 500,
       "price": "10.500",
       "trade_date": "2026-07-30",
+      "trade_time": "14:38:00",
       "note": null,
       "score": 72,
       "created_at": "2026-07-30T15:30:00"
@@ -304,6 +306,9 @@
 
 **业务说明**:`price` 是字符串(精度保护),前端 `decimalFormat` 显示
 **关联**:触发诊断后,`score` 字段填充
+**`trade_time`**:时间节点(HH:MM:SS);`null` = **未知**(存量流水 / 用户留空 / 截图导入),
+不编造时间。同一交易日的多笔流水按 `(trade_date, trade_time, id)` 排序 →
+时间点参与成本链重放(时间未知的排在同日有时间的流水之前)。
 
 ### 3.2 POST /api/transactions
 
@@ -317,6 +322,7 @@
 | shares | int | 是 | > 0 | 交易股数(整百) |
 | price | Decimal | 是 | > 0,3 位小数 | 交易价格 |
 | trade_date | date | 是 | YYYY-MM-DD | 交易日期 |
+| trade_time | str | 否 | HH:MM / HH:MM:SS | 时间节点;留空 = 未知(不编造) |
 | note | str | 否 | ≤ 200 字 | 备注 |
 
 **示例**:
@@ -327,6 +333,7 @@
   "shares": 500,
   "price": "10.500",
   "trade_date": "2026-07-30",
+  "trade_time": "14:38",
   "note": "看好银行板块"
 }
 ```
@@ -355,18 +362,21 @@
 3. SSE 推送 `trade.scored` → `trade.commented`/`trade.failed`
 
 ### 3.3 PATCH /api/transactions/{id}
-**目的**:修改一笔交易(只能改 note / shares / price,不能改 stock_code / action)
+**目的**:修改一笔交易(只能改 note / shares / price / trade_time,不能改 stock_code / action)
 
 **请求体**(所有字段可选):
 ```json
 {
   "shares": 500,
   "price": "10.500",
+  "trade_time": "14:38",
   "note": "改备注"
 }
 ```
 
 **响应 200**:同 POST
+
+**业务说明**:改 `trade_time` 会触发成本链重放(同日流水的先后顺序可能变化)与快照重写。
 
 ### 3.4 DELETE /api/transactions/{id}
 **目的**:删除一笔交易
@@ -404,11 +414,16 @@
 ```
 
 **字段说明**:
-- `shares` / `avg_cost` 来自 transactions 聚合(加权平均)
+- `shares` / `avg_cost` / `total_cost` 来自持仓主数据(positions 表,基准 + 成本链重放)
+- **成本口径(v0.17)= 券商摊薄口径**:
+  - `avg_cost` = **摊薄成本价** = 摊薄总额 ÷ 股数(= 券商持仓页的「成本价」)
+  - `total_cost` = **摊薄总额**(净投入 = 累计买入金额 − 累计卖出金额)
+  - `realized_pnl` = 累计已实现盈亏(独立于摊薄总额,不重复计入)
+  - 详见 §13.10
 - `stock_code` 统一为带市场后缀格式(`600519.SH` / `000001.SZ`,P3.5.1 起)
 - `current_price` / `prev_close` 来自行情接口(新浪主 + 腾讯备),缓存 5 分钟
 - `today_pnl` = `(current_price - prev_close) × shares`(今日盈亏)
-- `floating_pnl` = `(current_price - avg_cost) × shares`(浮动盈亏)
+- `floating_pnl` = `(current_price - avg_cost) × shares`(浮动盈亏,按摊薄成本 → 与券商同口径)
 - **行情全部失败时**:`current_price` / `prev_close` / `today_pnl` / `floating_pnl` 为 `null`(前端降级显示 "--"),HTTP 仍 200
 - 所有金额字段是 **字符串**(精度保护)
 
@@ -496,7 +511,8 @@
     "价格合理性": 12,
     "操作间隔": 20,
     "市场环境": 5,
-    "板块热度": 20
+    "板块热度": 0,
+    "交易时机": 13
   },
   "ai_comment": "买入价高于成本 8%,疑似追涨...",
   "ai_status": "success",
@@ -506,7 +522,11 @@
 }
 ```
 
-**业务说明**:`ai_status` 取值:`pending` / `success` / `failed` / `no_key`(v2.1)
+**业务说明**:`ai_status` 取值:`pending` / `success` / `failed` / `no_key`(v2.1)/ `scored`(只算分未生成评语)
+
+**评分口径**:6 维度 × 20 分 = **满分 120**
+(集中度 / 价格合理性 / 操作间隔 / 市场环境 / 板块热度 / **交易时机**)
+⚠️ 板块热度当前恒为 0(历史板块排行不可回溯)→ 实际满分上限 100/120
 
 ### 6.3 POST /api/diagnose/{trade_id}/regenerate
 
@@ -518,6 +538,33 @@
 | provider | str | 是 | deepseek / minimax / doubao |
 
 **响应 202**:`{ "trade_id": 1, "status": "pending" }`
+
+### 6.4 POST /api/diagnose/backfill
+
+**目的**:补评 / 全量重算(持仓侧「每一条流水都有评分」)
+
+**请求体**:
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| stock_code | str | 否 | 全部 | 限定某只股票 |
+| force | bool | 否 | false | false = 只补**没有评分**的流水;true = 全部重算 |
+| include_comment | bool | 否 | true | false = 只算分不调 LLM(省 token) |
+| limit | int | 否 | 200 | 单批上限(1~1000) |
+
+**响应 200**:
+```json
+{
+  "candidates": 6,
+  "submitted": 6,
+  "trade_ids": [2, 12, 13, 14, 15, 16],
+  "force": false,
+  "include_comment": true
+}
+```
+
+**业务说明**:评分在后台跑(SSE `trade.scored` / `trade.commented`),接口立即返回。
+幂等:重复执行安全(`trade_scores` 是 upsert)。
+**口径升级后必须 `force=true` 全量重算** —— 否则旧的 100 分制分数与新的 120 分制分数混存,不可比。
 
 ---
 
@@ -1137,6 +1184,490 @@ score = 类型权重 × 新鲜度系数 × 强度系数 × 100
 ⚠️ **前端类型必须写驼峰**:axios 响应拦截器会递归把 snake_case 转成 camelCase,
 前端 API 层的 TS 类型写成 snake_case 时 TS 不报错,但运行期读出来全是 `undefined`
 (口径条会渲染成「主板 只 · 非 ST 只」这种**空数字**)。
+
+---
+
+## 13.8 做T挂单清单(待接回 + 待卖出)(v0.16 新增 · v0.18 改为双向 · v0.19 三档 + 自动提醒)
+
+### 13.8.1 GET /api/t-reminders/pending
+
+**目的**:把「还挂着的做T单」列出来 —— 这是左栏第一位「🔁 补T提醒」清单的数据源。
+
+**做T有两个方向**(v0.18 起明确区分):
+
+| 组 | `direction` | 中文 | 腿的顺序 | 挂单含义 |
+|---|---|---|---|---|
+| 待接回 | `reverse` | 反T | 先卖出 → 后买回 | 高抛低吸,卖出了还没买回来 |
+| 待卖出 | `forward` | 正T | 先买入 → 后卖出 | 低吸高抛,买进了还没卖出去 |
+
+**口径(单一,不搞多套推断)**
+
+1. 每只标的的**全部流水**按链全序(`trade_date, trade_time or min, id`)走一遍,**双向 FIFO**:
+   - 遇到**买入**:先闭合最早的**卖出开腿**(反T),剩余部分成为**买入开腿**(正T);
+   - 遇到**卖出**:先闭合最早的**买入开腿**(正T),剩余部分成为**卖出开腿**(反T);
+2. **配对有时间窗口**:开腿与收腿相隔超过 `T_PAIR_WINDOW_DAYS`(默认 **3** 天)就不算一次做T ——
+   超窗口的开腿被**冻结**,不再参与后面的配对,单独作为加仓/减仓挂着;
+3. 链尾**还没被闭合的开腿** = 还挂着的做T单;**开腿日期也要落在窗口内**
+   (基准 = 链上最后一个流水的日期,确定性,不随「今天」漂移);
+4. 同一标的 + 同一方向的多笔挂单**合并成一条**(股数累加、金额累加 → 加权均价);
+5. **基准线**:
+   - 反T = **不亏本接回线** = 净卖出加权均价 —— 接回价高于它,这次 T 就是做亏的;
+   - 正T = **买入加权均价**;
+6. **三档建议价(v0.19 新增)** —— 每档给「价格」+「按这档成交之后的成本前→后」:
+
+   | 档 | 幅度 | 反T(待接回) | 正T(待卖出) | 含义 |
+   |---|---|---|---|---|
+   | 一档 | 1% | 基准线 × 0.99 | 基准线 × 1.01 | 贴线,最容易成交 —— 先把这单做掉 |
+   | 二档 | 2% | 基准线 × 0.98 | 基准线 × 1.02 | 幅度与成交概率折中 |
+   | 三档 | 3% | 基准线 × 0.97 | 基准线 × 1.03 | 幅度最大,可能要等行情 |
+
+   **两组的档位方向相反**:反T 三档往下走(越等接回越便宜),正T 三档往上走(越等卖得越贵)。
+   不能一味价高 —— 一味价高在反T 上就是「接回价比卖出价还高,做出来是亏的」。
+
+   > 幅度常量集中在 `app/modules/portfolio/t_pricing.py` 的 `TIER_OFFSETS`,
+   > 改幅度不改结构。0.5% 太小(只够覆盖双边手续费),所以改成 1% / 2% / 3%。
+
+7. **每档的成本前→后**(摊薄口径,见 §13.10):
+   - 反T(接回)= (当前摊薄总额 + 该档价格 × 待接回股数) / (当前持仓 + 待接回);
+   - 正T(卖出)= (当前摊薄总额 − 该档价格 × 待卖出股数) / (当前持仓 − 待卖出);
+   当前成本线取持仓行的**摊薄成本**(= 券商持仓页口径,见 §13.10)。
+
+**为什么要有时间窗口**:做T是**短周期**动作(当天卖、次日接回,周五卖下周一接回也正好 3 天)。
+没有窗口的话,「10 月 13 日买的票,11 月 2 日割掉」会被当成一次正T,
+而「今天卖、明天接回」也会因为更早的一笔买入而被**配错腿** ——
+2026-11-03 的中钨高新就是例子:10-13 买、11-02 卖、11-02 买、11-03 买,
+没有窗口时 11-02 的卖会先去配 10-13 的买,导致「当天做的那笔T」散架、
+真正的今日加仓反而被算成接回腿。
+
+**为什么从「只看最近一个交易日」改成全链(v0.18)**:卖出腿和接回腿天然可能跨天。
+v0.16 的口径会把「卖 200 只接回 100」剩下的 100 股直接丢掉 —— 用户根本看不到还差多少。
+改成全链后,**没配上的那条腿**才是挂单,跨几天都留着,直到接回/卖出为止。
+
+> 副作用:卖出后长期不接回(可能是「减仓」不是「做T」)在窗口内也会挂着。
+> `open_date` 字段给出挂单起始日,便于判断这是不是陈年旧账。
+
+**建议价必须落在最小报价单位上**:按 3 位小数 `ROUND_HALF_UP` 量化,挂单才合法。
+
+### 13.8.2 到价提醒自动管理(v0.19 新增)
+
+**每条挂单都保证有一条到价提醒**,方向跟T方向一致:
+
+| 方向 | 提醒条件 | 触发时机 |
+|---|---|---|
+| 反T(待接回) | `price <= 一档价` | 跌下来 → 提醒接回 |
+| 正T(待卖出) | `price >= 一档价` | 涨上去 → 提醒卖出 |
+
+**落在哪一档**:自动提醒**新建**时建在**一档** —— 一档是行动信号(该动手了),
+二/三档是「愿意多等一会儿换更好价」的选择。
+**用户把自动提醒改到二档/三档,系统认**(不会被拉回一档)—— 三档摆在那里就是为了让人选,
+系统不该替用户改主意。只有当提醒的价格**不落在当前任何一档**上时(基准线变了,
+或被改成了档位外的自定义价),才把这条提醒**就地**改回一档(不新建、不停用)。
+
+一句话:**有提醒就复用,提醒的档位由用户定;提醒跟不上了才拉回一档。**
+
+**怎么标记「这条是系统自动建的」**:`PriceAlert` 没有 source / metadata 字段,
+只能用 `name` 前缀 **`[做T]`** 标记(如 `[做T]豫能控股 反T接回`)。
+**只对带前缀的提醒做自动停用** —— 用户手工建的提醒一律不碰。
+
+**同步时机**:在 `GET /api/t-reminders/pending` 里做(**幂等**)。打开页面即对齐,
+不用用户点「建提醒」。同步做三件事:
+
+1. 每条挂单:若已存在该标的该方向的**启用自动提醒** → 直接复用
+   (价格落在当前任一档就保留,否则就地改回一档);
+   否则看用户手工建的那条是否正好命中一档价 → 命中就复用(不重复建);
+   都没有 → **新建**一条 `[做T]` 自动提醒(一档价);
+2. 用户手工建的提醒(同标的 + 同方向,价格命中基准线或任一档位)单独记在
+   `manual_alert_id` / `manual_alert_price` —— **不会被自动停用**;
+3. 带 `[做T]` 前缀、但**已经对不上任何挂单**的提醒 → **停用**(`enabled = false`,
+   不是删除,保留触发历史)。挂单接回/卖出 → 从清单消失 → 提醒自动停用。
+
+**基准线变了怎么办**:又卖了一笔 → 加权均价变 → 一档价变 → 原来那条自动提醒**就地**
+改成新的一档价(同一条 id,不新建、不停用)。提醒始终跟着当前建议价走。
+
+**响应 200**:
+```jsonc
+{
+  "items": [                       // 待接回(反T)
+    {
+      "stock_code": "001896.SZ",
+      "stock_name": "豫能控股",
+      "direction": "reverse",
+      "shares": 100,              // 待接回股数
+      "price": 8.86,              // 不亏本接回线(加权均价)= 基准线
+      "suggested_price": 8.771,   // 一档建议接回价(基准线 × 0.99)—— 兼容字段
+      "tiers": [                  // 三档建议价(每档带成本前→后)
+        {
+          "tier": 1, "label": "一档",
+          "price": 8.771, "offset_pct": 0.01,
+          "cost_before": 16.910, "cost_after": 15.554,
+          "hint": "贴线,最容易成交 —— 先把这单做掉"
+        },
+        {
+          "tier": 2, "label": "二档",
+          "price": 8.683, "offset_pct": 0.02,
+          "cost_before": 16.910, "cost_after": 15.539,
+          "hint": "幅度与成交概率折中"
+        },
+        {
+          "tier": 3, "label": "三档",
+          "price": 8.594, "offset_pct": 0.03,
+          "cost_before": 16.910, "cost_after": 15.524,
+          "hint": "幅度最大,可能要等行情"
+        }
+      ],
+      "open_date": "2026-11-02",  // 挂单起始日(该组最早未闭合开腿的日期)
+      "position_shares": 500,     // 当前持仓股数
+      "current_price": 8.83,      // 现价;行情取不到 → null(不编数字)
+      "alert_id": 5,              // 到价提醒 id(自动保证存在)
+      "alert_price": 8.771,       // 该提醒的触发价
+      "alert_tier": 1,            // 该提醒落在第几档
+      "alert_auto": true,         // 是不是系统自动建的
+      "manual_alert_id": 4,       // 用户手工建的提醒(同标的 + 同方向);没有 → null
+      "manual_alert_price": 8.86,
+      "pre_alert_id": 9,          // 提前预警提醒 id(自动保证存在);没有 → null
+      "pre_alert_price": 8.859,   // 预警线 = 生效到价线朝基准线方向再退 1%
+      "pre_alert_fired": false,   // 这条预警是否已经响过
+      "pre_alert_distance_pct": 0.67,  // 现价离到价线还差百分之几(绝对值)
+      "pre_alert_reached": false, // 现价是否已越过到价线
+      "pre_alert_in_zone": true,  // 现价是否已进入预警区(离到价线还差 1% 以内)
+      "cost_before": 16.910,      // 当前成本线(摊薄成本价,券商口径)= 一档的 cost_before
+      "cost_after": 15.554        // 按一档价接回后的摊薄成本线
+    }
+  ],
+  "count": 1,                     // 待接回条数
+  "forward_items": [              // 待卖出(正T)
+    {
+      "stock_code": "561980.SH",
+      "stock_name": "半导体设备ETF招商",
+      "direction": "forward",
+      "shares": 200,
+      "price": 0.442,             // 买入加权均价 = 基准线
+      "suggested_price": 0.446,   // 一档建议卖出价(基准线 × 1.01)
+      "tiers": [
+        { "tier": 1, "label": "一档", "price": 0.446, "offset_pct": 0.01,
+          "cost_before": 0.717, "cost_after": 0.825, "hint": "贴线,最容易成交 —— 先把这单做掉" },
+        { "tier": 2, "label": "二档", "price": 0.451, "offset_pct": 0.02,
+          "cost_before": 0.717, "cost_after": 0.823, "hint": "幅度与成交概率折中" },
+        { "tier": 3, "label": "三档", "price": 0.455, "offset_pct": 0.03,
+          "cost_before": 0.717, "cost_after": 0.822, "hint": "幅度最大,可能要等行情" }
+      ],
+      "open_date": "2026-11-03",
+      "position_shares": 700,
+      "current_price": 0.436,
+      "alert_id": 8,
+      "alert_price": 0.446,
+      "alert_tier": 1,
+      "alert_auto": true,
+      "manual_alert_id": null,
+      "manual_alert_price": null,
+      "pre_alert_id": 12,
+      "pre_alert_price": 0.442,
+      "pre_alert_fired": false,
+      "pre_alert_distance_pct": 2.29,
+      "pre_alert_reached": false,
+      "pre_alert_in_zone": false,
+      "cost_before": 0.717,
+      "cost_after": 0.825
+    }
+  ],
+  "forward_count": 1,             // 待卖出条数
+  "total_count": 2,               // 两组合计
+  "as_of": "2026-11-03",          // 基准日(各挂单开腿日的最大值)
+  "auto_alerts_created": 0,       // 本次同步自动新建的提醒条数
+  "auto_alerts_disabled": 0,      // 本次同步自动停用的提醒条数(挂单已消失)
+  "auto_alerts_realigned": 0,     // 本次同步把提醒就地拉回一档的条数
+  "pre_alerts_created": 4,        // 本次同步自动新建的**预警**提醒条数
+  "pre_alerts_rearmed": 0,        // 价格离开预警区后被重新武装的条数
+  "pre_alerts_disabled": 0,       // 挂单消失后被停用的预警条数
+  "pre_alerts_realigned": 0       // 预警线就地跟到新价的条数
+}
+```
+
+> `cost_before` / `cost_after` 在没有持仓行时:`cost_before = null`、`cost_after = null`
+> (不编数字);三档的 `cost_before` / `cost_after` 同样留 null,但**三档价格照样给得出**
+> (只依赖基准线)。
+
+**前端类型必须写驼峰**(axios 响应拦截器递归 snake_case → camelCase):`stockCode` /
+`stockName` / `direction` / `suggestedPrice` / `tiers[]`(`tier` / `label` / `price` /
+`offsetPct` / `costBefore` / `costAfter` / `hint`)/ `openDate` / `positionShares` /
+`currentPrice` / `alertId` / `alertPrice` / `alertTier` / `alertAuto` / `manualAlertId` /
+`manualAlertPrice` / `preAlertId` / `preAlertPrice` / `preAlertFired` /
+`preAlertDistancePct` / `preAlertReached` / `preAlertInZone` / `costBefore` / `costAfter`;
+列表层 `forwardItems` / `forwardCount` / `totalCount` / `autoAlertsCreated` /
+`autoAlertsDisabled` / `autoAlertsRealigned` / `preAlertsCreated` / `preAlertsRearmed` /
+`preAlertsDisabled` / `preAlertsRealigned`。
+
+### 13.8.3 提前预警(v0.20 新增)
+
+**问题**:到价提醒是「价格到了才响」—— 但**到了再响,已经没有操作空间了**。
+挂单是「到了一档价就动手」,而实际操作需要提前把单子准备好。
+
+**口径**(用户选定):**预警线 = 生效到价线朝基准线方向再退 1%**,数值上 ≈ 基准线。
+
+| 方向 | 生效到价线(一档) | 预警线 | 含义 |
+|---|---|---|---|
+| 反T(待接回) | 基准线 × 0.99 | 到价线 × 1.01 | 价格**涨回**基准线附近 → 该准备接回了 |
+| 正T(待卖出) | 基准线 × 1.01 | 到价线 × 0.99 | 价格**跌回**基准线附近 → 该准备卖出了 |
+
+方向与到价线**相反**(到价线是「等价格过来」,预警线是「提前站在价格来的路上」)。
+预警线基于**生效到价线**而不是固定基准线 —— 用户把到价提醒改到二档,预警线就跟着按二档算,
+**永远早一步**。
+
+**实现形态**:预警是**独立的一条 `PriceAlert`**,不复用条件树双阈值:
+
+- `name` 前缀 **`[做T·预警]`**(与到价提醒的 `[做T]` 不重叠 —— `[做T·预警]` 不以 `[做T]` 开头);
+- 条件树**顶层**带 `kind = "pre_alert"` 与 `once = true`;
+- 引擎不认识 `kind` / `once`,只透传(见 `engine.notification_meta`),alert 模块保持通用。
+
+**一次性 + 重新武装**:预警命中后自动停用(不删除,保留触发历史);
+但价格**离开**预警区后**由后端调度器**重新武装 —— 「一次性」不等于「一辈子只提醒一次」。
+
+> ⚠️ 重新武装必须由**后端调度器**承担,不能只挂在清单页同步里:
+> 页面关着就不会同步 → 预警响一次就哑了 → 与「页面关着也能收到」的诉求直接冲突。
+> 判据是**当前价不再满足预警条件**(与「命中」互为补集),不需要知道方向,也不需要知道预警线是多少 ——
+> 条件树本身就是判据。行情取不到 → 不做任何动作(宁可少武装一次,也不编数据)。
+> 落在 `alert/service.py::rearm_pre_alerts()` + `alert/scheduler.py`(每轮扫描后调用)。
+
+**挂单消失** → 到价提醒与预警提醒都**停用不删除**。
+
+**实时数据**(live API 验证):
+```
+REVERSE 001896.SZ 触发=8.771 预警=8.859 距离=0.67%  inZone=True   reached=False
+FORWARD 000657.SZ 触发=36.34 预警=35.977 距离=1.91%  inZone=False
+FORWARD 002185.SZ 触发=14.494 预警=14.349 距离=4.42% inZone=False
+FORWARD 561980.SH 触发=0.446 预警=0.442  距离=2.29%  inZone=False
+```
+
+**UI 口径**:清单页新增「预警线 · 还差」列 —— 显示 `还差 X%` / `已进入准备区` / `已越过 X%` /
+`已预警`;弹窗区分两种徽章:琥珀色 `warn`「准备」(预警)与涨跌色「涨到/跌到」(到价)。
+预警用中性/琥珀色,**不占用行情红绿语义色**。
+
+### 13.8.4 提醒实时推送与应用内弹窗(v0.20 新增)
+
+**背景**:到价提醒原本只有「后端推系统通知」这一条路。但实测在 Windows 11 26200 上,
+WinRT Toast 因**非打包进程没有 package identity** 被平台拒(`0x80073D54`),
+降级到 Win32 托盘气泡后 `ShowBalloonTip` **返回成功但屏幕上什么都没画出来**
+(抓屏证实右下角托盘区域无任何气泡)。也就是说 —— 用户在「通知设置」里把桌面通知打开、
+点「测试」也显示成功,但**真到价了仍然收不到任何可见提示**。
+
+所以补了一条**不依赖系统通知**的通道:提醒触发 → 事件总线 → SSE → 网页内弹窗。
+只要页面开着就一定看得见。
+
+#### GET /api/price-alerts/stream(SSE)
+
+**帧格式**(SSE `data:` 行,JSON):
+
+| 帧 | 何时 | 载荷 |
+|---|---|---|
+| `price_alert_snapshot` | **建连首帧** | `{ event, items: PriceAlertFiredEvent[] }` —— 最近 10 分钟内**真的响了**的提醒(补断线期间漏掉的) |
+| `price_alert_fired` | 提醒命中**且通过冷却/日限流**时 | `PriceAlertFiredEvent` |
+
+`PriceAlertFiredEvent`:
+```jsonc
+{
+  "event": "price_alert_fired",
+  "trigger_id": 769,                    // 触发流水 id —— 前端靠它去重
+  "triggered_at": "2026-11-04T09:31:00",
+  "alert": {
+    "id": 4,
+    "stock_code": "001896.SZ",
+    "name": "明日补T接回200股",
+    "conditions_text": "价格 <= 8.86",
+    "price": 8.83,                      // 触发瞬间的价格;取不到 → null
+    "title": "价格提醒 · 001896.SZ",
+    "body": "明日补T接回200股\n触发条件:价格 <= 8.86\n当前价:8.83"
+  },
+  "channels": [ { "channel": "console", "ok": true, "detail": "..." } ]
+}
+```
+
+**约定**:
+- **实时推送与断线补发共用同一个构造函数**(`build_fired_payload`)→ 字段完全一致,
+  前端只写一套解析;靠 `trigger_id` 去重,同一次提醒不会弹两遍。
+- **被冷却/日限流拦下的不广播** —— 那一次用户什么都没收到,再弹一次等于骗人。
+- 心跳:每 30s 一个 `:heartbeat` 注释行。
+- 字面量路径 `/stream` 必须注册在 `/{alert_id}` **之前**(FastAPI 按注册顺序匹配)。
+
+#### GET /api/price-alerts/recent-fired
+
+**降级轮询用**:SSE 连不上时前端退回来轮询它,别让用户漏掉提醒。
+Query:`minutes`(默认 10,上限 120)、`limit`(默认 20,上限 100)。
+响应 `{ "items": [PriceAlertFiredEvent], "count": n }` —— **只含 `status = "matched"`**
+(被限流的 `skipped` 不算「响了」)。
+
+#### POST /api/price-alerts/test-popup
+
+**弹窗通路自检**(零副作用):广播一条**合成**的「提醒响了」事件,让用户当场验证
+弹窗弹不弹得出来 —— 不然只能干等,分不清是「没到价」还是「弹窗坏了」。
+
+Body(全可选,直接 POST `{}` 也能试):
+```jsonc
+{ "stock_code": "001896.SZ", "name": "测试标的",
+  "conditions_text": "价格 <= 8.771", "price": 8.83 }
+```
+响应 `{ "ok": true, "stock_code": "...", "price": 8.83 }`。
+
+⚠️ **不碰任何规则、不记流水、不消耗冷却/日限流额度**;走的是与真实触发
+**完全相同**的广播路径(SSE → 前端弹窗)。
+
+---
+
+## 13.9 做T操作历史(v0.16 新增 · v0.18 区分正反T)
+
+### 13.9.1 GET /api/t-history/{stock_code}
+
+**目的**:持仓详情弹窗右侧的「做T操作历史」—— 把这只票做过的每一次T记下来,
+含 T 前/T 后成本价与两个盈亏口径。
+
+**口径(单一,不搞多套推断)**
+
+1. **做T分两个方向**,腿的先后顺序不同(v0.18):
+
+   | `direction` | 中文 | 开腿 | 收腿 |
+   |---|---|---|---|
+   | `reverse` | 反T | 卖出(先卖) | 买回(后买) |
+   | `forward` | 正T | 买入(先买) | 卖出(后卖) |
+
+2. 同一标的的**全部流水**按链全序(`trade_date, trade_time or min, id`)走一遍,**双向 FIFO**:
+   - 遇到**买入**:先闭合最早的**卖出开腿**(反T),剩余部分成为**买入开腿**(正T);
+   - 遇到**卖出**:先闭合最早的**买入开腿**(正T),剩余部分成为**卖出开腿**(反T);
+3. 配对**有时间窗口** —— 开腿与收腿相隔超过 `T_PAIR_WINDOW_DAYS`(默认 3 天)就不是做T,
+   超窗口的开腿被冻结,不再参与后面的配对(见 §13.8 的「为什么要有时间窗口」);
+4. 链尾没被闭合的开腿 = **挂单中**(`status = "pending"`):
+   反T开腿未闭合 → 待接回;正T开腿未闭合 → 待卖出,都要列出来。
+   挂单的开腿日期也必须落在窗口内(基准 = 链上最后一个流水的日期)。
+
+   > v0.16 只有「先卖后买」一种,只有买入的流水会被**整段丢弃** ——
+   > 用户手上明明还有正T(先买后卖)在等着,系统却看不见。v0.18 补上正T方向。
+
+**两个盈亏口径(都要给)**
+
+| 字段 | 公式 | 含义 | 挂单中时 |
+|---|---|---|---|
+| `t_pnl` | (卖出价 − 买入价) × T股数 | 做T差价盈亏 —— 两个方向都是「低买高卖赚差价」 | null(价差还不存在) |
+| `realized_pnl` | (卖出价 − 卖出那一刻的摊薄成本) × 股数 | 卖出确认的已实现盈亏 | 反T有值(卖出即确认);正T为 null(还没卖) |
+
+**成本价取自成本链**(基准 + 活链重放,见 `service.load_chain_context`)
+
+- `cost_before` = **开腿那一刻**的持仓摊薄成本(反T = 卖出前;正T = 买入前);
+- `cost_after` = **收腿之后**的持仓摊薄成本;
+- 基准吸收掉的早期导入流水(`id <= base_tx_id`)没有逐笔成本快照 → 这两个字段为 **null**,
+  不编数字(前端的「成本 前→后」列显示 `—`)。
+- 成本口径 = 券商摊薄口径(v0.17),见 §13.10 —— 卖出按成交价回收净投入,
+  所以 T 前后成本线**会变**(这不是 bug,与券商同行为)。
+
+**响应 200**:
+```jsonc
+{
+  "stock_code": "561980.SH",
+  "stock_name": "半导体设备ETF招商",
+  "items": [
+    {
+      "status": "closed",            // closed = 两腿都齐了;pending = 还挂着一腿
+      "direction": "reverse",        // reverse = 反T(先卖后买) / forward = 正T(先买后卖)
+      "sell_tx_id": 19,              // 反T:卖出腿是开腿;正T:卖出腿是收腿(未闭合时为 null)
+      "sell_date": "2026-11-02",
+      "sell_price": 0.462,
+      "buy_tx_id": 29,               // 反T:买回腿是收腿;正T:买入腿是开腿(未闭合时为 null)
+      "buy_date": "2026-11-03",
+      "buy_price": 0.452,
+      "shares": 200,
+      "cost_before": 0.831,          // 开腿那一刻的摊薄成本价
+      "cost_after": 0.827,           // 收腿之后的摊薄成本价
+      "t_pnl": 2.0,                  // (0.462 − 0.452) × 200
+      "realized_pnl": -73.8          // (0.462 − 0.831) × 200
+    },
+    {
+      "status": "pending",
+      "direction": "forward",        // 正T:买进了还没卖出去
+      "sell_tx_id": null,
+      "sell_date": null,
+      "sell_price": null,
+      "buy_tx_id": 30,
+      "buy_date": "2026-11-03",
+      "buy_price": 0.442,
+      "shares": 200,
+      "cost_before": 0.827,
+      "cost_after": null,
+      "t_pnl": null,                 // 还没卖 → 价差还不存在
+      "realized_pnl": null           // 还没卖 → 已实现还没确认
+    }
+  ],
+  "count": 2,
+  "base_tx_id": 14                  // 基准吸收上界:<= 它的流水没有逐笔成本
+}
+```
+
+**前端类型必须写驼峰**:`stockCode` / `stockName` / `status` / `direction` / `sellTxId` /
+`sellDate` / `sellPrice` / `buyTxId` / `buyDate` / `buyPrice` / `shares` / `costBefore` /
+`costAfter` / `tPnl` / `realizedPnl` / `baseTxId`。
+
+**颜色口径**:涨红跌绿(`text-up` = 红 = 赚,`text-down` = 绿 = 亏)。
+
+---
+
+## 13.10 成本口径:券商摊薄口径(v0.17 口径变更)
+
+### 13.10.1 问题
+
+用户反馈「昨天录入流水后,成本和持仓对不上」。逐只比对券商持仓截图后定位到根因:
+**系统内部记的是「加权平均剩余成本」,展示时又用 `(total_cost − realized_pnl) ÷ shares`
+反推摊薄成本** —— 而基准里带的正是券商给的**累计已实现盈亏**,于是已实现被**二次扣减**。
+
+实例(豫能控股 001896.SZ,券商 400 股 @18.940):
+
+| 口径 | 算式 | 结果 |
+|---|---|---|
+| v0.10 展示(错) | (6231.20 + 50.60) ÷ 400 | 15.704 ✗ |
+| v0.17 摊薄(对) | (9346.80 − 1772.00) ÷ 400 | 18.937 ✓ |
+
+### 13.10.2 口径定义
+
+券商持仓页的「成本价」= **摊薄成本** = 累计净投入 ÷ 当前持股数:
+
+    摊薄成本 = (累计买入金额 − 累计卖出金额) ÷ 持股数
+
+v0.17 起系统内部直接追踪**净投入**(摊薄总额),不再靠反推:
+
+- 买入:净投入 += 成交价 × 股数
+- 卖出:净投入 −= 成交价 × 股数(**按成交价回收**,不是按成本等比例冲减)
+- 卖出确认的已实现 = (成交价 − 卖出前摊薄成本) × 股数
+- 摊薄成本 = 净投入 ÷ 股数 → **卖出后会变**(低于成本卖 → 摊薄成本抬高),与券商同行为
+
+### 13.10.3 影响面
+
+| 位置 | 变化 |
+|---|---|
+| `positions.total_cost` / `transactions.total_cost_after` | 语义 = 摊薄总额(净投入),不再是加权剩余成本 |
+| `GET /api/positions` 的 `avg_cost` | = 摊薄成本价(券商「成本价」) |
+| `GET /api/positions` 的 `floating_pnl` | 按摊薄成本算 → 与券商持仓页同口径 |
+| `POST /api/positions`(手动录入/截图导入) | `cost_price` = 券商摊薄成本价,录入值 = 展示值(不再受已实现影响) |
+| `POST /api/positions/{code}/clear` 的预估已实现 | (清仓价 − 摊薄成本) × 股数,与链内口径一致 |
+| 补T清单 `cost_before` / `cost_after` | 摊薄成本线(§13.8) |
+| 做T历史 `cost_before` / `cost_after` / `realized_pnl` | 摊薄成本线(§13.9) |
+| `POST /api/calculator` 试算 | 卖出后摊薄成本会变(`delta_cost` 不再恒为 0) |
+
+### 13.10.4 基准(base_*)的语义
+
+基准 = 「导入那一刻的真实持仓」,**摊薄口径**下:
+
+- `base_shares` = 券商持仓股数
+- `base_total_cost` = 券商**摊薄总额**(摊薄成本价 × 股数)
+- `base_realized_pnl` = 券商给的**累计已实现盈亏**(**独立**存放,不从摊薄总额里扣)
+- `base_tx_id` = 基准已吸收的流水 id 上界
+
+推算公式(券商快照 → 基准):
+
+    ΔS = 活链净股数,ΔD = 活链净现金流(买入加 / 卖出减)
+    S0 = 券商股数 − ΔS
+    D0 = 券商摊薄总额 − ΔD
+
+一次性修正脚本:`backend/scripts/fix_base_to_broker.py`(带 `--dry-run`,幂等)。
+
+### 13.10.5 验收
+
+2026-11-03 实测(券商持仓截图 11 只):修正基准 + 全量重放后,**11 只摊薄成本与券商分毫不差**
+(含华天科技股数 1000 → 1100、集成电路ETF嘉实基准 813.00 → 810.00 的修正)。
 
 ---
 

@@ -102,7 +102,7 @@ export function BacktestPanel() {
               'rounded-md border p-2.5 text-left transition',
               mode === 'signal'
                 ? 'border-accent bg-accent/10'
-                : 'border-border-base hover:bg-bg-elev',
+                : 'border-border-def hover:bg-bg-elevated',
             )}
           >
             <div className="flex items-center gap-1.5 text-sm font-medium">
@@ -123,7 +123,7 @@ export function BacktestPanel() {
               'rounded-md border p-2.5 text-left transition',
               mode === 'compare'
                 ? 'border-accent bg-accent/10'
-                : 'border-border-base hover:bg-bg-elev',
+                : 'border-border-def hover:bg-bg-elevated',
             )}
           >
             <div className="flex items-center gap-1.5 text-sm font-medium">
@@ -155,7 +155,7 @@ export function BacktestPanel() {
               max={720}
               value={days}
               onChange={(e) => setDays(Number(e.target.value))}
-              className="w-24 rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri"
+              className="w-24 rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri"
             />
           </label>
           <label className="space-y-1 text-[11px]">
@@ -166,7 +166,7 @@ export function BacktestPanel() {
               step={10000}
               value={capital}
               onChange={(e) => setCapital(Number(e.target.value))}
-              className="w-32 rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri"
+              className="w-32 rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri"
             />
           </label>
           <button
@@ -215,7 +215,7 @@ export function BacktestPanel() {
                       const m = r.metrics ?? {};
                       const ret = Number(m.total_return_pct ?? 0);
                       return (
-                        <tr key={label} className="border-t border-border-base">
+                        <tr key={label} className="border-t border-border-def">
                           <td className="py-1.5 font-medium">{label}</td>
                           <td
                             className={clsx(
@@ -240,7 +240,7 @@ export function BacktestPanel() {
               </div>
 
               {compare.weightsSensitive === false && (
-                <p className="rounded-md border border-border-base bg-bg-elev/40 px-3 py-2 text-[11px] text-text-ter">
+                <p className="rounded-md border border-border-def bg-surface-2/40 px-3 py-2 text-[11px] text-text-ter">
                   两套权重在所选区间内选出了完全相同的股票 —— 说明当前区间上权重对结果不敏感。
                   这不代表权重无用,而是需要更长的历史或更大的权重差异才能观察到区别。
                 </p>
@@ -255,7 +255,7 @@ export function BacktestPanel() {
           {result.warnings && result.warnings.length > 0 && (
             <Card padding="md" className="space-y-1">
               {result.warnings.map((w, i) => (
-                <p key={i} className="text-[11px] text-warning">
+                <p key={i} className="text-[11px] text-warn">
                   ⚠️ {w}
                 </p>
               ))}
@@ -270,7 +270,7 @@ export function BacktestPanel() {
                 const num = typeof raw === 'number' ? raw : Number(raw);
                 const positive = Number.isFinite(num) && num >= 0;
                 return (
-                  <div key={m.key} className="rounded-md border border-border-base p-2.5">
+                  <div key={m.key} className="rounded-md border border-border-def p-2.5">
                     <dt className="text-[11px] text-text-ter">{m.label}</dt>
                     <dd
                       className={clsx(
@@ -347,7 +347,7 @@ export function BacktestPanel() {
                       const action = String(t.action ?? '');
                       const pnl = t.pnl as number | null | undefined;
                       return (
-                        <tr key={i} className="border-t border-border-base">
+                        <tr key={i} className="border-t border-border-def">
                           <td className="py-1 font-mono">{String(t.date ?? '')}</td>
                           <td className="py-1">
                             <span

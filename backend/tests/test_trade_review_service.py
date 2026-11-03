@@ -420,8 +420,8 @@ def test_position_after_uses_unquantized_avg_cost():
 def test_position_after_total_cost_matches_chain():
     ctx = _ctx(price=16.42)
     r = review_trade(ctx, _decision(), ProposedTrade("sell", 100, 16.42), _pos(shares=1000))
-    # 剩余 900 股 × 17.02146 = 15319.314 → 2 位 = 15319.31
-    assert r["position_after"]["total_cost"] == "15319.31"
+    # 摊薄口径:净投入 17021.46 − 100×16.42 = 15379.46(2 位)
+    assert r["position_after"]["total_cost"] == "15379.46"
 
 
 def test_buy_position_after_average_cost():

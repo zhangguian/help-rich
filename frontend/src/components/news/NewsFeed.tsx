@@ -40,7 +40,7 @@ export function NewsFeed() {
         </Card>
       )}
       {!loading && !error && (
-        <Card padding="md" className="divide-y divide-bd-subtle">
+        <Card padding="md" className="divide-y divide-bg-subtle">
           {items.length === 0 && (
             <p className="text-text-ter text-sm py-4 text-center">暂无快讯</p>
           )}

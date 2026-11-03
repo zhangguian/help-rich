@@ -9,20 +9,20 @@ service 周期回检:对每笔买入 (action='buy') 评分,在评分后 HORIZON_
 - 仅验证 action='buy':该评分当时认为"该笔买入操作是合理的"
 - 持有期收益 = (close_t_N / close_t_0 - 1) * 100(正值=赚)
 - close_t_0 = 交易当日收盘;close_t_N = 交易日后第 N 个交易日的收盘
-- 分数段:0-59 / 60-79 / 80-100
+- 分数段:0-71 / 72-95 / 96-120(120 分制,原 100 分制 ×1.2)
 - 桶内:count / avg_return / win_rate / median_return
 - 样本不足(< MIN_SAMPLES)→ 该桶返回 insufficient=true,不输出结论
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 from statistics import median
 from typing import Any
 
 from sqlalchemy import select
 
 from app.db import async_session
-from app.models.orm import KlineCache, TradeScore, Transaction
+from app.models.orm import TradeScore, Transaction
 from app.services.kline_service import KLineSourceUnavailable, fetch_klines
 
 
@@ -31,20 +31,22 @@ HORIZON_DAYS = 20
 # 桶内样本下限,低于则 insufficient(不输出结论)
 MIN_SAMPLES = 3
 # 评分桶定义(GB-001 IR-3)
+# ⚠️ 评分口径已升级为 6 维 / 满分 120 → 桶边界同步 ×1.2
+# (原 0-59 / 60-79 / 80-100 → 0-71 / 72-95 / 96-120)
 SCORE_BUCKETS: list[tuple[str, int, int]] = [
-    ("0-59", 0, 59),
-    ("60-79", 60, 79),
-    ("80-100", 80, 100),
+    ("0-71", 0, 71),
+    ("72-95", 72, 95),
+    ("96-120", 96, 120),
 ]
 
 
 def _bucket_for(score: int) -> tuple[str, int, int]:
-    """按分数映射桶定义(含 80/100 边界)"""
+    """按分数映射桶定义(含 96/120 边界)"""
     for label, lo, hi in SCORE_BUCKETS:
         if lo <= score <= hi:
             return label, lo, hi
-    # 容量外(评分钳位 0-100,理论上不会发生)
-    return "0-59", 0, 59
+    # 容量外(评分钳位 0-120,理论上不会发生)
+    return "0-71", 0, 71
 
 
 def _index_to_close(klines: list[dict]) -> dict[date, str]:
@@ -123,7 +125,7 @@ async def _observe_trade(
         # 交易当日未收盘或缓存不足
         return None
     # 找 trade_date 之后第 N 个交易日
-    future_dates = sorted(d for d in closes.keys() if d > trade_date)
+    future_dates = sorted(d for d in closes if d > trade_date)
     if len(future_dates) < horizon_days:
         return None
     target = future_dates[horizon_days - 1]
@@ -139,8 +141,8 @@ async def compute_calibration(horizon_days: int = HORIZON_DAYS) -> dict:
           "sample_count": int,
           "buckets": [
             {
-              "label": "0-59",
-              "range": [0, 59],
+              "label": "0-71",
+              "range": [0, 71],
               "count": int,
               "insufficient": bool,
               "avg_return": float | None,

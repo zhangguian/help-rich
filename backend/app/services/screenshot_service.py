@@ -210,7 +210,7 @@ class ScreenshotService:
         except ValueError:
             return None
 
-    async def confirm(self, record_id: int, items: list[dict], screenshot_type: str) -> None:
+    async def confirm(self, record_id: int, items: list[dict], screenshot_type: str) -> list[int]:
         """用户确认后入库 transactions / watchlist / positions
 
         v0.4.0 变更:position / holdings 类型不再拒绝,改为逐行 upsert 持仓表
@@ -219,10 +219,16 @@ class ScreenshotService:
         v0.5.0:截图里若带 `screenshot_time`(截图当时的日期),就把它当作**基准日期** ——
         只吸收该日期(含)之前的流水,该日期之后的流水留在链里继续生效。
         没有 screenshot_time → 吸收现有全部流水(快照即此刻真实持仓)。
+
+        Returns:
+            新建的交易流水 id 列表(截图导入的流水也必须评分 → 由调用方触发)
+            非流水类型返回空列表。
         """
         from datetime import date as date_cls
 
         base_date = await self._extract_screenshot_date(record_id)
+
+        created_tx_ids: list[int] = []
 
         async def _do():
             if screenshot_type in ("position", "holdings"):
@@ -262,7 +268,8 @@ class ScreenshotService:
                     trade_date = item["trade_date"]
                     if isinstance(trade_date, str):
                         trade_date = date_cls.fromisoformat(trade_date[:10])
-                    await transaction_repo.create(
+                    # 截图里没有时间信息 → trade_time = None(未知,不编造)
+                    tx = await transaction_repo.create(
                         stock_code=item["stock_code"],
                         stock_name=item.get("stock_name"),
                         action=item["action"],
@@ -270,6 +277,7 @@ class ScreenshotService:
                         price=str(item["price"]),
                         trade_date=trade_date,
                     )
+                    created_tx_ids.append(tx.id)
             elif screenshot_type == "watchlist":
                 for item in items:
                     await watchlist_repo.add(
@@ -279,13 +287,17 @@ class ScreenshotService:
             await screenshot_repo.mark_confirmed(record_id)
 
         await safe_write(_do)
+        return created_tx_ids
 
     async def reject(self, record_id: int) -> None:
         """用户取消:标记 rejected + 删除原图"""
+        import asyncio
+
         record = await screenshot_repo.get_by_id(record_id)
         if record and record.file_path:
             try:
-                Path(record.file_path).unlink(missing_ok=True)
+                # 删文件是阻塞 IO,丢线程池,别占住事件循环
+                await asyncio.to_thread(Path(record.file_path).unlink, missing_ok=True)
             except OSError:
                 logger.warning("删除原图失败: %s", record.file_path)
         await screenshot_repo.mark_rejected(record_id)

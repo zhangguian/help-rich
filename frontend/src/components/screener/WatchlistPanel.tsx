@@ -202,7 +202,7 @@ function PeriodTable({
         </thead>
         <tbody>
           {buckets.map((b) => (
-            <tr key={b.label} className="border-b border-border-def/40 hover:bg-bg-subtle/30">
+            <tr key={b.label} className="border-b border-border-def/40 hover:bg-surface-3/30">
               <td className="py-2 pr-3">
                 <div className="font-mono">{b.label}</div>
                 <div className="text-xs text-text-ter">

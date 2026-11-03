@@ -31,7 +31,7 @@ function dimColor(score: number) {
  * 一键复盘卡片(v2.3)
  *
  * - 顶部 6 窗口按钮(默认 1d);切换触发新请求
- * - 5 维度条形图 + Top 3 问题
+ * - 6 维度条形图 + Top 3 问题
  * - AI 评语 + 失败/缺 Key 降级提示
  * - 右上有「🔄 重算」按钮(强制调 LLM)
  */
@@ -150,10 +150,10 @@ export function ReplayCard({
 
       {!loading && !error && data && (
         <>
-          {/* 5 维度条形图 */}
+          {/* 6 维度条形图 */}
           <div className="space-y-1.5">
             <div className="text-xs text-text-sec mb-1">
-              5 维度均值 · 综合分{' '}
+              6 维度均值 · 综合分{' '}
               <span className="font-mono text-text-pri">
                 {data.scoreAvg ?? '—'}
               </span>

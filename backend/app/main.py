@@ -43,6 +43,8 @@ from app.modules.screener.api import router as screener_router
 from app.api.stock import router as stock_router
 from app.api.stop_losses import router as stop_losses_router
 from app.modules.portfolio.api_transactions import router as transactions_router
+from app.modules.portfolio.api_t_reminders import router as t_reminders_router
+from app.modules.portfolio.api_t_history import router as t_history_router
 from app.core.config import settings
 from app.core.logging import configure_logging, logger
 
@@ -269,6 +271,8 @@ app.include_router(market_router, prefix="/api")
 app.include_router(sector_router, prefix="/api")
 app.include_router(stop_losses_router, prefix="/api")
 app.include_router(transactions_router, prefix="/api")
+app.include_router(t_reminders_router, prefix="/api")
+app.include_router(t_history_router, prefix="/api")
 app.include_router(positions_router, prefix="/api")
 app.include_router(provider_stats_router, prefix="/api")
 app.include_router(quotes_router, prefix="/api")

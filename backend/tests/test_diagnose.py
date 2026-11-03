@@ -200,9 +200,16 @@ class TestScoreAndNotify:
 
         score = asyncio.run(trade_score_repo.get_by_trade_id(t2.id))
         assert score is not None
-        assert 0 <= score.score <= 100
+        assert 0 <= score.score <= 120
         breakdown = json.loads(score.score_breakdown)
-        assert set(breakdown.keys()) == {"集中度", "价格合理性", "操作间隔", "市场环境", "板块热度"}
+        assert set(breakdown.keys()) == {
+            "集中度",
+            "价格合理性",
+            "操作间隔",
+            "市场环境",
+            "板块热度",
+            "交易时机",
+        }
         assert score.ai_status == "success"
         assert score.ai_provider == "deepseek"
         assert "不构成投资建议" in (score.ai_comment or "")
@@ -393,5 +400,12 @@ class TestDiagnoseAPI:
         data = r.json()
         assert data["status"] == "success"
         assert data["score"] is not None
-        assert set(data["breakdown"].keys()) == {"集中度", "价格合理性", "操作间隔", "市场环境", "板块热度"}
+        assert set(data["breakdown"].keys()) == {
+            "集中度",
+            "价格合理性",
+            "操作间隔",
+            "市场环境",
+            "板块热度",
+            "交易时机",
+        }
         assert data["ai_comment"] == "OK。以上不构成投资建议。"

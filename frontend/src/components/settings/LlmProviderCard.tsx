@@ -82,7 +82,7 @@ export function LlmProviderCard() {
                 key={p.name}
                 className={`flex items-center justify-between p-3 rounded-sm border ${
                   isActive
-                    ? 'border-accent-primary bg-accent-subtle'
+                    ? 'border-accent bg-accent-subtle'
                     : 'border-border-def'
                 }`}
               >

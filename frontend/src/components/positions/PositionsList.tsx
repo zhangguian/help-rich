@@ -30,6 +30,11 @@ const ClearPositionModal = dynamic(
   () => import('./ClearPositionModal').then((m) => m.ClearPositionModal),
   { ssr: false },
 );
+const PositionTransactionModal = dynamic(
+  () =>
+    import('./PositionTransactionModal').then((m) => m.PositionTransactionModal),
+  { ssr: false },
+);
 
 /**
  * 持仓列表(Client 包装,P5.3/P5.5 集成)
@@ -49,6 +54,7 @@ export function PositionsList({
   const { alertEl } = useStopLossChecker(positions);
   const [detail, setDetail] = useState<{ code: string; name: string | null } | null>(null);
   const [clearTarget, setClearTarget] = useState<Position | null>(null);
+  const [txTarget, setTxTarget] = useState<{ code: string; name: string | null } | null>(null);
 
   const pnlClass = (v: number | null) =>
     v === null ? 'text-text-ter' : v >= 0 ? 'text-up' : 'text-down';
@@ -75,7 +81,7 @@ export function PositionsList({
                   </div>
                   <div className="text-sm text-text-sec mt-1">
                     持仓 <span className="font-mono">{p.shares}</span> 股 ·
-                    加权成本 ¥
+                    摊薄成本 ¥
                     <span className="font-mono">
                       {decimalFormat(p.avgCost)}
                     </span>
@@ -138,6 +144,16 @@ export function PositionsList({
                       size="sm"
                       variant="ghost"
                       onClick={() =>
+                        setTxTarget({ code: p.stockCode, name: p.stockName })
+                      }
+                      title="录入这只股票的交易流水(每笔自动打分)"
+                    >
+                      📝 录入流水
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
                         setDetail({ code: p.stockCode, name: p.stockName })
                       }
                     >
@@ -184,6 +200,14 @@ export function PositionsList({
           onClose={() => setDetail(null)}
           stockCode={detail.code}
           stockName={detail.name}
+        />
+      )}
+      {txTarget && (
+        <PositionTransactionModal
+          open={true}
+          onClose={() => setTxTarget(null)}
+          stockCode={txTarget.code}
+          stockName={txTarget.name}
         />
       )}
       {alertEl}

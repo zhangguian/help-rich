@@ -12,6 +12,11 @@ const config: Config = {
     './src/app/**/*.{js,ts,jsx,tsx,mdx}',
     './src/components/**/*.{js,ts,jsx,tsx,mdx}',
     './src/pages/**/*.{js,ts,jsx,tsx,mdx}',
+    // lib / stores / hooks 也要扫:运行时拼出来的类名(如 format.ts 的涨跌色)
+    // 只在这些目录里出现,漏扫 = 样式在真实运行时不存在。
+    './src/lib/**/*.{js,ts,jsx,tsx,mdx}',
+    './src/stores/**/*.{js,ts,jsx,tsx,mdx}',
+    './src/hooks/**/*.{js,ts,jsx,tsx,mdx}',
   ],
   theme: {
     // 整体覆盖,非 extend — 避免与默认刻度撞值
@@ -42,7 +47,9 @@ const config: Config = {
       colors: {
         // 画布与分层表面
         'canvas': 'var(--canvas)',
-        'bg-base': 'var(--bg-base)',
+        // bg-base 用 RGB 通道形式,才能支持 bg-bg-base/80 这类半透明修饰符
+        // (var(--bg-base) 是纯 var(),叠加 /N 会被 tailwind 判为非法 → 静默失效)
+        'bg-base': 'rgb(var(--bg-base-rgb) / <alpha-value>)',
         'bg-surface': 'var(--surface)',
         'bg-elevated': 'var(--surface-2)',
         'bg-subtle': 'var(--surface-3)',

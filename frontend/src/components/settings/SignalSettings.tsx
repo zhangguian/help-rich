@@ -150,7 +150,7 @@ export function SignalSettings() {
           className={clsx(
             'rounded px-2 py-1 text-xs transition disabled:opacity-50',
             config.enabled
-              ? 'border border-border-base text-text-sec hover:bg-bg-elev'
+              ? 'border border-border-def text-text-sec hover:bg-bg-elevated'
               : 'bg-accent text-bg-base hover:opacity-90',
           )}
         >
@@ -160,7 +160,7 @@ export function SignalSettings() {
           type="button"
           onClick={() => void doTest()}
           disabled={busy}
-          className="rounded border border-border-base px-2 py-1 text-xs text-text-sec hover:bg-bg-elev disabled:opacity-50"
+          className="rounded border border-border-def px-2 py-1 text-xs text-text-sec hover:bg-bg-elevated disabled:opacity-50"
         >
           测试桌面通知
         </button>
@@ -192,7 +192,7 @@ export function SignalSettings() {
             onChange={(e) =>
               setConfig({ ...config, velocityWindowSec: Number(e.target.value) || 60 })
             }
-            className="w-full rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
+            className="w-full rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
           />
         </label>
         <label className="space-y-1 text-[11px]">
@@ -204,7 +204,7 @@ export function SignalSettings() {
             step={0.1}
             value={config.velocityPct}
             onChange={(e) => setConfig({ ...config, velocityPct: Number(e.target.value) || 1.5 })}
-            className="w-full rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
+            className="w-full rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
           />
         </label>
         <label className="space-y-1 text-[11px]">
@@ -218,7 +218,7 @@ export function SignalSettings() {
             onChange={(e) =>
               setConfig({ ...config, breakoutUpPct: Number(e.target.value) || 5 })
             }
-            className="w-full rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
+            className="w-full rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
           />
         </label>
         <label className="space-y-1 text-[11px]">
@@ -232,7 +232,7 @@ export function SignalSettings() {
             onChange={(e) =>
               setConfig({ ...config, breakoutDownPct: Number(e.target.value) || -5 })
             }
-            className="w-full rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
+            className="w-full rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
           />
         </label>
         <label className="space-y-1 text-[11px]">
@@ -243,7 +243,7 @@ export function SignalSettings() {
             max={86400}
             value={config.cooldownSec}
             onChange={(e) => setConfig({ ...config, cooldownSec: Number(e.target.value) || 0 })}
-            className="w-full rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
+            className="w-full rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
           />
         </label>
         <label className="space-y-1 text-[11px]">
@@ -254,7 +254,7 @@ export function SignalSettings() {
             max={100}
             value={config.dailyLimit}
             onChange={(e) => setConfig({ ...config, dailyLimit: Number(e.target.value) || 1 })}
-            className="w-full rounded-md border border-border-base bg-bg-elev px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
+            className="w-full rounded-md border border-border-def bg-bg-elevated px-2 py-1.5 text-xs text-text-pri outline-none focus:border-accent"
           />
         </label>
       </div>
@@ -263,7 +263,7 @@ export function SignalSettings() {
         type="button"
         onClick={() => void patch(config)}
         disabled={busy}
-        className="rounded border border-border-base px-2 py-1 text-xs text-text-sec hover:bg-bg-elev disabled:opacity-50"
+        className="rounded border border-border-def px-2 py-1 text-xs text-text-sec hover:bg-bg-elevated disabled:opacity-50"
       >
         保存阈值
       </button>

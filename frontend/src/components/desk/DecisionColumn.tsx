@@ -157,19 +157,32 @@ export function DecisionColumn({
                 tone={toneCls(totals.today)}
               />
             </div>
+            <div className="flex items-center gap-2 mb-0.5 text-[10px] text-text-ter font-mono">
+              <span className="flex-1" />
+              <span className="shrink-0 w-14 text-right">股数</span>
+              <span className="shrink-0 w-14 text-right">成本</span>
+              <span className="shrink-0 w-16 text-right">盈亏</span>
+            </div>
             <ul className="mt-2">
               {positions.map((p) => {
                 const fl = Number(p.floatingPnl ?? 0);
                 const cost = Number(p.totalCost ?? 0);
                 const pct = cost > 0 ? (fl / cost) * 100 : null;
+                const avgCost = p.avgCost != null ? Number(p.avgCost) : null;
                 return (
                   <li
                     key={p.stockCode}
                     className="flex items-center gap-2 py-1 border-b border-border-def/40 last:border-b-0 text-[11.5px]"
                   >
                     <span className="text-text-pri truncate min-w-0 flex-1">{p.stockName ?? p.stockCode}</span>
-                    <span className="text-text-ter font-mono text-[10px] shrink-0">
+                    <span className="text-text-ter font-mono text-[10px] shrink-0 w-14 text-right">
                       {Number(p.shares)}股
+                    </span>
+                    <span
+                      className="text-text-ter font-mono text-[10px] shrink-0 w-14 text-right"
+                      title="摊薄成本价(券商口径)"
+                    >
+                      {avgCost != null ? avgCost.toFixed(3) : '--'}
                     </span>
                     <span
                       className={clsx(

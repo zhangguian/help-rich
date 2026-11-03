@@ -115,15 +115,20 @@ export function ScoreDetail({
           </div>
         )}
 
-        {status === 'success' && data && (
+        {(status === 'success' || status === 'scored') && data && (
           <div className="space-y-4">
             <div className="flex items-center gap-3">
               <ScoreBadge score={data.score} />
               <span className="text-sm text-text-sec">
-                {data.score} / 100 分
+                {data.score} / 120 分
                 {data.aiStatus === 'success' && data.aiStatus && (
                   <span className="ml-2 text-xs text-text-ter">
                     {data.aiStatus === 'success' ? 'AI 评语已生成' : ''}
+                  </span>
+                )}
+                {status === 'scored' && (
+                  <span className="ml-2 text-xs text-text-ter">
+                    只算分,未生成评语
                   </span>
                 )}
               </span>

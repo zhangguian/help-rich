@@ -88,7 +88,7 @@ export function ClearPositionModal({
           <span className="font-mono">{target.shares}</span>
         </div>
         <div className="flex justify-between">
-          <span className="text-text-sec">加权成本</span>
+          <span className="text-text-sec">摊薄成本</span>
           <span className="font-mono">¥{decimalFormat(target.avgCost)}</span>
         </div>
         <div className="flex justify-between">

@@ -7,16 +7,20 @@ import clsx from 'clsx';
 /**
  * 评分徽章(P4.5,ui-ux §5.4)
  *
- * 5 档颜色分段:>=80 good / 60-79 mid / 40-59 warn / 20-39 bad / <20 deepbad
+ * 6 维度各 20 分,满分 120 → 5 档颜色分段(原 100 分制档位 ×1.2):
+ * >=96 good / 72-95 mid / 48-71 warn / 24-47 bad / <24 deepbad
  * 滚动数字动效(ui-ux §10.2):分数从 0 → 当前值
  */
 type ScoreLevel = 'good' | 'mid' | 'warn' | 'bad' | 'deepbad';
 
+/** 评分满分(6 维 × 20) */
+export const SCORE_MAX = 120;
+
 function levelOf(score: number): ScoreLevel {
-  if (score >= 80) return 'good';
-  if (score >= 60) return 'mid';
-  if (score >= 40) return 'warn';
-  if (score >= 20) return 'bad';
+  if (score >= 96) return 'good';
+  if (score >= 72) return 'mid';
+  if (score >= 48) return 'warn';
+  if (score >= 24) return 'bad';
   return 'deepbad';
 }
 
@@ -76,7 +80,7 @@ export function ScoreBadge({
         levelClasses[level],
         className,
       )}
-      title={`评分 ${score} / 100`}
+      title={`评分 ${score} / ${SCORE_MAX}`}
     >
       {display}
     </span>

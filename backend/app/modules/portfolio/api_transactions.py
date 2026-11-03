@@ -1,13 +1,11 @@
 """交易流水 + 自选股 API(P2.1 / P2.2 实施)"""
 from datetime import date
 from decimal import Decimal
-from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 
 from app.core.db_lock import safe_write
 from app.models.schemas import (
-    ApiError,
     TransactionCreate,
     TransactionListOut,
     TransactionOut,
@@ -28,9 +26,9 @@ router = APIRouter(tags=["transactions"])
 
 @router.get("/transactions", response_model=TransactionListOut)
 async def list_transactions(
-    stock_code: Optional[str] = Query(default=None),
-    start_date: Optional[date] = Query(default=None),
-    end_date: Optional[date] = Query(default=None),
+    stock_code: str | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     limit: int = Query(default=50, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> TransactionListOut:
@@ -100,6 +98,11 @@ async def create_transaction(
 
     price_str = format(payload.price, ".3f")  # Decimal → "10.500"
 
+    # 时间节点(HH:MM / HH:MM:SS)→ time;留空 = 未知(不编造)
+    from app.core.trade_time import parse_trade_time
+
+    trade_time = parse_trade_time(payload.trade_time)
+
     # 写库前先验算:确保落库后链仍然自洽
     try:
         await check_chain(
@@ -110,6 +113,7 @@ async def create_transaction(
                 action=payload.action,
                 shares=payload.shares,
                 price=payload.price,
+                trade_time=trade_time,
             ),
         )
     except PositionChainError as e:
@@ -125,6 +129,7 @@ async def create_transaction(
             shares=payload.shares,
             price=price_str,
             trade_date=payload.trade_date,
+            trade_time=trade_time,
             stock_name=payload.stock_name,
             note=payload.note,
         )
@@ -144,10 +149,19 @@ async def create_transaction(
 
 @router.patch("/transactions/{tx_id}", response_model=TransactionOut)
 async def update_transaction(tx_id: int, payload: TransactionUpdate) -> TransactionOut:
-    """修改一笔交易(只能改 note / shares / price)"""
+    """修改一笔交易(只能改 note / shares / price / trade_time)"""
     updates = payload.model_dump(exclude_none=True)
     if "price" in updates:
         updates["price"] = format(updates["price"], ".3f")
+    if "trade_time" in updates:
+        # 字符串 → time(空串 = 不改;时间点无法清空,只能改成另一个时间)
+        from app.core.trade_time import parse_trade_time
+
+        parsed = parse_trade_time(str(updates["trade_time"]))
+        if parsed is None:
+            updates.pop("trade_time")
+        else:
+            updates["trade_time"] = parsed
 
     from app.modules.portfolio.service import (
         PositionChainError,

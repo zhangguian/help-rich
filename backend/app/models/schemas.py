@@ -4,9 +4,14 @@
 """
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Literal, Optional
+import re
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+
+# 交易时间节点格式:HH:MM 或 HH:MM:SS(24 小时制)
+_TRADE_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$")
 
 
 # ============================================================
@@ -43,8 +48,8 @@ class LlmTestRequest(BaseModel):
 class LlmTestResponse(BaseModel):
     """POST /api/llm/test 响应"""
     ok: bool
-    latency_ms: Optional[int] = None
-    error: Optional[str] = None
+    latency_ms: int | None = None
+    error: str | None = None
 
 
 class LlmProviderItem(BaseModel):
@@ -71,10 +76,13 @@ class LlmSettingsOut(BaseModel):
 class PositionCreate(BaseModel):
     """POST /api/positions body(v0.4.0 手动录入/截图导入持仓)
 
-    每股成本价口径:shares × cost_price = total_cost
+    每股成本价口径(v0.11):**摊薄成本价** = 券商持仓页显示的「成本价」
+    → shares × cost_price = 摊薄总额(净投入)
 
     v0.5.0 新增 realized_pnl(可选):用户手填的**累计**已实现盈亏,可为负。
     不传 = 沿用当前累计值。
+    已实现盈亏**独立**于摊薄总额存放 —— 摊薄总额已经含券商口径的成本,
+    再扣一次已实现就是「成本对不上券商」的根因(v0.11 修复)。
 
     v0.5.1 cost_price 精度 3 → 6 位小数:
     券商给的是「总成本」(如华天科技 1000 股总成本 17021.46 元),
@@ -86,12 +94,12 @@ class PositionCreate(BaseModel):
     stock_code: str
     shares: int = Field(gt=0)
     cost_price: Decimal = Field(gt=0, max_digits=12, decimal_places=6)
-    stock_name: Optional[str] = None
-    realized_pnl: Optional[Decimal] = None
+    stock_name: str | None = None
+    realized_pnl: Decimal | None = None
     # v0.5.0:这份持仓快照是哪一天的。只吸收该日期(含)之前的流水,
     # 该日期之后的流水留在链里继续生效(可改可删、每笔带 after 快照)。
     # 不传 = 吸收现有全部流水(快照就是此刻的真实持仓)。
-    base_date: Optional[date] = None
+    base_date: date | None = None
 
     @field_validator("stock_code")
     @classmethod
@@ -111,21 +119,23 @@ class ClearPositionRequest(BaseModel):
     note: 备注(默认"一键清仓")
     """
     price: Decimal = Field(gt=0, max_digits=10, decimal_places=3)
-    note: Optional[str] = None
+    note: str | None = None
 
 
 class TransactionCreate(BaseModel):
     """POST /api/transactions body
 
     stock_code: 接受 600519 / 600519.SH / sh600519,统一存规范格式 600519.SH
+    trade_time: 可选时间节点(HH:MM 或 HH:MM:SS)。留空 = 未知,不编造。
     """
     stock_code: str
     action: Literal["buy", "sell"]
     shares: int = Field(gt=0)
     price: Decimal = Field(gt=0, max_digits=10, decimal_places=3)
     trade_date: date
-    stock_name: Optional[str] = None
-    note: Optional[str] = Field(default=None, max_length=200)
+    trade_time: str | None = Field(default=None)
+    stock_name: str | None = None
+    note: str | None = Field(default=None, max_length=200)
 
     @field_validator("stock_code")
     @classmethod
@@ -137,33 +147,61 @@ class TransactionCreate(BaseModel):
             raise ValueError("股票代码格式应为 6 位数字或带市场后缀(如 600519.SH)")
         return normalized
 
+    @field_validator("trade_time")
+    @classmethod
+    def _validate_trade_time(cls, v: str | None) -> str | None:
+        """校验 HH:MM / HH:MM:SS;空串视为未填(= 未知)"""
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if not _TRADE_TIME_RE.match(v):
+            raise ValueError("交易时间格式应为 HH:MM 或 HH:MM:SS")
+        return v
+
 
 class TransactionUpdate(BaseModel):
-    """PATCH /api/transactions/{id} body(只能改 note / shares / price)"""
-    shares: Optional[int] = Field(default=None, gt=0)
-    price: Optional[Decimal] = Field(default=None, gt=0, max_digits=10, decimal_places=3)
-    note: Optional[str] = Field(default=None, max_length=200)
+    """PATCH /api/transactions/{id} body(只能改 note / shares / price / trade_time)"""
+    shares: int | None = Field(default=None, gt=0)
+    price: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=3)
+    note: str | None = Field(default=None, max_length=200)
+    trade_time: str | None = Field(default=None)
+
+    @field_validator("trade_time")
+    @classmethod
+    def _validate_trade_time(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if not _TRADE_TIME_RE.match(v):
+            raise ValueError("交易时间格式应为 HH:MM 或 HH:MM:SS")
+        return v
 
 
 class TransactionOut(BaseModel):
     """GET /api/transactions 返回 + POST 响应"""
     id: int
     stock_code: str
-    stock_name: Optional[str] = None
+    stock_name: str | None = None
     action: Literal["buy", "sell"]
     shares: int
     price: str  # 字符串保精度
     trade_date: date
-    note: Optional[str] = None
-    score: Optional[int] = None  # 由 score_repo 关联填充
+    # 时间节点(HH:MM:SS);NULL = 未知(存量流水 / 用户留空)
+    trade_time: str | None = None
+    note: str | None = None
+    score: int | None = None  # 由 score_repo 关联填充
     created_at: datetime
     # v0.5.0 事件溯源快照:该笔应用后的持仓状态(NULL = 已被基准吸收)
-    shares_after: Optional[int] = None
-    total_cost_after: Optional[str] = None
-    realized_after: Optional[str] = None
+    shares_after: int | None = None
+    total_cost_after: str | None = None
+    realized_after: str | None = None
 
     @classmethod
-    def from_orm_with_score(cls, tx, score: Optional[int] = None) -> "TransactionOut":
+    def from_orm_with_score(cls, tx, score: int | None = None) -> "TransactionOut":
         """从 ORM 对象构造 + 关联 score"""
         return cls(
             id=tx.id,
@@ -173,6 +211,11 @@ class TransactionOut(BaseModel):
             shares=tx.shares,
             price=tx.price,
             trade_date=tx.trade_date,
+            trade_time=(
+                tx.trade_time.strftime("%H:%M:%S")
+                if getattr(tx, "trade_time", None)
+                else None
+            ),
             note=tx.note,
             score=score,
             created_at=tx.created_at,
@@ -197,8 +240,8 @@ class TransactionListOut(BaseModel):
 class WatchlistAdd(BaseModel):
     """POST /api/watchlist body"""
     stock_code: str
-    stock_name: Optional[str] = None
-    note: Optional[str] = Field(default=None, max_length=200)
+    stock_name: str | None = None
+    note: str | None = Field(default=None, max_length=200)
 
     @field_validator("stock_code")
     @classmethod
@@ -214,9 +257,9 @@ class WatchlistAdd(BaseModel):
 class WatchlistOut(BaseModel):
     """GET /api/watchlist 返回"""
     stock_code: str
-    stock_name: Optional[str] = None
+    stock_name: str | None = None
     source: str
-    note: Optional[str] = None
+    note: str | None = None
     added_at: datetime
     is_favorite: bool = False  # v0.5 特别关注
 
@@ -240,14 +283,29 @@ class WatchlistListOut(BaseModel):
 class DiagnoseOut(BaseModel):
     """GET /api/diagnose/{trade_id} 响应
 
-    status: pending(未出) / success / no_key / failed
+    status: pending(未出) / success / no_key / failed / scored(只算分未生成评语)
     """
     trade_id: int
     status: str
-    score: Optional[int] = None
-    breakdown: Optional[dict] = None  # {"集中度": 15, ...}
-    ai_comment: Optional[str] = None
-    ai_status: Optional[str] = None
+    score: int | None = None
+    breakdown: dict | None = None  # {"集中度": 15, ...}
+    ai_comment: str | None = None
+    ai_status: str | None = None
+
+
+class BackfillRequest(BaseModel):
+    """POST /api/diagnose/backfill body(补评 / 全量重算)
+
+    - stock_code: 限定某只股票(留空 = 全部)
+    - force: False → 只补**没有评分**的流水;True → 全部重算
+      (评分口径升级后必须 force 重算,否则新旧分数不可比)
+    - include_comment: False → 只算分不调 LLM(省 token)
+    - limit: 单批上限(默认 200)
+    """
+    stock_code: str | None = None
+    force: bool = False
+    include_comment: bool = True
+    limit: int = Field(default=200, ge=1, le=1000)
 
 
 class ReplaySummaryOut(BaseModel):
@@ -263,14 +321,14 @@ class ReplaySummaryOut(BaseModel):
     """
     stock_code: str
     window: str
-    score_avg: Optional[str] = None  # Decimal-as-string
+    score_avg: str | None = None  # Decimal-as-string
     dimension_avg: dict
     top_issues: list  # [{dim, score, hint}]
-    ai_comment: Optional[str] = None
+    ai_comment: str | None = None
     ai_status: str
-    ai_provider: Optional[str] = None
-    ai_model: Optional[str] = None
-    ai_latency_ms: Optional[int] = None
+    ai_provider: str | None = None
+    ai_model: str | None = None
+    ai_latency_ms: int | None = None
     summary_snapshot: dict
     latest_tx_id: int
     created_at: datetime
@@ -279,7 +337,7 @@ class ReplaySummaryOut(BaseModel):
 
 class FeedbackUpdate(BaseModel):
     """PUT /api/diagnose/{trade_id}/feedback body(P4.9)"""
-    feedback: Optional[Literal["useful", "useless"]] = None
+    feedback: Literal["useful", "useless"] | None = None
 
 
 # ============================================================
@@ -298,16 +356,16 @@ class AnnualReportOut(BaseModel):
     top5_loss: list[dict]
     no_transactions: bool = False  # v0.4.0:无流水时前端提示"导入持仓或录入流水"
     # GB-001 IR-4:费用双口径(不含费 gross / 含费 net / 费用合计)
-    realized_profit_gross: Optional[str] = None
-    realized_loss_gross: Optional[str] = None
-    net_pnl_gross: Optional[str] = None
-    total_fee: Optional[str] = None
+    realized_profit_gross: str | None = None
+    realized_loss_gross: str | None = None
+    net_pnl_gross: str | None = None
+    total_fee: str | None = None
     fees_enabled: bool = False
     # GB-001 IR-5:平仓周期胜率 / T 归因 / 时间加权
     closed_cycles: int = 0
-    t_net_contribution: Optional[str] = None
-    trend_net_pnl: Optional[str] = None
-    dietz_return: Optional[str] = None
+    t_net_contribution: str | None = None
+    trend_net_pnl: str | None = None
+    dietz_return: str | None = None
 
 
 # ============================================================
@@ -318,15 +376,15 @@ class ScreenshotParseOut(BaseModel):
     """POST /api/screenshot/upload 与 parse-paste 响应"""
     record_id: int
     items: list[dict]
-    screenshot_type: Optional[str] = None
-    ocr_text: Optional[str] = None
+    screenshot_type: str | None = None
+    ocr_text: str | None = None
 
 
 class ScreenshotPendingItem(BaseModel):
     """GET /api/screenshot/pending 单项"""
     record_id: int
     items: list[dict]
-    screenshot_type: Optional[str] = None
+    screenshot_type: str | None = None
     source: str
     uploaded_at: datetime
 
@@ -349,4 +407,4 @@ class ScreenshotPasteRequest(BaseModel):
 class ApiError(BaseModel):
     code: str
     message: str
-    detail: Optional[dict] = None
+    detail: dict | None = None

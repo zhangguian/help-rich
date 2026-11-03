@@ -35,6 +35,8 @@ backend/tmp*
 # 临时日志
 *.log
 C:/Users/20274/AppData/Local/Temp/opencode/
+# dev server 运行时状态(后端/前端 pid 与启动时间)—— 每次重启都变,入库纯噪音
+logs/dev-state.json
 
 # Python
 __pycache__/

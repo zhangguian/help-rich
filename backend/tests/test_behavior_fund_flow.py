@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -74,11 +74,16 @@ class TestFetchFlowDaily:
         """首次 miss → 拉接口 → 落库;二次 → 命中 DB,零外网请求。"""
         calls = {"n": 0}
 
+        # ⚠️ 日期锚点必须相对「今天」:收盘后缓存若不覆盖最近交易日会被判过期
+        # → 触发重拉 → 第二次拿不到缓存(写死日期的「过期定时炸弹」)。
+        latest = svc._last_trading_day()
+        prev = latest - timedelta(days=1)
+
         async def fake_fetch(stock_code: str, count: int):
             calls["n"] += 1
             return [
                 {
-                    "date": "2026-10-30",
+                    "date": latest.isoformat(),
                     "net_amount": 1.5e8,
                     "r0_net": 1.0e8,
                     "r0x_ratio": 80.0,
@@ -87,7 +92,7 @@ class TestFetchFlowDaily:
                     "change_ratio": 0.02,
                 },
                 {
-                    "date": "2026-10-29",
+                    "date": prev.isoformat(),
                     "net_amount": -0.5e8,
                     "r0_net": -0.3e8,
                     "r0x_ratio": -20.0,

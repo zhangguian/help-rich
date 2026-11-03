@@ -34,7 +34,7 @@ export function SegmentedControl<T extends string | number>({
   return (
     <div
       role="tablist"
-      className={clsx('inline-flex items-center gap-0.5 p-0.5 rounded bg-surface border border-border-def', className)}
+      className={clsx('inline-flex items-center gap-0.5 p-0.5 rounded bg-bg-surface border border-border-def', className)}
       {...rest}
     >
       {options.map((o) => {

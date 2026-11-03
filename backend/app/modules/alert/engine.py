@@ -20,8 +20,9 @@
 from __future__ import annotations
 
 import operator
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 # === 比较算子 ===
 _COMPARATORS: dict[str, Callable[[Any, Any], bool]] = {
@@ -119,7 +120,8 @@ def fingerprint(node: dict | None, ctx: AlertContext) -> str:
         sort_keys=True,
         ensure_ascii=False,
     )
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+    # 仅用于「同一条件树 + 同一行情」的指纹去重,不是安全用途
+    return hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 def describe(node: dict | None) -> str:
@@ -137,6 +139,28 @@ def describe(node: dict | None) -> str:
     joiner = " 或 " if node.get("op") == "or" else " 且 "
     children = node.get("conditions") or []
     return joiner.join(describe(child) for child in children)
+
+
+def notification_meta(node: dict | None) -> dict:
+    """读取条件树**顶层**的提醒元信息。
+
+    引擎不认识这两个字段,只负责透传 —— 这样「这条提醒是什么性质」由建规则的人说,
+    而求值逻辑不必知道具体业务含义:
+
+    - `kind`: 提醒种类(如 `"pre_alert"` 预警)。进 SSE 负载,前端据此区分徽章。
+    - `once`: `True` = **一次性**提醒 —— 命中后自动停用。
+      用于「预警」:进了一次准备区就不该反复提醒,价格离开预警区再回来时重新武装。
+
+    顶层字段(不写进叶子)→ `evaluate` / `validate` / `describe` 全都不受影响。
+    """
+    if not isinstance(node, dict):
+        return {}
+    kind = node.get("kind")
+    once = node.get("once")
+    return {
+        "kind": kind if isinstance(kind, str) and kind else None,
+        "once": once is True,
+    }
 
 
 # ============================================================
@@ -187,5 +211,6 @@ __all__ = [
     "describe",
     "evaluate",
     "fingerprint",
+    "notification_meta",
     "validate",
 ]

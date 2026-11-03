@@ -11,7 +11,7 @@ P3.5.1(今日盈亏):引入 QuoteService(新浪主 + 腾讯备 + 5min 缓存),
 """
 from decimal import Decimal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from app.core.db_lock import safe_write
 from app.models.schemas import ClearPositionRequest, PositionCreate
@@ -46,6 +46,11 @@ async def list_positions() -> dict:
       today_pnl:     今日盈亏 = (现价 - 昨收) × 持仓股数
       floating_pnl:  浮动盈亏 = (现价 - 成本) × 持仓股数
     行情不可用时为 null。
+
+    v0.11 成本口径:
+      avg_cost      = **摊薄成本价**(券商持仓页口径 = 净投入 ÷ 持股数)
+      total_cost    = 摊薄总额(净投入 = 累计买入金额 − 累计卖出金额)
+      floating_pnl  按摊薄成本算 → 与券商持仓页的浮动盈亏同口径
     """
     positions = await get_all_positions()
     from app.core.stock_code import normalize_code
@@ -89,6 +94,9 @@ async def create_position(payload: PositionCreate) -> dict:
 
     覆盖语义(v0.5.0):以用户提交的股数/每股成本价为准,并**重置基准**
     —— 该股票现有流水全部视为「已被基准吸收」,不再参与重放。
+
+    cost_price 口径(v0.11):**摊薄成本价**(= 券商持仓页的「成本价」),
+    录入后展示值与录入值完全一致,不受已实现盈亏影响。
 
     realized_pnl(可选):用户手填的累计已实现盈亏(可为负)。
     不传 = 沿用当前累计值。
@@ -135,17 +143,25 @@ async def remove_position(code: str) -> None:
 
 
 @router.post("/positions/{code}/clear", status_code=201)
-async def clear_position(code: str, payload: ClearPositionRequest) -> dict:
+async def clear_position(
+    code: str,
+    payload: ClearPositionRequest,
+    background_tasks: BackgroundTasks,
+) -> dict:
     """一键清仓(v0.4.1 / P-stop-loss-v2)
 
     以指定价格(默认当前行情价)卖出当前持仓的全部股数。
     业务逻辑:
     1. 取当前持仓(不存在 → 404)
-    2. 创建 sell 流水(覆盖全部 shares + payload.price)
+    2. 创建 sell 流水(覆盖全部 shares + payload.price,时间点 = 当前时刻)
     3. recalc_position 触发 → 持仓归零(保留持仓行,已实现盈亏留存)
     4. 返回生成的 sell 流水记录 + 预估已实现盈亏
+
+    评分:清仓也是一笔交易 → 后台触发评分(与 /transactions 录入同口径),
+    否则这笔流水会**永远没有分数**(历史 bug:清仓路径不触发评分)。
     """
     from datetime import date as date_cls
+    from datetime import datetime as dt_cls
     from decimal import Decimal
 
     from app.core.stock_code import normalize_code
@@ -174,11 +190,18 @@ async def clear_position(code: str, payload: ClearPositionRequest) -> dict:
             shares=shares,
             price=f"{price:.3f}",
             trade_date=date_cls.today(),
+            # 清仓发生在当下 → 时间点 = 当前时刻(不是未知)
+            trade_time=dt_cls.now().time(),
             note=payload.note or "一键清仓",
         )
 
     tx = await safe_write(_do_create)
     await recalc_position(normalized)
+
+    # 后台评分(不阻塞响应)
+    from app.services.diagnose_service import diagnose_service
+
+    background_tasks.add_task(diagnose_service.score_and_notify, tx.id)
 
     return {
         "stock_code": normalized,
