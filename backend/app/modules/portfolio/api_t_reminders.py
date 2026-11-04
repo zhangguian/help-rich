@@ -42,6 +42,23 @@ from app.modules.portfolio.t_pricing import TTier, build_tiers
 router = APIRouter(prefix="/t-reminders", tags=["t-reminders"])
 
 
+def _to_float(value: object) -> float | None:
+    """转 float;非有限值(NaN / ±inf)与转换失败一律当**无效**(None)。
+
+    与 `alert/scheduler.py` / `services/intraday_advice._f` 同一口径。
+    ⚠️ NaN / ±inf **不是合法 JSON** —— 直接返回会让整个接口 500。
+    """
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if f != f or f in (float("inf"), float("-inf")):
+        return None
+    return f
+
+
 class TReminderItem(BaseModel):
     """一条做T挂单(一只票 = 一条)"""
 
@@ -271,8 +288,16 @@ async def list_pending() -> TReminderListOut:
             }
             for it in all_items:
                 q = quotes.get(it.stock_code)
-                if q is not None:
-                    it.current_price = float(q.current_price)
+                if q is None:
+                    continue
+                # ⚠️ 无效行情必须当"没有" —— 不能把 0 / NaN 塞进 current_price:
+                # ① `price <= 0` 是停牌/开盘瞬间的占位值,当现价会让清单显示 0.000;
+                # ② NaN / ±inf 不是合法 JSON,序列化会直接把整个接口打成 500。
+                # 口径与 `alert/scheduler.py` 的行情过滤一致(行情取不到 = null,不编数据)。
+                price = _to_float(q.current_price)
+                if price is None or price <= 0:
+                    continue
+                it.current_price = price
         except Exception as e:  # noqa: BLE001 — 行情失败不阻断清单
             logger.warning(f"[t-reminders] 行情拉取失败,现价留空: {e}")
 

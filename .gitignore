@@ -35,6 +35,8 @@ backend/tmp*
 # 临时日志
 *.log
 C:/Users/20274/AppData/Local/Temp/opencode/
+# dev 运行时产物目录(日志 / 抓屏截图 / 一次性验证脚本)—— 全部不入库
+logs/
 # dev server 运行时状态(后端/前端 pid 与启动时间)—— 每次重启都变,入库纯噪音
 logs/dev-state.json
 

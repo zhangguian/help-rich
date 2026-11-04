@@ -28,6 +28,23 @@ def _is_trading_time() -> bool:
     return is_trading_time()
 
 
+def _to_float(value: object) -> float | None:
+    """转 float;非有限值(NaN / ±inf)与转换失败一律当**无效**(None)。
+
+    与 `services/intraday_advice._f` / `stock_pool.pool_logic._f` 同一口径:
+    只滤 NaN 不滤 ±inf 会出**假触及** —— ±inf <= 阈值 恒成立。
+    """
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if f != f or f in (float("inf"), float("-inf")):
+        return None
+    return f
+
+
 async def _scan_once() -> int:
     """扫描一轮,返回触发条数。"""
     from app.modules.alert.repository import price_alert_repo
@@ -53,11 +70,28 @@ async def _scan_once() -> int:
         logger.warning(f"[price-alert] 行情拉取失败,本轮跳过: {e}")
         return 0
 
+    # ⚠️ **必须过滤无效行情** —— 开盘瞬间(09:15 集合竞价)数据源会返回
+    # `price=0.0, change_pct=-100.0` 这种占位值。若原样喂给求值器:
+    # 「价格 <= X」类提醒会因 `0.0 <= X` 恒成立而**假触发**(09:15 已误响过 3 条)。
+    # 项目口径「行情取不到 = null,不编数据」:无效价 = 该标的本轮**不评估**,
+    # 与 `data/market_snapshot.py` 的 `price <= 0 → 跳过` 同源。
+    invalid: list[str] = []
     for q in quotes:
+        price = _to_float(q.current_price)
+        if price is None or price <= 0:
+            invalid.append(q.code)
+            continue
+        change_pct = _to_float(q.change_pct)
+        # 涨跌幅缺失时按 None 处理(对应条件判 False),不拿 0 顶替
         contexts[q.code] = AlertContext(
-            price=float(q.current_price),
-            change_pct=float(q.change_pct),
-            turnover=float(q.turnover_pct) if q.turnover_pct is not None else None,
+            price=price,
+            change_pct=change_pct,
+            turnover=_to_float(q.turnover_pct),
+        )
+    if invalid:
+        logger.warning(
+            f"[price-alert] 行情无效(price<=0/非数字),本轮跳过 {len(invalid)} 只: "
+            f"{','.join(invalid)}"
         )
     fired = await price_alert_service.scan(contexts)
     # 预警重新武装放在调度器里 —— 页面关着也能继续提醒

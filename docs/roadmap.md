@@ -927,6 +927,43 @@ pre_created=4
 
 ---
 
+## 阶段 20 · 无效行情过滤:开盘假触发 + 清单页 500 ✅
+
+**问题**:2026-11-04 开盘 09:15 集合竞价瞬间,行情源对部分标的返回**占位值**
+`price=0.0, change_pct=-100.0`。两个后果:
+
+1. **提醒假触发** —— 「价格 <= 8.771」的到价提醒因 `0.0 <= 8.771` **恒成立**而误响,
+   09:15 一次响 3 条,弹窗显示「当前价 0.000」。
+2. **清单页整体 500** —— `NaN` / `±inf` 不是合法 JSON,`json.dumps` 直接抛
+   `ValueError: Out of range float values are not JSON compliant` → **整页打不开**。
+
+**这类 bug 极难发现**:`0.0` 是**合法数字**,求值器不报错、不抛异常,只安静地给出错误答案。
+防御必须做在**消费侧**,不能指望数据源「不返回坏数据」。
+
+**修法(口径:行情取不到 = null,不编数据)**
+
+| 项 | 位置 | 说明 |
+| --- | --- | --- |
+| 判定层入口过滤 | `alert/scheduler.py` | 构造 `AlertContext` 前过滤 `price <= 0` / 非数字 / NaN / ±inf → 该标的**本轮不评估** |
+| API 序列化层过滤 | `portfolio/api_t_reminders.py` | `current_price` 同样过滤,无效 → 留 `null`(不显示 0.000,也不让 NaN 打挂序列化) |
+| 统一取值 helper | 两处各一个 `_to_float` | None / 转换失败 / NaN / ±inf → None(与 `intraday_advice._f`、`pool_logic._f` 同口径) |
+
+**验收(2026-11-04)**
+
+- 新增 `tests/test_price_alert_invalid_quote.py` **12 条**:零价 / None / NaN 不触发到价提醒、
+  不触发预警、不触发**重新武装**;清单页不被 NaN 打挂;**对照组**(有效价仍正常触发)防修过头。
+- 真实 dev DB 实测:全部报价置无效 → `scan fired = 0`,触发流水数 **798 → 798 不变**。
+- 回归:`pytest` **159 passed**;改动文件 ruff 全绿。
+
+**踩过的坑(别重试)**
+
+- `PowerShell -File xxx.ps1` 会被执行策略拦(「未对文件进行数字签名」)→ 用
+  `powershell.exe -NoProfile -ExecutionPolicy Bypass -File`。
+- 抓屏取证:`Graphics.CopyFromScreen` 用**物理像素**,Windows 150% 缩放下传逻辑坐标会取错区域;
+  缩放系数从 `HKCU:\Control Panel\Desktop\WindowMetrics` 的 `AppliedDPI / 96` 取。
+
+---
+
 ## 三、不做的事
 
 | 项 | 原因 |
