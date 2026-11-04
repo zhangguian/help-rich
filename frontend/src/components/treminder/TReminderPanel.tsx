@@ -43,6 +43,8 @@ export function TReminderPanel() {
 
   const [editing, setEditing] = useState<TReminderItem | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
+  // 通用录入入口:录一笔**不是挂单**的流水(行内按钮只管挂单那几只)
+  const [manualEntry, setManualEntry] = useState(false);
 
   useEffect(() => {
     void load();
@@ -98,9 +100,14 @@ export function TReminderPanel() {
               预警<b className="text-text-sec">只响一次</b>;价格离开预警区之后会自动重新武装。
             </p>
           </div>
-          <Button variant="ghost" onClick={() => void refresh()} loading={loading}>
-            刷新
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => setManualEntry(true)}>
+              + 录入流水
+            </Button>
+            <Button variant="ghost" onClick={() => void refresh()} loading={loading}>
+              刷新
+            </Button>
+          </div>
         </header>
 
         {error && (
@@ -211,6 +218,21 @@ export function TReminderPanel() {
             />
           </>
         )}
+      </Modal>
+
+      <Modal
+        open={manualEntry}
+        onClose={() => setManualEntry(false)}
+        title="录入流水"
+        size="lg"
+      >
+        <TransactionForm
+          onSuccess={() => {
+            setManualEntry(false);
+            void refresh();
+          }}
+          onCancel={() => setManualEntry(false)}
+        />
       </Modal>
     </div>
   );
