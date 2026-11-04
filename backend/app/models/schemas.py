@@ -162,7 +162,17 @@ class TransactionCreate(BaseModel):
 
 
 class TransactionUpdate(BaseModel):
-    """PATCH /api/transactions/{id} body(只能改 note / shares / price / trade_time)"""
+    """PATCH /api/transactions/{id} body
+
+    可改:note / shares / price / trade_time / **action(买↔卖)**
+
+    ⚠️ action 之前**不能改** —— 「买录成了卖」是最常见的录错,
+    只能删掉重录(丢评分快照 + 要重新录一遍)。现在允许改方向:
+    后端会**先验算整条链是否仍然自洽**(改成卖出时股数够不够),
+    不自洽 → 422 拒绝写入,不会把持仓算坏。
+    """
+
+    action: Literal["buy", "sell"] | None = None
     shares: int | None = Field(default=None, gt=0)
     price: Decimal | None = Field(default=None, gt=0, max_digits=10, decimal_places=3)
     note: str | None = Field(default=None, max_length=200)

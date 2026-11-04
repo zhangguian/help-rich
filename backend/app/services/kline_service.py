@@ -9,7 +9,6 @@ import json
 import logging
 import re
 from datetime import date, datetime, timedelta
-from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -95,7 +94,8 @@ async def _fetch_sina_kline(
 
     symbol = _to_sina_symbol(stock_code)
     scale = _to_sina_scale(period)
-    callback = f"callback_{int(time.time() * 1000)}{random.randint(0, 999)}"
+    # JSONP 回调名,只为破缓存 —— 非加密用途
+    callback = f"callback_{int(time.time() * 1000)}{random.randint(0, 999)}"  # noqa: S311
     url = f"https://quotes.sina.cn/cn/api/jsonp_v2.php/{callback}/CN_MarketDataService.getKLineData"
     params = {
         "symbol": symbol,
@@ -281,38 +281,44 @@ async def fetch_klines(
     #    避免不同 count 调用(如 60→180→300)导致重复行累积
     from sqlalchemy import delete as sa_delete
 
+    from app.core.db_lock import safe_write
     from app.models.orm import KlineCache
 
-    async with async_session() as session:
-        await session.execute(
-            sa_delete(KlineCache).where(
-                KlineCache.stock_code == stock_code,
-                KlineCache.period == period,
-            )
-        )
-        for r in rows:
-            try:
-                d = (
-                    datetime.strptime(r["date"], "%Y-%m-%d").date()
-                    if " " not in r["date"]
-                    else datetime.strptime(r["date"], "%Y-%m-%d %H:%M").date()
-                )
-            except ValueError:
-                continue
-            session.add(
-                KlineCache(
-                    stock_code=stock_code,
-                    trade_date=d,
-                    period=period,
-                    open_price=r["open"],
-                    high_price=r["high"],
-                    low_price=r["low"],
-                    close_price=r["close"],
-                    volume=r["volume"],
-                    source="sina",
+    async def _do_save():
+        async with async_session() as session:
+            await session.execute(
+                sa_delete(KlineCache).where(
+                    KlineCache.stock_code == stock_code,
+                    KlineCache.period == period,
                 )
             )
-        await session.commit()
+            for r in rows:
+                try:
+                    d = (
+                        datetime.strptime(r["date"], "%Y-%m-%d").date()
+                        if " " not in r["date"]
+                        else datetime.strptime(r["date"], "%Y-%m-%d %H:%M").date()
+                    )
+                except ValueError:
+                    continue
+                session.add(
+                    KlineCache(
+                        stock_code=stock_code,
+                        trade_date=d,
+                        period=period,
+                        open_price=r["open"],
+                        high_price=r["high"],
+                        low_price=r["low"],
+                        close_price=r["close"],
+                        volume=r["volume"],
+                        source="sina",
+                    )
+                )
+            await session.commit()
+
+    # ⚠️ 必须走全局写锁:收盘后批量刷新 K 线会与「录入/编辑流水」抢 SQLite 写锁,
+    #    撞上就是 `database is locked` → 接口 500(实测 PATCH 流水时被 K 线落库撞到)。
+    await safe_write(_do_save)
     logger.info("K 线新浪落库: %s %s (%s 根)", stock_code, period, len(rows))
     return rows
 

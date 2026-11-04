@@ -18,6 +18,11 @@
   每档都给「这一档的价格」+「按这一档成交之后的摊薄成本线」——
   一眼看出做到哪一档最划算;两档之间差的是「多赚一点」与「多等一会儿」的取舍。
 
+  每条挂单还带**当初开腿的成交价**(`open_prices`):
+  反T = 当初卖出的价,正T = 当初买入的价。
+  ⚠️ 与基准线(`price`)不是一回事 —— 基准线是**算出来的**(多笔开腿时 = 加权均价),
+  `open_prices` 是**真成交价**:同一只票做了两次T(两笔开腿)就会有两个价,逐笔列出来。
+
   到价提醒自动管理(见 `t_alerts.py`):
   每条挂单自动保证有一个到价提醒 —— 反T `price <= 一档价`、正T `price >= 一档价`。
   挂单接回/卖出后自动从清单消失,对应的自动提醒同时停用。
@@ -28,6 +33,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -38,6 +44,9 @@ from app.db import async_session
 from app.models.orm import Transaction
 from app.modules.portfolio.t_pairing import DIRECTION_FORWARD, DIRECTION_REVERSE
 from app.modules.portfolio.t_pricing import TTier, build_tiers
+
+if TYPE_CHECKING:
+    from app.modules.portfolio.t_alerts import AutoAlertSyncStats
 
 router = APIRouter(prefix="/t-reminders", tags=["t-reminders"])
 
@@ -77,6 +86,16 @@ class TReminderItem(BaseModel):
     tiers: list[TTier] = []
     # 开腿日期(挂单从哪天起的 —— 同一标的同一方向多笔卖出取最早那个)
     open_date: str
+    # **当初那笔开腿流水的成交价**(反T = 当初卖出价,正T = 当初买入价)
+    #
+    # ⚠️ 与 `price`(不亏本线 / 买入均价)不是一回事:
+    #    `price` 是**算出来的阈值**(多笔开腿时 = 加权均价),
+    #    这里是**真成交价** —— 同一只票做了两次T(两笔开腿)就会有两个价。
+    # 按开腿顺序(日期 → 流水 id)排;空 = 理论上不该发生(有挂单必有开腿)。
+    open_prices: list[float] = []
+    # 组成这条挂单的**开腿流水 id**(同一标的同一方向可能有多笔 → 多 id)
+    # 前端「编辑」用它定位到具体那一笔;空 = 理论上不该发生(有挂单必有开腿)
+    open_tx_ids: list[int] = []
     # 当前持仓股数(0 = 已清空)
     position_shares: int | None = None
     # 现价(行情不可用时为 null)
@@ -136,6 +155,8 @@ class TReminderListOut(BaseModel):
     pre_alerts_disabled: int = 0
     # 本次同步把预警线就地改掉的条数(到价线变了,预警线跟着走)
     pre_alerts_realigned: int = 0
+    # 本次同步停用的「被认领过的手工提醒」条数(挂单已消失)
+    claimed_alerts_disabled: int = 0
 
 
 def _chain_order(t: Transaction) -> tuple:
@@ -146,7 +167,13 @@ def _chain_order(t: Transaction) -> tuple:
 
 
 def _name_of(txs: list[Transaction] | None) -> str | None:
-    """取该标的最近一次带名称的流水上的股票名。"""
+    """取该标的最近一次带名称的流水上的股票名。
+
+    ⚠️ 名称可能**三处都缺**:流水的 `stock_name` 是录入时填的,
+    补T清单里那几笔(如 501099.SH / 562820.SH / 159599.SZ)是**从持仓侧录的**,
+    流水没带名称 → 这里必须回退到**持仓行**的名称(持仓行是导入基准时写好的)。
+    持仓行也没有 → 返回 None(不编名字,前端显示「—」)。
+    """
     if not txs:
         return None
     for t in reversed(txs):
@@ -155,9 +182,37 @@ def _name_of(txs: list[Transaction] | None) -> str | None:
     return None
 
 
-@router.get("/pending", response_model=TReminderListOut)
-async def list_pending() -> TReminderListOut:
-    """待接回(反T)+ 待卖出(正T)清单。
+def _name_for(
+    txs: list[Transaction] | None,
+    positions: dict[str, object],
+    code: str,
+) -> str | None:
+    """挂单的显示名:流水名 → 持仓行名 → None。"""
+    return _name_of(txs) or getattr(positions.get(code), "stock_name", None)
+
+
+def _open_prices(slot: dict) -> list[float]:
+    """当初开腿的成交价(反T = 卖出价,正T = 买入价)。
+
+    按开腿顺序(日期 → 流水 id)排;量化到 3 位小数 —— 与挂单其它价格同一口径,
+    避免浮点噪音(2.3219999)。
+    """
+    ordered = sorted(slot.get("open_prices", []), key=lambda x: (x[0], x[1]))
+    return [float(p.quantize(Decimal("0.001"))) for _, _, p in ordered]
+
+
+async def build_reminder_items(
+    codes: set[str] | None = None,
+) -> list[TReminderItem]:
+    """构建做T挂单清单(到价提醒同步**不在这里**做,由调用方决定)。
+
+    `codes`:
+      - None  = 全量(补T清单页的行为);
+      - 给定集合 = 只构建这些标的的挂单(录入流水后只关心这一只)。
+
+    为什么抽出来:
+      「打开补T清单」和「刚录完一笔流水」需要的是**同一份**挂单口径
+      (全链 FIFO + 三档建议价 + 现价)。两处各写一遍迟早口径打架。
 
     行情取不到时 current_price 为 null —— 不编数字。
     """
@@ -165,18 +220,12 @@ async def list_pending() -> TReminderListOut:
     from app.modules.portfolio.service import get_all_positions
     from app.modules.portfolio.t_pairing import STATUS_PENDING, pair_t_legs
 
+    stmt = select(Transaction).where(Transaction.account_id == DEFAULT_ACCOUNT_ID)
+    if codes is not None:
+        stmt = stmt.where(Transaction.stock_code.in_(sorted(codes)))
+
     async with async_session() as session:
-        rows = list(
-            (
-                await session.execute(
-                    select(Transaction).where(
-                        Transaction.account_id == DEFAULT_ACCOUNT_ID
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
+        rows = list((await session.execute(stmt)).scalars().all())
 
     # 按标的分组 → 全链 FIFO 配对 → 未闭合的开腿 = 还挂着的做T单
     by_code: dict[str, list[Transaction]] = {}
@@ -205,23 +254,39 @@ async def list_pending() -> TReminderListOut:
             is_reverse = pair.direction == DIRECTION_REVERSE
             agg = reverse_agg if is_reverse else forward_agg
             slot = agg.setdefault(
-                code, {"shares": 0, "amount": Decimal(0), "open_date": None}
+                code,
+                {
+                    "shares": 0,
+                    "amount": Decimal(0),
+                    "open_date": None,
+                    "tx_ids": [],
+                    "open_prices": [],
+                },
             )
             slot["shares"] += pair.shares
             slot["amount"] += pair.open_amount
             if slot["open_date"] is None or pair.open_date < slot["open_date"]:
                 slot["open_date"] = pair.open_date
+            # 组成这条挂单的流水 id(前端「编辑」时定位到具体那一笔)
+            slot["tx_ids"].append(pair.open_tx_id)
+            # 当初开腿的成交价(反T=卖出价,正T=买入价)—— 逐笔记,不是加权均价
+            slot["open_prices"].append((pair.open_date, pair.open_tx_id, pair.open_price))
+
+    # 持仓行:名称回退的来源(流水没带名字 → 用持仓行的名字)
+    positions = {p.stock_code: p for p in await get_all_positions()}
 
     for code, slot in reverse_agg.items():
         avg = (slot["amount"] / slot["shares"]).quantize(Decimal("0.001"))
         reverse_items.append(
             TReminderItem(
                 stock_code=code,
-                stock_name=_name_of(by_code.get(code)),
+                stock_name=_name_for(by_code.get(code), positions, code),
                 direction=DIRECTION_REVERSE,
                 shares=slot["shares"],
                 price=float(avg),
                 open_date=slot["open_date"].isoformat(),
+                open_tx_ids=sorted(slot["tx_ids"]),
+                open_prices=_open_prices(slot),
             )
         )
     for code, slot in forward_agg.items():
@@ -229,26 +294,21 @@ async def list_pending() -> TReminderListOut:
         forward_items.append(
             TReminderItem(
                 stock_code=code,
-                stock_name=_name_of(by_code.get(code)),
+                stock_name=_name_for(by_code.get(code), positions, code),
                 direction=DIRECTION_FORWARD,
                 shares=slot["shares"],
                 price=float(avg),
                 open_date=slot["open_date"].isoformat(),
+                open_tx_ids=sorted(slot["tx_ids"]),
+                open_prices=_open_prices(slot),
             )
         )
-
-    # 清单基准日 = 各挂单开腿日的最大值
-    as_of: date | None = None
-    for it in reverse_items + forward_items:
-        d = date.fromisoformat(it.open_date)
-        if as_of is None or d > as_of:
-            as_of = d
 
     # 持仓股数 + 三档建议价(每档带成本前→后)
     #
     # 摊薄口径(v0.11):摊薄总额 = 净投入,买入即增加、卖出按成交价回收。
     # 没有持仓行(理论上不会发生:有挂单必有持仓)→ 成本字段留 null,不编数字。
-    positions = {p.stock_code: p for p in await get_all_positions()}
+    # (positions 已在上面加载 —— 名称回退要用它)
     all_items = reverse_items + forward_items
     for it in all_items:
         pos = positions.get(it.stock_code)
@@ -301,6 +361,50 @@ async def list_pending() -> TReminderListOut:
         except Exception as e:  # noqa: BLE001 — 行情失败不阻断清单
             logger.warning(f"[t-reminders] 行情拉取失败,现价留空: {e}")
 
+    return all_items
+
+
+async def sync_t_alerts_for_stock(stock_code: str) -> AutoAlertSyncStats | None:
+    """录完流水后**立刻**对齐该标的的做T提醒(建第二腿提醒 / 停用已闭合的提醒)。
+
+    为什么不能只靠打开补T清单页:
+      做T的第二步(接回 / 卖出)提醒,是在**第一腿录入之后**才该出现的。
+      同步只挂在 `GET /api/t-reminders/pending` 上的话,用户录完第一腿就关页面,
+      第二腿的到价提醒永远不会被建出来 —— 价格到了也不会响。
+      与「页面关着也要能收到」同源:状态流转不能只挂在前端副作用上。
+
+    `scope_codes={stock_code}`:只同步这一只,不碰别的标的的提醒。
+
+    返回值:同步统计(供调用方记日志);失败返回 None,绝不让录入失败。
+    """
+    from app.modules.portfolio.t_alerts import sync_auto_alerts
+
+    try:
+        items = await build_reminder_items({stock_code})
+        return await sync_auto_alerts(items, scope_codes={stock_code})
+    except Exception as e:  # noqa: BLE001 — 提醒同步失败不该让录入失败
+        logger.warning(f"[t-reminders] 录入后同步做T提醒失败 {stock_code}: {e}")
+        return None
+
+
+@router.get("/pending", response_model=TReminderListOut)
+async def list_pending() -> TReminderListOut:
+    """待接回(反T)+ 待卖出(正T)清单。
+
+    行情取不到时 current_price 为 null —— 不编数字。
+    """
+    all_items = await build_reminder_items()
+
+    reverse_items = [it for it in all_items if it.direction == DIRECTION_REVERSE]
+    forward_items = [it for it in all_items if it.direction == DIRECTION_FORWARD]
+
+    # 清单基准日 = 各挂单开腿日的最大值
+    as_of: date | None = None
+    for it in all_items:
+        d = date.fromisoformat(it.open_date)
+        if as_of is None or d > as_of:
+            as_of = d
+
     # 到价提醒:自动对齐(缺就建,挂单消失就停用)
     from app.modules.portfolio.t_alerts import sync_auto_alerts
 
@@ -326,4 +430,5 @@ async def list_pending() -> TReminderListOut:
         pre_alerts_rearmed=sync_stats.pre_rearmed if sync_stats else 0,
         pre_alerts_disabled=sync_stats.pre_disabled if sync_stats else 0,
         pre_alerts_realigned=sync_stats.pre_realigned if sync_stats else 0,
+        claimed_alerts_disabled=sync_stats.claimed_disabled if sync_stats else 0,
     )

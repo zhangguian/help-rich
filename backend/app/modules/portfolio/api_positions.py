@@ -7,6 +7,9 @@ v0.4.0:positions 表为主数据(手动录入 / 截图导入 / 流水同步),
 
 P3.5.1(今日盈亏):引入 QuoteService(新浪主 + 腾讯备 + 5min 缓存),
 返回 current_price / prev_close / today_pnl / floating_pnl。
+
+v0.12 今日盈亏口径(2026-11-04):改成**券商口径** —— 当日总资产变动,
+含今天买卖的现金影响(公式与推导见 `_today_pnl`)。
 行情全部失败时这些字段为 null,前端降级为骨架屏/"--"。
 """
 from decimal import Decimal
@@ -36,6 +39,89 @@ def get_quote_service() -> QuoteService:
     return _quote_service
 
 
+def _today_pnl(
+    shares: int,
+    price: Decimal,
+    prev_close: Decimal,
+    flow: dict | None,
+) -> Decimal:
+    """当日盈亏(**券商口径**)。
+
+    券商持仓页的「当日盈亏」= **当日总资产变动**,不是「(现价−昨收)×持股数」:
+
+    ```
+    当日盈亏 = (当前持股×现价 + 今日卖出所得现金 − 今日买入支出现金)
+               − 昨收 × 昨日持股数
+    昨日持股数 = 当前持股 − 今日买入股数 + 今日卖出股数
+    ```
+
+    **为什么必须算成这个口径**:今天买卖过的票,券商的当日盈亏与「只按当前持股算价差」
+    差得很远(实测 000657 差 134 元、002185 差 95 元、001896 差 7 元、5 只 ETF 全对得上),
+    因为**今天卖出/买入的那部分**,券商是按「成交价 vs 昨收」计的,不是按现价。
+
+    没有今天的流水 → 退化成 `(现价 − 昨收) × 持股数`(与旧口径一致)。
+    昨收不可用(≤0)→ 同样退化(不拿 0 当昨收算)。
+    """
+    if not flow or prev_close <= 0:
+        return (price - prev_close) * shares
+    yesterday_shares = shares - int(flow["buy_shares"]) + int(flow["sell_shares"])
+    if yesterday_shares < 0:
+        # 流水与持仓对不上(理论上不会:卖出超过持仓会被链校验挡住)→ 退回已验证口径
+        return (price - prev_close) * shares
+    return (
+        price * shares + flow["sell_amount"] - flow["buy_amount"]
+    ) - prev_close * yesterday_shares
+
+
+async def _today_trade_flow(codes: list[str]) -> dict[str, dict]:
+    """今天(自然日)的买卖流水汇总 —— 今日盈亏要用它算「当日总资产变动」。
+
+    按标的聚合:买入金额/股数、卖出金额/股数。
+    只认**今天**的流水:昨天的成交已经体现在昨收里,再算一遍就重复了。
+    """
+    from datetime import date
+
+    from sqlalchemy import select
+
+    from app.db import async_session
+    from app.models.orm import Transaction
+    from app.modules.portfolio.account_repository import DEFAULT_ACCOUNT_ID
+
+    if not codes:
+        return {}
+    today = date.today()
+    async with async_session() as session:
+        rows = (
+            await session.execute(
+                select(Transaction).where(
+                    Transaction.account_id == DEFAULT_ACCOUNT_ID,
+                    Transaction.stock_code.in_(codes),
+                    Transaction.trade_date == today,
+                )
+            )
+        ).scalars().all()
+
+    flow: dict[str, dict] = {}
+    for t in rows:
+        f = flow.setdefault(
+            t.stock_code,
+            {
+                "buy_amount": Decimal(0),
+                "buy_shares": 0,
+                "sell_amount": Decimal(0),
+                "sell_shares": 0,
+            },
+        )
+        amount = Decimal(t.price) * int(t.shares)
+        if t.action == "buy":
+            f["buy_amount"] += amount
+            f["buy_shares"] += int(t.shares)
+        else:
+            f["sell_amount"] += amount
+            f["sell_shares"] += int(t.shares)
+    return flow
+
+
 @router.get("/positions")
 async def list_positions() -> dict:
     """列出当前持仓(含今日盈亏)
@@ -43,7 +129,8 @@ async def list_positions() -> dict:
     P3.5.1 新增字段:
       current_price: 现价(行情)
       prev_close:    昨收
-      today_pnl:     今日盈亏 = (现价 - 昨收) × 持仓股数
+      today_pnl:     今日盈亏(**券商口径**:当日总资产变动,含今天买卖的现金影响
+                     —— 见 `_today_pnl`;没有今天的流水时退化成 (现价−昨收)×持股数)
       floating_pnl:  浮动盈亏 = (现价 - 成本) × 持仓股数
     行情不可用时为 null。
 
@@ -61,6 +148,9 @@ async def list_positions() -> dict:
     if codes:
         quotes = {q.code: q for q in await get_quote_service().get_quotes(codes)}
 
+    # 今日的买卖流水(当日盈亏要按「当日总资产变动」算,见 _today_pnl)
+    today_flow = await _today_trade_flow(codes)
+
     items = []
     for p in positions:
         item = {
@@ -77,7 +167,14 @@ async def list_positions() -> dict:
             prev_close = q.prev_close
             item["current_price"] = str(price)
             item["prev_close"] = str(prev_close)
-            item["today_pnl"] = str(((price - prev_close) * p.shares).quantize(Decimal("0.01")))
+            item["today_pnl"] = str(
+                _today_pnl(
+                    p.shares,
+                    Decimal(str(price)),
+                    Decimal(str(prev_close)),
+                    today_flow.get(p.stock_code),
+                ).quantize(Decimal("0.01"))
+            )
             item["floating_pnl"] = str(((price - p.avg_cost) * p.shares).quantize(Decimal("0.01")))
         else:
             item["current_price"] = None

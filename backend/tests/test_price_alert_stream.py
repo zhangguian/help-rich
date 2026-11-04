@@ -203,6 +203,27 @@ class TestSnapshot:
         assert asyncio.run(alert_api._snapshot_items()) == []
 
 
+class TestTestPopup:
+    """自检端点:广播的合成事件也得带**推送时间**。
+
+    弹窗卡片上显示的就是 `triggered_at` —— 自检时看不到时间,
+    就没法验证卡片长什么样(真实触发要等盘中触价,等不起)。
+    """
+
+    def test_popup_event_carries_triggered_at(self):
+        from app.modules.alert import api as alert_api
+
+        async def run():
+            return await alert_api.test_popup(alert_api.PriceAlertTestPopup())
+
+        got = asyncio.run(_collect_events(run))
+        fired = [m for m in got if m.get("event") == EVENT_PRICE_ALERT_FIRED]
+        assert len(fired) == 1
+        assert fired[0]["triggered_at"] is not None
+        # 合成事件没有真实流水 → trigger_id 保持 None,不影响前端按它去重
+        assert fired[0]["trigger_id"] is None
+
+
 class TestRoutes:
     def test_stream_and_recent_fired_routes_exist(self):
         """两个新端点必须真的注册上了"""

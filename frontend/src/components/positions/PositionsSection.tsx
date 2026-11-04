@@ -111,7 +111,7 @@ export function PositionsSection() {
             {hasQuotes ? `¥${decimalFormat(todayPnl.toFixed(2))}` : '--'}
           </div>
           <div className="text-xs text-text-ter mt-1">
-            {hasQuotes ? '现价 - 昨收' : '行情暂不可用'}
+            {hasQuotes ? '当日资产变动(含今日买卖)' : '行情暂不可用'}
           </div>
         </Card>
         <Card padding="md">

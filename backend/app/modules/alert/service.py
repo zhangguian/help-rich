@@ -279,6 +279,10 @@ class PriceAlertService:
         判据:**当前价不再满足预警条件**(与「命中」互为补集)。
         不需要知道方向,也不需要知道预警线是多少 —— 条件树本身就是判据。
 
+        ⚠️ **已退役(`retired: true`)的预警不重新武装**:
+        这个判据分不清「一次性命中后停用」和「挂单已消失、被业务侧停用」——
+        后者的做T已经结束,重新武装等于继续替一笔不存在的交易订阅提醒。
+
         行情取不到 → 不做任何动作(宁可少武装一次,也不编数据)。
         """
         try:
@@ -293,7 +297,11 @@ class PriceAlertService:
                 conditions = json.loads(row.conditions_json or "{}")
             except (json.JSONDecodeError, TypeError):
                 continue
-            if notification_meta(conditions).get("kind") != "pre_alert":
+            meta = notification_meta(conditions)
+            if meta.get("kind") != "pre_alert":
+                continue
+            if meta.get("retired"):
+                # 挂单已消失 → 业务侧主动退役,不是「命中后停用」,别再武装回去
                 continue
             ctx = contexts.get(row.stock_code)
             if ctx is None or ctx.price is None:

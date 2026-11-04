@@ -15,6 +15,8 @@ import { useUIStore } from '@/stores/useUIStore';
 import { ScoreBadge } from '../signal/ScoreBadge';
 import { ScoreDetail } from '../signal/ScoreDetail';
 
+import { TransactionEditModal } from './TransactionEditModal';
+
 import { Button } from '../ui/Button';
 
 /**
@@ -64,7 +66,16 @@ function loadErrorText(e: unknown): string {
  * - [诊断] 按钮:显式触发重新评分(异步)
  * - [删除] 按钮
  */
-export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: number; stockCode?: string }) {
+export function TransactionTable({
+  refreshKey,
+  stockCode,
+  onChanged,
+}: {
+  refreshKey?: number;
+  stockCode?: string;
+  /** 流水被改动后通知外部(刷新持仓 / 补T清单) */
+  onChanged?: () => void;
+}) {
   const router = useRouter();
   const showToast = useUIStore((s) => s.showToast);
   useSseSubscription();
@@ -75,10 +86,14 @@ export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: numbe
   // 否则用户会误以为流水没录入(v0.8 实测踩过)。
   const [error, setError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
+  // 内部重拉计数(编辑一笔后整表重拉 —— 后续笔的快照都变了)
+  const [reloadKey, setReloadKey] = useState(0);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
   const [detailData, setDetailData] = useState<DiagnoseOut | null>(null);
   const [regenerating, setRegenerating] = useState<number | null>(null);
+  // 正在编辑的那一笔(null = 不显示编辑弹窗)
+  const [editTx, setEditTx] = useState<Transaction | null>(null);
 
   const scores = useDiagnoseStore((s) => s.scores);
   const comments = useDiagnoseStore((s) => s.comments);
@@ -120,7 +135,7 @@ export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: numbe
     return () => {
       cancelled = true;
     };
-  }, [refreshKey, retryKey, stockCode, reset, setComment, setScore]);
+  }, [refreshKey, retryKey, reloadKey, stockCode, reset, setComment, setScore]);
 
   const handleDelete = async (id: number) => {
     if (!window.confirm(`确认删除交易 #${id}?`)) return;
@@ -281,6 +296,14 @@ export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: numbe
                     <Button
                       size="sm"
                       variant="ghost"
+                      onClick={() => setEditTx(tx)}
+                      title="编辑这一笔(方向 / 股数 / 价格 / 时间 / 备注)"
+                    >
+                      编辑
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
                       onClick={() => openDetail(tx.id)}
                       title={liveComment ? '查看评分详情' : '暂无评语,点击触发'}
                     >
@@ -325,6 +348,21 @@ export function TransactionTable({ refreshKey, stockCode }: { refreshKey?: numbe
           initial={detailData}
         />
       )}
+
+      <TransactionEditModal
+        tx={editTx}
+        onClose={() => setEditTx(null)}
+        onSaved={(updated) => {
+          // 就地替换这一笔,避免评分列闪一下
+          setData((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+          showToast({ type: 'success', message: '流水已更新,持仓已同步' });
+          // ⚠️ 改一笔会**重放整条成本链** → 后面每一笔的「录入后持仓」快照都变了,
+          //    所以要整表重拉,不能只换当前行。
+          setReloadKey((k) => k + 1);
+          // 持仓 / 补T清单也跟着变了 → 通知外面刷新
+          onChanged?.();
+        }}
+      />
     </>
   );
 }

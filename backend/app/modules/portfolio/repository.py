@@ -83,13 +83,29 @@ class TransactionRepository:
             items = list((await session.execute(stmt)).scalars().all())
             return items, total
 
+    # 可改字段白名单。
+    # ⚠️ 之前是「 hasattr(row, k) 就 setattr」—— 意味着连 `stock_code` /
+    #    `trade_date` / `account_id` 都能被悄悄改掉(改标的等于把一笔流水
+    #    搬到别的股票上,成本链会算错)。改成显式白名单,不在名单里的直接忽略。
+    # `action` 现在**可以**改了(「买录成卖」是最常见的录错,以前只能删掉重录);
+    # 改方向的安全网在 API 层:写入前先验算整条链是否自洽(见 api_transactions)。
+    EDITABLE_FIELDS = frozenset(
+        {"action", "shares", "price", "note", "trade_time"}
+    )
+
     async def update(self, tx_id: int, **kwargs) -> Transaction | None:
-        """更新流水(只能改 note / shares / price,不能改 stock_code / action)"""
+        """更新流水(可改 action / shares / price / note / trade_time)。
+
+        不能改 stock_code / trade_date —— 改标的等于把一笔流水搬到别的股票上,
+        改日期会改变它在成本链里的落位,两者都必须走「删了重录」而不是静默改。
+        """
         async with async_session() as session:
             row = await session.get(Transaction, tx_id)
             if row is None:
                 return None
             for k, v in kwargs.items():
+                if k not in self.EDITABLE_FIELDS:
+                    continue
                 if v is not None and hasattr(row, k):
                     setattr(row, k, v)
             await session.commit()

@@ -43,6 +43,22 @@ export interface TReminderItem {
   tiers: TTier[];
   /** 挂单起始日(该组最早未闭合开腿的日期) */
   openDate: string;
+  /**
+   * 组成这条挂单的**开腿流水 id**(同一只票做了多次T → 多 id)
+   *
+   * ⚠️ 可选字段:老后端 / 页面里残留的旧数据可能没有这两个字段
+   * → 一律在 store 边界补成空数组(见 `useTReminderStore`),组件里别裸取。
+   */
+  openTxIds?: number[];
+  /**
+   * **当初那笔开腿流水的成交价**(反T = 当初卖出价,正T = 当初买入价)
+   *
+   * ⚠️ 与 `price` 不是一回事:`price` 是算出来的阈值(不亏本线 / 买入均价,多笔开腿时是加权均价),
+   * 这里是**真成交价** —— 同一只票做了两次T(两笔开腿)就会有两个价。
+   *
+   * ⚠️ 可选字段:同 `openTxIds` —— 缺失时在 store 边界补空数组。
+   */
+  openPrices?: number[];
   /** 当前持仓股数 */
   positionShares: number | null;
   /** 现价(行情不可用时为 null) */
@@ -103,6 +119,8 @@ export interface TReminderList {
   preAlertsDisabled: number;
   /** 本次同步把预警线就地改掉的条数 */
   preAlertsRealigned: number;
+  /** 本次同步停用的「被认领过的手工提醒」条数(挂单已消失) */
+  claimedAlertsDisabled: number;
 }
 
 export async function fetchPendingTReminders(): Promise<TReminderList> {

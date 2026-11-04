@@ -148,7 +148,7 @@ export function PositionStatsCards({
             : '--'}
         </div>
         <div className="text-xs text-text-ter mt-1.5">
-          {hasQuotes ? 'Σ 现价 − 昨收' : '行情暂不可用'}
+          {hasQuotes ? 'Σ 当日资产变动' : '行情暂不可用'}
         </div>
         {hasQuotes && <MiniBars values={todayPnls} tone="pnl" />}
       </GlassCard>

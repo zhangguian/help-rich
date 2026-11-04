@@ -150,6 +150,10 @@ def notification_meta(node: dict | None) -> dict:
     - `kind`: 提醒种类(如 `"pre_alert"` 预警)。进 SSE 负载,前端据此区分徽章。
     - `once`: `True` = **一次性**提醒 —— 命中后自动停用。
       用于「预警」:进了一次准备区就不该反复提醒,价格离开预警区再回来时重新武装。
+    - `retired`: `True` = **已退役**(业务侧停用,不是命中停用)。
+      用于「预警」:它的一次性重新武装判据是「价格不再满足条件」,分不清
+      「命中后停用」和「挂单已消失、被业务侧停用」两种情况 —— 后者若被重新武装,
+      就会替一个**已经结束的做T**继续订阅到价提醒。带上这个标记,调度器就不动它。
 
     顶层字段(不写进叶子)→ `evaluate` / `validate` / `describe` 全都不受影响。
     """
@@ -157,9 +161,11 @@ def notification_meta(node: dict | None) -> dict:
         return {}
     kind = node.get("kind")
     once = node.get("once")
+    retired = node.get("retired")
     return {
         "kind": kind if isinstance(kind, str) and kind else None,
         "once": once is True,
+        "retired": retired is True,
     }
 
 

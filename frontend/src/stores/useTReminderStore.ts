@@ -17,6 +17,21 @@ import { fetchPendingTReminders, type TReminderItem } from '@/lib/api/tReminders
 
 const STALE_MS = 60_000;
 
+/**
+ * 补齐数组类字段(缺 → 空数组)。
+ *
+ * **为什么必须有这一层**:后端新增字段(如 `open_prices`)之前,
+ * 页面里已经加载过的数据没有这些键 —— 组件直接 `.length` 就整页崩。
+ * 一律在**进入 store 的那一刻**补齐,组件拿到的一定是完整结构。
+ */
+function normalizeItem(it: TReminderItem): TReminderItem {
+  return {
+    ...it,
+    openTxIds: it.openTxIds ?? [],
+    openPrices: it.openPrices ?? [],
+  };
+}
+
 interface TReminderState {
   /** 待接回(反T) */
   items: TReminderItem[];
@@ -46,8 +61,13 @@ export const useTReminderStore = create<TReminderState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const data = await fetchPendingTReminders();
-      const items = data.items ?? [];
-      const forwardItems = data.forwardItems ?? [];
+      const rawItems = data.items ?? [];
+      const rawForwardItems = data.forwardItems ?? [];
+      // ⚠️ 唯一适配层:数组类字段一律补成空数组。
+      // 后端加字段之前取到的旧数据(或老后端返回)里没有这些字段,
+      // 组件里裸取 `.length` / `new Set(...)` 会直接把整页打崩。
+      const items = rawItems.map(normalizeItem);
+      const forwardItems = rawForwardItems.map(normalizeItem);
       set({
         items,
         forwardItems,

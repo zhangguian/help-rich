@@ -446,3 +446,116 @@ class TestPreAlertLifecycle:
         # 到价线 10.395、现价 10.000 → 差 3.95%;反T 现价已跌穿到价线 → reached
         assert it["pre_alert_distance_pct"] == pytest.approx(3.95, abs=0.01)
         assert it["pre_alert_reached"] is True
+
+
+class TestRetiredPreAlertIsNotRearmed:
+    """**已结束的做T不得继续订阅提醒**。
+
+    复现的 bug:录完补T(挂单闭合)→ 业务侧把预警停用 → 调度器的
+    「离开预警区就重新武装」分不清「命中后停用」和「挂单没了被停用」→
+    下一轮把这条预警**复活**,于是一笔已经结束的做T还在订阅到价提醒。
+
+    修法:业务侧停用时打上 `retired: true`,调度器见到这个标记就不武装。
+    对照断言:只是**命中**停用(无 retired)的预警,必须照旧能被武装回来 ——
+    否则就把「页面关着也要能收到」那条给修坏了。
+    """
+
+    def test_closed_t_pre_alert_is_not_rearmed(self, client):
+        """录完接回 → 预警退役 → 调度器不复活它"""
+        _seed(
+            [
+                ("600519.SH", "sell", 100, "10.500", date(2026, 11, 2)),
+                ("000001.SZ", "sell", 100, "10.500", date(2026, 11, 2)),
+            ]
+        )
+        body = client.get("/api/t-reminders/pending").json()
+        pre = {it["stock_code"]: it["pre_alert_id"] for it in body["items"]}
+        assert pre["600519.SH"] and pre["000001.SZ"]  # 自检:两条挂单都建了预警
+
+        # 600519 接回 → 挂单闭合;000001 保持挂着
+        _seed([("600519.SH", "buy", 100, "10.400", date(2026, 11, 3))])
+        body = client.get("/api/t-reminders/pending").json()
+        assert body["pre_alerts_disabled"] == 1
+
+        retired = _alerts(client, pre["600519.SH"])
+        assert retired["enabled"] is False
+        assert retired["conditions"].get("retired") is True
+
+        # 000001 模拟「命中后停用」(一次性提醒被引擎自动停用,无 retired 标记)
+        async def _fire():
+            alert = await price_alert_service.get_alert(pre["000001.SZ"])
+            await price_alert_service.fire(alert, AlertContext(price=9.0))
+
+        asyncio.run(_fire())
+        assert _alerts(client, pre["000001.SZ"])["enabled"] is False
+        assert _alerts(client, pre["000001.SZ"])["conditions"].get("retired") is None
+
+        # 两只票现价都 11.0(远离预警线 10.499)→ 只有「命中停用」的那只该被武装回来
+        n = asyncio.run(
+            price_alert_service.rearm_pre_alerts(
+                {
+                    "600519.SH": AlertContext(price=11.0),
+                    "000001.SZ": AlertContext(price=11.0),
+                }
+            )
+        )
+        assert n == 1
+        assert _alerts(client, pre["600519.SH"])["enabled"] is False  # 已结束的做T
+        assert _alerts(client, pre["000001.SZ"])["enabled"] is True  # 还挂着的做T
+
+    def test_already_disabled_pre_alert_still_gets_retired(self, client):
+        """**命中过**(已停用)的预警,挂单闭合后也必须打上退役标记
+
+        这个缺口很容易漏:停用循环若先判 `enabled` 再处理预警,
+        一条「命中停用」的预警在挂单闭合时就被跳过 → 拿不到 retired →
+        调度器下一轮照样把它重新武装,已结束的做T继续订阅提醒。
+        """
+        _seed([("600519.SH", "sell", 100, "10.500", date(2026, 11, 2))])
+        pre_id = client.get("/api/t-reminders/pending").json()["items"][0]["pre_alert_id"]
+
+        # 先让它命中一次(一次性 → 自动停用,但挂单还在)
+        async def _fire():
+            alert = await price_alert_service.get_alert(pre_id)
+            await price_alert_service.fire(alert, AlertContext(price=9.0))
+
+        asyncio.run(_fire())
+        assert _alerts(client, pre_id)["enabled"] is False
+        assert _alerts(client, pre_id)["conditions"].get("retired") is None
+
+        # 挂单闭合 → 补T录完
+        _seed([("600519.SH", "buy", 100, "10.400", date(2026, 11, 3))])
+        body = client.get("/api/t-reminders/pending").json()
+        assert body["pre_alerts_disabled"] == 1
+        assert _alerts(client, pre_id)["conditions"].get("retired") is True
+
+        # 再同步一次 → 幂等(不重复计数)
+        assert client.get("/api/t-reminders/pending").json()["pre_alerts_disabled"] == 0
+
+        # 调度器不得复活它
+        n = asyncio.run(
+            price_alert_service.rearm_pre_alerts(
+                {"600519.SH": AlertContext(price=11.0)}
+            )
+        )
+        assert n == 0
+        assert _alerts(client, pre_id)["enabled"] is False
+
+    def test_retired_flag_cleared_when_pending_comes_back(self, client):
+        """同一只票又开了新挂单 → retired 标记必须被清掉,重新武装恢复正常
+
+        防「修过头」:退役标记如果永久粘住,这只票**以后**的做T预警就再也武装不回来。
+        """
+        _seed([("600519.SH", "sell", 100, "10.500", date(2026, 11, 2))])
+        pre_id = client.get("/api/t-reminders/pending").json()["items"][0]["pre_alert_id"]
+
+        _seed([("600519.SH", "buy", 100, "10.400", date(2026, 11, 3))])
+        client.get("/api/t-reminders/pending")
+        assert _alerts(client, pre_id)["conditions"].get("retired") is True
+
+        # 新一轮反T挂单(现价在区外:11.0 高于预警线)→ 清单同步复用并武装这条提醒
+        _seed([("600519.SH", "sell", 100, "10.600", date(2026, 11, 4))])
+        client.get("/api/t-reminders/pending")
+
+        alert = _alerts(client, pre_id)
+        assert alert["enabled"] is True
+        assert alert["conditions"].get("retired") is None

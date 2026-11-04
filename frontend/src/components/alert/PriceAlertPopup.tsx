@@ -34,11 +34,40 @@ function directionOf(conditionsText: string): 'down' | 'up' {
   return 'up';
 }
 
+/**
+ * 推送时间 → 卡片上显示的文本。
+ *
+ * **为什么要有**:提醒卡片不自动消失(错过就是错过),用户可能过几分钟
+ * 才回头看它 —— 没有时间就不知道这条提醒是**刚才**响的还是**上午**响的。
+ *
+ * **口径**:后端 `triggered_at` 是**服务器本地时间**(naive datetime,无时区)。
+ * ISO 串不带时区时 JS 按**浏览器本地时间**解析 —— 前后端同一台机器时一致。
+ * 取不到时间(`null`)就**不显示**,绝不拿「现在」冒充推送时间。
+ */
+function formatPushTime(iso: string | null): { short: string; full: string } | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const p = (n: number) => String(n).padStart(2, '0');
+  const time = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  const date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return {
+    short: sameDay ? time : `${p(d.getMonth() + 1)}-${p(d.getDate())} ${time}`,
+    full: `推送时间 ${date} ${time}`,
+  };
+}
+
 function AlertPopup({ item }: { item: PriceAlertPopupItem }) {
   const dismiss = usePriceAlertStore((s) => s.dismiss);
   const isPre = item.kind === PRE_ALERT_KIND;
   const dir = directionOf(item.alert.conditionsText);
   const priceTxt = item.alert.price != null ? item.alert.price.toFixed(3) : '—';
+  const pushTime = formatPushTime(item.triggeredAt);
 
   return (
     <motion.div
@@ -71,6 +100,15 @@ function AlertPopup({ item }: { item: PriceAlertPopupItem }) {
                 {item.alert.name}
               </span>
               <span className="font-mono text-[11px] text-text-ter">{item.alert.stockCode}</span>
+              {pushTime && (
+                <span
+                  className="shrink-0 whitespace-nowrap font-mono text-[10px] text-text-ter"
+                  title={pushTime.full}
+                  data-testid="price-alert-push-time"
+                >
+                  推送 {pushTime.short}
+                </span>
+              )}
             </div>
             <p className="mt-1.5 text-xs text-text-sec">{item.alert.conditionsText}</p>
             {isPre && (

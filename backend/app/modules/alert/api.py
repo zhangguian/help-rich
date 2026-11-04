@@ -155,10 +155,14 @@ async def test_popup(payload: PriceAlertTestPopup) -> dict:
     fake_alert = SimpleNamespace(
         id=0, stock_code=payload.stock_code, name=payload.name
     )
+    # 合成事件也带一个触发时间:弹窗卡片上会显示「推送时间」,
+    # 自检时看到的应该和真实触发的卡片长得一样。
+    # `id=None` → trigger_id 保持 None,不影响前端按 trigger_id 去重。
+    fake_trig = SimpleNamespace(id=None, triggered_at=datetime.now())
     await event_bus.publish(
         build_fired_payload(
             fake_alert,
-            trig=None,
+            trig=fake_trig,
             price=payload.price,
             conditions_text=payload.conditions_text,
             kind=payload.kind,

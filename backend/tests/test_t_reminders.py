@@ -185,6 +185,54 @@ class TestPendingList:
         items = client.get("/api/t-reminders/pending").json()["items"]
         assert {i["stock_code"] for i in items} == {"600519.SH", "000001.SZ"}
 
+
+class TestOpenPrices:
+    """**当初开腿的成交价**(反T=卖出价,正T=买入价)。
+
+    与基准线(`price` = 加权均价 / 不亏本线)不是一回事:
+    基准线是算出来的阈值,这里是那几笔开腿流水的**真成交价**。
+    """
+
+    def test_single_open_leg_keeps_its_price(self, client):
+        """单笔开腿 → 当初卖出价 = 那笔的成交价"""
+        _seed([("600519.SH", "sell", 200, "10.500", date(2026, 11, 2))])
+        it = client.get("/api/t-reminders/pending").json()["items"][0]
+        assert it["open_prices"] == [pytest.approx(10.5)]
+
+    def test_multiple_open_legs_list_every_price(self, client):
+        """两笔开腿 → 两个价都列出来(基准线仍是加权均价)"""
+        _seed(
+            [
+                ("600519.SH", "sell", 100, "10.000", date(2026, 11, 2)),
+                ("600519.SH", "sell", 300, "12.000", date(2026, 11, 3)),
+            ]
+        )
+        it = client.get("/api/t-reminders/pending").json()["items"][0]
+        assert it["open_prices"] == [pytest.approx(10.0), pytest.approx(12.0)]
+        # 基准线 = 加权均价(和成交价不是一回事)
+        assert it["price"] == pytest.approx((100 * 10 + 300 * 12) / 400)
+
+    def test_forward_group_reports_buy_price(self, client):
+        """正T(先买后卖)→ 当初**买入**价"""
+        _seed([("600519.SH", "buy", 200, "8.800", date(2026, 11, 2))])
+        it = client.get("/api/t-reminders/pending").json()["forward_items"][0]
+        assert it["direction"] == "forward"
+        assert it["open_prices"] == [pytest.approx(8.8)]
+
+    def test_closed_leg_not_counted(self, client):
+        """已闭合的腿不算开腿 —— 只留真正还挂着的那笔"""
+        _seed(
+            [
+                ("600519.SH", "sell", 100, "10.000", date(2026, 11, 2)),
+                ("600519.SH", "sell", 200, "12.000", date(2026, 11, 3)),
+                ("600519.SH", "buy", 100, "9.500", date(2026, 11, 3)),
+            ]
+        )
+        it = client.get("/api/t-reminders/pending").json()["items"][0]
+        # 11-02 那笔被 11-03 的买回闭合 → 只剩 11-03 那笔开腿
+        assert it["open_prices"] == [pytest.approx(12.0)]
+        assert it["shares"] == 200
+
     def test_quote_unavailable_leaves_price_null(self, client):
         """行情取不到 → 现价 null,不编数字"""
         _seed([("600519.SH", "sell", 100, "10.000", date(2026, 11, 2))])
@@ -621,7 +669,10 @@ class TestAutoAlerts:
         assert alert["enabled"] is False
 
     def test_manual_alert_is_never_disabled(self, client):
-        """用户手工建的提醒不属于系统管 —— 挂单消失也不碰它"""
+        """用户手工建的提醒不属于系统管 —— 挂单消失也不碰它
+
+        前提是**没被清单认领过**(价格不在任何一档上,见 `TestClaimedManualAlert`)。
+        """
         _seed([("600519.SH", "sell", 100, "10.500", date(2026, 11, 2))])
         manual = client.post(
             "/api/price-alerts",
@@ -713,3 +764,174 @@ class TestAutoAlerts:
         assert it["alert_tier"] == 1
         assert it["alert_price"] == pytest.approx(first["tiers"][0]["price"])
         assert body["auto_alerts_realigned"] == 1
+
+
+def _manual_alert(client, code: str, op: str, price: float, name: str = "明日补T接回"):
+    r = client.post(
+        "/api/price-alerts",
+        json={
+            "stock_code": code,
+            "name": name,
+            "conditions": {
+                "op": "and",
+                "conditions": [{"metric": "price", "op": op, "value": price}],
+            },
+        },
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def _alert_of(client, alert_id: int) -> dict:
+    return next(
+        a for a in client.get("/api/price-alerts").json()["items"] if a["id"] == alert_id
+    )
+
+
+def _claim_scenario(client, code: str = "600519.SH") -> tuple[int, float]:
+    """造出「手工提醒已被清单认领」的状态,返回 (手工提醒 id, 一档价)。
+
+    步骤为什么这么绕:认领只在「这条挂单**还没有**自动提醒」时发生,
+    所以必须先让系统建出来再删掉 —— 等于回到「用户先手动建了提醒」的状态。
+
+    认领是**下一次拉清单**时才落库的(见 `sync_auto_alerts`),所以这里最后
+    还要再拉一次并断言已认领 —— 否则测的就不是「认领过的提醒」了。
+
+    一档价从接口取(不硬编码 0.99 之类的口径),口径变了测试也不会假过。
+    """
+    _seed([(code, "sell", 100, "10.500", date(2026, 11, 2))])
+    first = client.get("/api/t-reminders/pending").json()["items"][0]
+    tier1 = first["tiers"][0]["price"]
+    # 删掉系统刚建的到价提醒 → 回到「没有自动提醒」
+    assert client.delete(f"/api/price-alerts/{first['alert_id']}").status_code == 200
+    manual_id = _manual_alert(client, code, "<=", tier1)
+
+    it = client.get("/api/t-reminders/pending").json()["items"][0]
+    assert it["alert_id"] == manual_id, "一档价的手工提醒应该被复用,而不是另建一条"
+    assert it["alert_auto"] is False
+    assert _alert_of(client, manual_id)["conditions"].get("claimed") is True, "认领标记没落库"
+    return manual_id, tier1
+
+
+class TestClaimedManualAlert:
+    """被清单认领过的手工提醒,随挂单闭合自动停用。
+
+    为什么要有这一组:用户手工建的「明日补T接回」会被复用成某条挂单的到价提醒。
+    做T闭合后挂单从清单消失,原先只按 `[做T]` 前缀判断归属 → 这条永远不停,
+    结果一笔早就结束的做T天天提醒接回(真实数据里触发过 313 次)。
+    """
+
+    def test_manual_alert_at_tier1_is_claimed(self, client):
+        """同标的 + 同方向 + 一档价 → 复用手工提醒并打上认领标记"""
+        manual_id, tier1 = _claim_scenario(client)
+        it = client.get("/api/t-reminders/pending").json()["items"][0]
+        # 复用的是手工那条(没有另外建自动提醒)
+        assert it["alert_id"] == manual_id
+        assert it["alert_auto"] is False
+        assert it["alert_price"] == pytest.approx(tier1)
+        assert _alert_of(client, manual_id)["conditions"]["claimed"] is True
+
+    def test_claim_is_idempotent(self, client):
+        """重复拉清单不重复认领,也不停用(挂单还在)"""
+        manual_id, _ = _claim_scenario(client)
+        body = client.get("/api/t-reminders/pending").json()
+        assert body["claimed_alerts_disabled"] == 0
+        assert body["items"][0]["alert_id"] == manual_id
+        alert = _alert_of(client, manual_id)
+        assert alert["enabled"] is True
+        assert alert["conditions"]["claimed"] is True
+
+    def test_claimed_alert_disabled_when_pending_closed(self, client):
+        """挂单接回 → 被认领的手工提醒跟着停用,并撤掉认领标记"""
+        manual_id, _ = _claim_scenario(client)
+        assert _alert_of(client, manual_id)["enabled"] is True
+
+        # 买回来 → 这条做T闭合,挂单从清单消失
+        _seed([("600519.SH", "buy", 100, "10.000", date(2026, 11, 3))])
+        body = client.get("/api/t-reminders/pending").json()
+        assert body["total_count"] == 0
+        assert body["claimed_alerts_disabled"] == 1
+
+        alert = _alert_of(client, manual_id)
+        assert alert["enabled"] is False
+        # 认领关系终结 → 标记撤掉,这条提醒彻底还给用户
+        assert alert["conditions"].get("claimed") is None
+
+    def test_unclaimed_manual_alert_is_never_touched(self, client):
+        """没被认领过的手工提醒(价不在任何一档上)→ 挂单闭合也不碰"""
+        manual_id = _manual_alert(client, "600519.SH", "<=", 9.0)
+        _seed([("600519.SH", "sell", 100, "10.500", date(2026, 11, 2))])
+        # 一档价是 10.395,手工那条挂 9.0 → 不会被认领(系统另建一条自动提醒)
+        it = client.get("/api/t-reminders/pending").json()["items"][0]
+        assert it["alert_id"] != manual_id
+        assert it["alert_auto"] is True
+        assert _alert_of(client, manual_id)["conditions"].get("claimed") is None
+
+        _seed([("600519.SH", "buy", 100, "10.000", date(2026, 11, 3))])
+        body = client.get("/api/t-reminders/pending").json()
+        assert body["claimed_alerts_disabled"] == 0
+        assert _alert_of(client, manual_id)["enabled"] is True
+
+    def test_claim_keeps_user_condition_tree(self, client):
+        """认领只动顶层标记 —— 用户自己的多条件树必须原样保留
+
+        手工提醒可能不只有价格(还可以带涨跌幅、量比、换手),而且可能嵌套。
+        认领/撤标记都走 `_with_flag`(复制 + 改顶层键),绝不重建条件树。
+        """
+        _seed([("600519.SH", "sell", 100, "10.500", date(2026, 11, 2))])
+        first = client.get("/api/t-reminders/pending").json()["items"][0]
+        tier1 = first["tiers"][0]["price"]
+        assert client.delete(f"/api/price-alerts/{first['alert_id']}").status_code == 200
+
+        r = client.post(
+            "/api/price-alerts",
+            json={
+                "stock_code": "600519.SH",
+                "name": "补T接回(带量能条件)",
+                "conditions": {
+                    "op": "and",
+                    "conditions": [
+                        {"metric": "price", "op": "<=", "value": tier1},
+                        {"metric": "change_pct", "op": "<=", "value": -2},
+                    ],
+                },
+            },
+        )
+        assert r.status_code == 200, r.text
+        manual_id = r.json()["id"]
+
+        client.get("/api/t-reminders/pending")
+        claimed = _alert_of(client, manual_id)["conditions"]
+        assert claimed["claimed"] is True
+        assert claimed["op"] == "and"
+        assert claimed["conditions"] == [
+            {"metric": "price", "op": "<=", "value": tier1},
+            {"metric": "change_pct", "op": "<=", "value": -2},
+        ], "用户的两个条件都必须原样保留"
+
+        # 闭合 → 停用并撤标记,条件树仍然完好
+        _seed([("600519.SH", "buy", 100, "10.000", date(2026, 11, 3))])
+        client.get("/api/t-reminders/pending")
+        released = _alert_of(client, manual_id)["conditions"]
+        assert released.get("claimed") is None
+        assert released["conditions"] == [
+            {"metric": "price", "op": "<=", "value": tier1},
+            {"metric": "change_pct", "op": "<=", "value": -2},
+        ]
+
+    def test_user_can_reenable_after_release(self, client):
+        """停用后用户手动重新启用 → 不会再被系统以同一理由停掉
+
+        这是「停用时要撤标记」的直接验证:标记留着的话这条提醒永远开不起来。
+        """
+        manual_id, _ = _claim_scenario(client)
+        _seed([("600519.SH", "buy", 100, "10.000", date(2026, 11, 3))])
+        client.get("/api/t-reminders/pending")
+        assert _alert_of(client, manual_id)["enabled"] is False
+
+        r = client.patch(f"/api/price-alerts/{manual_id}", json={"enabled": True})
+        assert r.status_code == 200, r.text
+        body = client.get("/api/t-reminders/pending").json()
+        assert body["claimed_alerts_disabled"] == 0
+        assert _alert_of(client, manual_id)["enabled"] is True
+

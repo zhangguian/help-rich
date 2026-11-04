@@ -153,7 +153,7 @@ export function DecisionColumn({
               <Num
                 label="今日盈亏"
                 value={`${totals.today >= 0 ? '+' : ''}¥${fmtY(totals.today)}`}
-                sub="现价 − 昨收"
+                sub="当日资产变动"
                 tone={toneCls(totals.today)}
               />
             </div>

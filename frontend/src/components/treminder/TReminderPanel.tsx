@@ -10,7 +10,11 @@ import { Card } from '@/components/ui/Card';
 import { Modal } from '@/components/ui/Modal';
 import type { TReminderItem, TTier } from '@/lib/api/tReminders';
 import { intFormat, priceFormat } from '@/lib/decimalFormat';
+import type { Transaction } from '@/lib/types';
 import { useTReminderStore } from '@/stores/useTReminderStore';
+import { useUIStore } from '@/stores/useUIStore';
+
+import { TReminderEditModal } from './TReminderEditModal';
 
 /**
  * 补T提醒面板(/t-reminders)
@@ -40,11 +44,14 @@ export function TReminderPanel() {
   const load = useTReminderStore((s) => s.load);
   const refresh = useTReminderStore((s) => s.refresh);
   const lastLoadedAt = useTReminderStore((s) => s.lastLoadedAt);
+  const showToast = useUIStore((s) => s.showToast);
 
   const [editing, setEditing] = useState<TReminderItem | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   // 通用录入入口:录一笔**不是挂单**的流水(行内按钮只管挂单那几只)
   const [manualEntry, setManualEntry] = useState(false);
+  // 编辑一条挂单对应的开腿流水
+  const [editingLeg, setEditingLeg] = useState<TReminderItem | null>(null);
 
   useEffect(() => {
     void load();
@@ -56,10 +63,48 @@ export function TReminderPanel() {
     if (code) setHighlight(code);
   }, []);
 
-  const onRecorded = useCallback(async () => {
-    setEditing(null);
-    await refresh();
-  }, [refresh]);
+  /**
+   * 录完一笔流水后的即时反馈。
+   *
+   * 为什么按「这只票现在的挂单」判断,而不是接口里的 autoAlertsCreated:
+   *   提醒是**录入那一刻**由后端建好的(POST /transactions 内同步),
+   *   随后刷新补T清单时它们已经存在,`autoAlertsCreated` 必然是 0 ——
+   *   拿它做提示会永远显示「没建任何提醒」。
+   *   所以这里查这只票当前挂的提醒落在哪一档,直接告诉用户「跌到/涨到多少会响」。
+   */
+  const notifyRecorded = useCallback(
+    async (tx: Transaction) => {
+      await refresh();
+      // refresh 后要读**最新**的 store(闭包里的 items 是刷新前的)
+      const st = useTReminderStore.getState();
+      const it = [...st.items, ...st.forwardItems].find(
+        (x) => x.stockCode === tx.stockCode,
+      );
+      if (!it) {
+        showToast({ type: 'success', message: '流水已录入' });
+        return;
+      }
+      if (it.alertAuto && it.alertPrice !== null) {
+        const when = it.direction === 'forward' ? '涨到' : '跌到';
+        const what = it.direction === 'forward' ? '提醒卖出' : '提醒接回';
+        showToast({
+          type: 'success',
+          message: `已生成二T提醒：${when} ${priceFormat(it.alertPrice)} ${what}`,
+        });
+        return;
+      }
+      showToast({ type: 'success', message: '流水已录入 · 补T清单已更新' });
+    },
+    [refresh, showToast],
+  );
+
+  const onRecorded = useCallback(
+    async (tx: Transaction) => {
+      setEditing(null);
+      await notifyRecorded(tx);
+    },
+    [notifyRecorded],
+  );
 
   const empty = items.length === 0 && forwardItems.length === 0;
 
@@ -84,6 +129,9 @@ export function TReminderPanel() {
               <b className="text-text-sec">待接回</b>的不亏本线 = 净卖出加权均价 ——
               接回价高于它,这次 T 就是做亏的;
               <b className="text-text-sec">待卖出</b>的基准线 = 买入加权均价。
+              旁边的<b className="text-text-sec">当初卖出价 / 当初买入价</b>
+              是<b className="text-text-sec">开腿那笔流水的真实成交价</b> ——
+              同一只票做过两次T(两笔开腿)就会列两个价,而基准线是它们的加权均价。
               两组都分<b className="text-text-sec">一/二/三档</b>(1%、2%、3%),
               <b className="text-text-sec">方向相反</b>:反T 往下(越等越便宜),正T 往上(越等越贵)——
               一档贴线最容易成交,三档幅度最大但可能要等行情。
@@ -137,6 +185,7 @@ export function TReminderPanel() {
               items={items}
               highlight={highlight}
               onEdit={setEditing}
+              onEditLeg={setEditingLeg}
             />
             <GroupTable
               title="待卖出"
@@ -144,6 +193,7 @@ export function TReminderPanel() {
               items={forwardItems}
               highlight={highlight}
               onEdit={setEditing}
+              onEditLeg={setEditingLeg}
             />
           </div>
         )}
@@ -213,7 +263,7 @@ export function TReminderPanel() {
               initialAction={editing.direction === 'forward' ? 'sell' : 'buy'}
               initialShares={editing.shares}
               initialPrice={priceFormat(editing.suggestedPrice ?? editing.price)}
-              onSuccess={() => void onRecorded()}
+              onSuccess={(tx) => void onRecorded(tx)}
               onCancel={() => setEditing(null)}
             />
           </>
@@ -227,13 +277,23 @@ export function TReminderPanel() {
         size="lg"
       >
         <TransactionForm
-          onSuccess={() => {
+          onSuccess={(tx) => {
             setManualEntry(false);
-            void refresh();
+            void notifyRecorded(tx);
           }}
           onCancel={() => setManualEntry(false)}
         />
       </Modal>
+
+      <TReminderEditModal
+        item={editingLeg}
+        onClose={() => setEditingLeg(null)}
+        onSaved={() => {
+          // 改了开腿 → 挂单的股数/均价/提醒都变了 → 整表重拉
+          void refresh();
+          showToast({ type: 'success', message: '流水已更新,做T清单已同步' });
+        }}
+      />
     </div>
   );
 }
@@ -250,12 +310,15 @@ function GroupTable({
   items,
   highlight,
   onEdit,
+  onEditLeg,
 }: {
   title: string;
   subtitle: string;
   items: TReminderItem[];
   highlight: string | null;
   onEdit: (it: TReminderItem) => void;
+  /** 编辑这条挂单对应的开腿流水(录错方向/价格时改,不用删了重录) */
+  onEditLeg: (it: TReminderItem) => void;
 }) {
   if (items.length === 0) return null;
   const isForward = items[0]?.direction === 'forward';
@@ -269,13 +332,19 @@ function GroupTable({
         <span className="text-[11px] font-mono text-text-ter">{items.length} 只</span>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-xs">
+        {/* ⚠️ 表格有 13 列,窄屏下会被挤扁(名称列竖着排一个字一行)。
+            给一个最小宽度 → 横向滚动,而不是把每一列压扁。
+            名称列再加 nowrap → 「平安新兴产业LOF」横着排,不折行。 */}
+        <table className="w-full min-w-[1260px] text-xs">
           <thead>
             <tr className="border-b border-border-def text-left text-text-ter">
               <th className="py-2 pr-3 font-medium">标的</th>
-              <th className="py-2 pr-3 font-medium">名称</th>
+              <th className="py-2 pr-3 font-medium whitespace-nowrap">名称</th>
               <th className="py-2 pr-3 text-right font-medium">
                 {isForward ? '待卖出' : '待接回'}
+              </th>
+              <th className="py-2 pr-3 text-right font-medium whitespace-nowrap">
+                {isForward ? '当初买入价' : '当初卖出价'}
               </th>
               <th className="py-2 pr-3 text-right font-medium">
                 {isForward ? '买入均价' : '不亏本线'}
@@ -289,7 +358,7 @@ function GroupTable({
               <th className="py-2 pr-3 font-medium">挂单日</th>
               <th className="py-2 pr-3 font-medium">到价提醒</th>
               <th className="py-2 pr-3 font-medium">预警线 · 还差</th>
-              <th className="py-2 font-medium">操作</th>
+              <th className="py-2 font-medium whitespace-nowrap">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -317,9 +386,20 @@ function GroupTable({
                   )}
                 >
                   <td className="py-2 pr-3 font-mono text-text-pri">{it.stockCode}</td>
-                  <td className="py-2 pr-3 text-text-sec">{it.stockName ?? '—'}</td>
+                  <td className="py-2 pr-3 text-text-sec whitespace-nowrap">
+                    {it.stockName ?? '—'}
+                  </td>
                   <td className="py-2 pr-3 text-right font-mono text-text-pri">
                     {intFormat(it.shares)}
+                  </td>
+                  {/* 当初那笔开腿流水的成交价(反T=卖出价,正T=买入价)。
+                      与左边/右边的「不亏本线」不同:那是算出来的阈值,这是真成交价。
+                      同一只票做过两次T → 两笔开腿 → 两个价,斜杠隔开。
+                      `?? []`:store 已补齐,这里再兜一层 —— 旧数据/老后端缺字段时不崩。 */}
+                  <td className="py-2 pr-3 text-right font-mono text-text-pri whitespace-nowrap">
+                    {(it.openPrices ?? []).length > 0
+                      ? (it.openPrices ?? []).map((p) => priceFormat(p)).join(' / ')
+                      : '—'}
                   </td>
                   <td className="py-2 pr-3 text-right font-mono text-text-sec">
                     {priceFormat(it.price)}
@@ -379,9 +459,19 @@ function GroupTable({
                     <PreAlertColumn it={it} op={op} />
                   </td>
                   <td className="py-2">
-                    <Button size="sm" onClick={() => onEdit(it)}>
-                      {isForward ? '录入卖出' : '录入接回'}
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <Button size="sm" onClick={() => onEdit(it)}>
+                        {isForward ? '录入卖出' : '录入接回'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => onEditLeg(it)}
+                        title="改这笔开腿流水的方向 / 股数 / 价格(录错了直接改,不用删了重录)"
+                      >
+                        编辑
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               );

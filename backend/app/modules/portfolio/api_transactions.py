@@ -139,6 +139,14 @@ async def create_transaction(
     # v0.5.0:流水变动 → 从基准重放链尾,重写快照 + 持仓行
     await recalc_position(tx.stock_code)
 
+    # 做T提醒即时对齐:
+    #   录第一腿(开腿)→ 立刻建出第二腿的到价 + 预警提醒(不用等用户打开补T清单页);
+    #   录第二腿(接回 / 卖出)→ 挂单闭合,对应提醒立刻停用。
+    # 只同步这一只(scope)—— 不能碰别的标的的提醒。
+    from app.modules.portfolio.api_t_reminders import sync_t_alerts_for_stock
+
+    await sync_t_alerts_for_stock(tx.stock_code)
+
     # P4.4:异步触发诊断(评分 + AI 评语,SSE 推送,不阻塞录入响应)
     from app.services.diagnose_service import diagnose_service
 
@@ -149,7 +157,12 @@ async def create_transaction(
 
 @router.patch("/transactions/{tx_id}", response_model=TransactionOut)
 async def update_transaction(tx_id: int, payload: TransactionUpdate) -> TransactionOut:
-    """修改一笔交易(只能改 note / shares / price / trade_time)"""
+    """修改一笔交易(可改 note / shares / price / trade_time / **action(买↔卖)**)
+
+    ⚠️ 改 `action` 的风险比改价格大得多:
+    「买」改成「卖」会让股数**反向**变化(持仓可能直接变成负数或卖出超额)。
+    所以改方向前必须**先验算整条链**(含新方向)是否自洽,不自洽 → 422 拒绝写入。
+    """
     updates = payload.model_dump(exclude_none=True)
     if "price" in updates:
         updates["price"] = format(updates["price"], ".3f")
@@ -192,6 +205,7 @@ async def update_transaction(tx_id: int, payload: TransactionUpdate) -> Transact
         )
 
     # 写库前先验算改完之后链是否自洽
+    new_action = updates.get("action", before.action)
     new_shares = updates.get("shares", before.shares)
     new_price = Decimal(updates["price"]) if "price" in updates else Decimal(before.price)
     try:
@@ -200,7 +214,7 @@ async def update_transaction(tx_id: int, payload: TransactionUpdate) -> Transact
             override=TxSpec(
                 id=before.id,
                 trade_date=before.trade_date,
-                action=before.action,
+                action=new_action,
                 shares=new_shares,
                 price=new_price,
             ),
@@ -222,6 +236,11 @@ async def update_transaction(tx_id: int, payload: TransactionUpdate) -> Transact
         )
 
     await recalc_position(tx.stock_code)
+
+    # 做T提醒即时对齐(改股数/价格会改变基准线与三档价 → 提醒跟着走)
+    from app.modules.portfolio.api_t_reminders import sync_t_alerts_for_stock
+
+    await sync_t_alerts_for_stock(tx.stock_code)
 
     from app.repositories.trade_score_repo import trade_score_repo
     score = await trade_score_repo.get_by_trade_id(tx.id)
@@ -285,6 +304,11 @@ async def delete_transaction(tx_id: int) -> None:
 
     if _code:
         await recalc_position(_code)
+
+        # 做T提醒即时对齐(删掉闭合腿 → 挂单重新出现 → 提醒该建回来)
+        from app.modules.portfolio.api_t_reminders import sync_t_alerts_for_stock
+
+        await sync_t_alerts_for_stock(_code)
 
 
 # ============================================================
